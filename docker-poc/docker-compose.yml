@@ -1,0 +1,18 @@
+# 用法：cd docker-poc && docker compose up --build
+# 然后访问 http://demo.localhost:8787 （*.localhost 现代浏览器自动解析到 127.0.0.1；
+# 手机/其他设备访问时把 tenants.json 里的域名换成一个解析到本机 IP 的真域名）
+services:
+  xwblog:
+    build:
+      context: ..
+      dockerfile: docker-poc/Dockerfile
+    ports:
+      # 本地默认 8787；服务器排练期配合 Cloudflare「灵活 SSL」挂 80：
+      #   XWLBLOG_PORT=80 docker compose up --build -d
+      - '${XWLBLOG_PORT:-8787}:8787'
+    volumes:
+      # Linux 上宿主目录若为 root 属主，容器入口 entrypoint.sh 会自动 chown 给 node，
+      # 宿主机无需任何准备；数据落在 ./data/<域名>/（blog.db + uploads/）
+      - ./data:/data/tenants
+      - ./tenants.json:/app/docker-poc/tenants.json:ro
+    restart: unless-stopped
