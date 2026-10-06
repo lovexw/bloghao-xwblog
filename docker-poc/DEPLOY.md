@@ -75,7 +75,7 @@ XWLBLOG_BIND=127.0.0.1 docker compose up -d     # 只监听 127.0.0.1:8787，公
 `proxy_set_header Host $host;`（多租户路由靠 Host 头识别站点，丢了会全部 404）。
 
 Cloudflare 照旧橙云解析到本机 IP；回源走 openresty 的 80（灵活 SSL）。
-443 被 xray 等服务占用时不要抢，灵活 SSL 只需要源站 80。
+443 被其他服务占用时不要抢，灵活 SSL 只需要源站 80。
 
 ## 6. 排练通过后要做的事
 
