@@ -1,25 +1,34 @@
 import { type Context, Hono } from 'hono'
 import { runBackup } from './backup'
 import {
+  clearMemberSessionCookie,
   clearSessionCookie,
   clientIp,
+  createMemberSession,
   createSession,
+  destroyMemberSession,
+  destroyMemberSessionsByMember,
   destroySession,
   getCookie,
+  getMemberUser,
   getSessionUser,
   hashPassword,
   rateLimit,
   safeEqual,
   SESSION_COOKIE,
   sessionCookie,
+  memberSessionCookie,
 } from './auth'
 import {
   countUsers,
   createCategory,
   categoryNameMap,
+  createMember,
   DEFAULT_SETTINGS,
   getCategoryById,
   getFriendLinkById,
+  getMemberById,
+  getMemberByUsername,
   getPostById,
   getPostBySlug,
   getPostCategoryId,
@@ -27,6 +36,7 @@ import {
   getWeiboById,
   listCategories,
   listFriendLinks,
+  listMembersAdmin,
   listPages,
   getPageById,
   uniquePageSlug,
@@ -38,12 +48,14 @@ import {
   seedWelcomePost,
   setPostCategory,
   uniqueSlug,
+  updateMemberAdmin,
   weiboCommentCountMap,
   weiboImageList,
   weiboTopicList,
   WEIBO_MAX_CHARS,
 } from './db'
 import { mdToHtml } from './markdown'
+import { awardCommentPoints, awardPoints } from './points'
 import { collectRoutes } from './collect'
 import { exportRoutes } from './export'
 import { adminExternalRoutes, externalRoutes, notifyAdminComment, telegramRoutes } from './external'
@@ -55,7 +67,7 @@ import { imageExtOf, MAX_REMOTE_IMAGES, MAX_UPLOAD_BYTES, saveUpload, transferIm
 import { listTrash, restorePostStatus, trashTable, type TrashTable } from './trash'
 import { classifyBrowser, classifyDevice, cleanPath, cleanRef, cleanTitle, cleanVid, getVisitStats, recordVisit } from './stats'
 import { THEMES } from './themes/registry'
-import type { CommentRow, Env, PostRow, SessionUser } from './types'
+import type { CommentRow, Env, MemberRow, MemberTier, PostRow, SessionUser } from './types'
 import { clampInt, cleanDisabledPlugins, cleanSlug, excerpt, extractWeiboTopics, isDemo, jsonItemLikePattern, normalizeLinkUrl, slugify } from './utils'
 
 type AppEnv = { Bindings: Env; Variables: { user: SessionUser } }
@@ -160,6 +172,125 @@ api.post('/auth/login', async (c) => {
 api.post('/auth/logout', async (c) => {
   await destroySession(c.env.DB, c.req.raw)
   c.header('Set-Cookie', clearSessionCookie())
+  return c.json({ ok: true })
+})
+
+/* ---------------- 会员（访客注册/登录，契约见 docs/DEVPLAN-2026-10-07.md 附录 A） ---------------- */
+
+/** 对外视图裁剪：公开口径只有昵称/档位/积分；self = 本人视角（另给 email/username/createdAt），管理口径走 listMembersAdmin 原始行 */
+function memberView(m: MemberRow, self = false) {
+  const v: Record<string, unknown> = {
+    nickname: (m.display_name || m.username).slice(0, 24),
+    tier: m.tier,
+    points: m.points,
+  }
+  if (m.avatar) v.avatarUrl = m.avatar
+  if (self) {
+    v.username = m.username
+    v.email = m.email
+    v.createdAt = m.created_at
+  }
+  return v
+}
+
+api.post('/member/register', async (c) => {
+  const settings = await getSettings(c.env.DB)
+  if (settings.membersEnabled !== '1') return jsonError('会员功能未开放', 404)
+  const ip = clientIp(c.req.raw)
+  if (!rateLimit(`mreg:${ip}`, 5, 10 * 60_000)) return jsonError('注册太频繁，请稍后再试', 429)
+  const body = await c.req.json<{ username?: string; password?: string; email?: string; link?: string }>().catch(() => null)
+  // 蜜罐字段 link：正常用户看不到、机器人会填 —— 静默丢弃（同 publicComment 口径）
+  if (body?.link) return c.json({ ok: true })
+  const username = String(body?.username || '').trim()
+  const password = String(body?.password || '')
+  const email = String(body?.email || '').trim().slice(0, 100)
+  if (!/^[a-zA-Z0-9_-]{2,24}$/.test(username)) return jsonError('用户名需为 2-24 位字母、数字、_ 或 -')
+  if (password.length < 8 || password.length > 64) return jsonError('密码长度需为 8-64 位')
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return jsonError('邮箱格式不正确')
+  if (await getMemberByUsername(c.env.DB, username)) return jsonError('用户名已被占用')
+  const { hash, salt } = await hashPassword(password)
+  let memberId: number
+  try {
+    memberId = await createMember(c.env.DB, { username, hash, salt, email })
+  } catch {
+    return jsonError('用户名已被占用') // 并发注册撞 UNIQUE 约束的兜底
+  }
+  const token = await createMemberSession(c.env.DB, memberId)
+  c.header('Set-Cookie', memberSessionCookie(token))
+  await awardPoints(c.env.DB, memberId, 'dailyLogin')
+  const row = await getMemberById(c.env.DB, memberId)
+  return c.json({ ok: true, member: row ? memberView(row, true) : null })
+})
+
+api.post('/member/login', async (c) => {
+  const settings = await getSettings(c.env.DB)
+  if (settings.membersEnabled !== '1') return jsonError('会员功能未开放', 404)
+  const ip = clientIp(c.req.raw)
+  if (!rateLimit(`mlogin:${ip}`, 10, 10 * 60_000)) return jsonError('尝试次数过多，请 10 分钟后再试', 429)
+  const body = await c.req.json<{ username?: string; password?: string }>().catch(() => null)
+  const username = String(body?.username || '').trim()
+  const password = String(body?.password || '')
+  const m = await getMemberByUsername(c.env.DB, username)
+  if (m) {
+    const { hash } = await hashPassword(password, m.salt)
+    if (safeEqual(hash, m.password_hash)) {
+      // 先验口令再报封禁：不向未持有口令的人泄露账号状态（契约 A5：403 {error:'banned'}）
+      if (m.status === 'banned') return jsonError('banned', 403)
+      const token = await createMemberSession(c.env.DB, m.id)
+      c.header('Set-Cookie', memberSessionCookie(token))
+      await awardPoints(c.env.DB, m.id, 'dailyLogin')
+      await c.env.DB.prepare('UPDATE members SET last_login_at = ? WHERE id = ?').bind(Date.now(), m.id).run()
+      return c.json({ ok: true, member: memberView(m, true) })
+    }
+  } else {
+    // 用户不存在也跑一次等开销哈希：响应耗时对齐，防时序侧信道枚举用户名（同 /auth/login 口径）
+    await hashPassword(password, 'timing-equalizer-salt-0000')
+  }
+  return jsonError('用户名或密码错误', 401)
+})
+
+api.post('/member/logout', async (c) => {
+  await destroyMemberSession(c.env.DB, c.req.raw)
+  c.header('Set-Cookie', clearMemberSessionCookie())
+  return c.json({ ok: true })
+})
+
+api.get('/member/me', async (c) => {
+  const settings = await getSettings(c.env.DB)
+  if (settings.membersEnabled !== '1') return jsonError('会员功能未开放', 404)
+  const session = await getMemberUser(c.env.DB, c.req.raw)
+  if (!session) return c.json({ member: null })
+  const row = await getMemberById(c.env.DB, session.id)
+  return c.json({ member: row ? memberView(row, true) : null })
+})
+
+/* 后台会员管理（走上方 /admin/* 鉴权中间件；PUT 缺键即保留，同 posts PUT 语义） */
+
+api.get('/admin/members', async (c) => {
+  const page = clampInt(c.req.query('page'), 1, 1_000_000, 1)
+  const q = (c.req.query('q') || '').trim().slice(0, 50)
+  return c.json(await listMembersAdmin(c.env.DB, q, page))
+})
+
+const MEMBER_TIERS: MemberTier[] = ['normal', 'coffee', 'top']
+
+api.put('/admin/members/:id', async (c) => {
+  const id = parseId(c.req.param('id'))
+  if (!id) return jsonError('会员不存在', 404)
+  const body = await c.req.json<{ tier?: string; status?: string }>().catch(() => null)
+  if (!body || typeof body !== 'object') return jsonError('请求格式错误')
+  const patch: { tier?: string; status?: string } = {}
+  if ('tier' in body) {
+    if (!MEMBER_TIERS.includes(body.tier as MemberTier)) return jsonError('未知档位')
+    patch.tier = body.tier
+  }
+  if ('status' in body) {
+    if (body.status !== 'active' && body.status !== 'banned') return jsonError('未知状态')
+    patch.status = body.status
+  }
+  if (!(await updateMemberAdmin(c.env.DB, id, patch))) return jsonError('会员不存在', 404)
+  // 拉黑即踢下线（getMemberUser 查询层已挡 banned，这里把会话 token 一并清掉）
+  if (patch.status === 'banned') await destroyMemberSessionsByMember(c.env.DB, id)
   return c.json({ ok: true })
 })
 
@@ -1204,7 +1335,12 @@ api.put('/admin/comments/:id', async (c) => {
   if (!id) return jsonError('评论不存在', 404)
   const body = await c.req.json<{ status?: string }>().catch(() => null)
   const status = body?.status === 'pending' ? 'pending' : 'approved'
+  // 会员评论过审才计积分（awardCommentPoints 按 ref_id 去重，反复 通过↔待审 不重复记）
+  const target = await c.env.DB.prepare('SELECT member_id FROM comments WHERE id = ?').bind(id).first<{ member_id: number }>()
   await c.env.DB.prepare('UPDATE comments SET status = ? WHERE id = ?').bind(status, id).run()
+  if (status === 'approved' && target?.member_id) {
+    c.executionCtx.waitUntil(awardCommentPoints(c.env.DB, target.member_id, id))
+  }
   return c.json({ ok: true })
 })
 
@@ -1301,6 +1437,15 @@ api.put('/admin/settings', async (c) => {
     }
     if (key === 'siteClosedMessage') {
       patch[key] = v.slice(0, 1000)
+      continue
+    }
+    if (key === 'membersEnabled') {
+      patch[key] = v === '1' || v === 'true' ? '1' : '0'
+      continue
+    }
+    if (key === 'rankTopN') {
+      // 排行榜展示条数：1-50，脏值回退 10
+      patch[key] = String(clampInt(v, 1, 50, 10))
       continue
     }
     patch[key] = v.slice(0, 500)
@@ -1445,9 +1590,12 @@ async function publicComment(
   const settings = await getSettings(db)
   const user = await getSessionUser(db, c.req.raw)
   if (!user && settings.allowComments !== '1') return jsonError(o.closedMessage, 403)
+  // 会员身份（与管理员互斥取一路；banned 已在 getMemberUser 查询层视为未登录）
+  const member = user ? null : await getMemberUser(db, c.req.raw)
   const ip = clientIp(c.req.raw)
-  // 管理员发言不受留言频率限制
-  if (!user && !rateLimit(`cmt:${ip}`, 5, 10 * 60_000)) return jsonError(o.freqMessage, 429)
+  // 管理员发言不受留言频率限制；会员是登录身份，放宽到 10 条/10 分钟（仍防滥用），游客维持 5 条
+  if (!user && !member && !rateLimit(`cmt:${ip}`, 5, 10 * 60_000)) return jsonError(o.freqMessage, 429)
+  if (member && !rateLimit(`mcmt:${member.id}`, 10, 10 * 60_000)) return jsonError(o.freqMessage, 429)
   const body = await c.req.json<CommentBody>().catch(() => null)
   // 蜜罐字段：正常用户不会填写，机器人会 —— 静默丢弃
   if (body?.link) return c.json({ ok: true })
@@ -1485,9 +1633,31 @@ async function publicComment(
   }
 
   if (parentId) return jsonError(`只有作者可以回复${o.noun}`, 403)
+  const pending = settings.moderateComments === '1'
+  if (member) {
+    // 会员发言：身份来自会话，表单昵称/邮箱/网站字段一律忽略（契约 A5）；先审后展口径与游客一致
+    const nickname = (member.display_name || member.username).slice(0, 24)
+    const ins = await db
+      .prepare(
+        'INSERT INTO comments (post_id, weibo_id, parent_id, member_id, is_admin, nickname, content, status, ip, created_at) VALUES (?, ?, 0, ?, 0, ?, ?, ?, ?, ?)'
+      )
+      .bind(t.postId, t.weiboId, member.id, nickname, content, pending ? 'pending' : 'approved', ip, now)
+      .run()
+    // 新留言推送 TG 与插件广播（与游客同路，见下方游客分支注释）
+    const base = siteBase(settings, new URL(c.req.url).origin)
+    c.executionCtx.waitUntil(
+      notifyAdminComment(c.env, { kind: o.kind, context: t.context, nickname, content, pending, siteBase: base, path: t.path })
+    )
+    c.executionCtx.waitUntil(
+      fireCommentCreated(c.env, { kind: o.kind, context: t.context, nickname, content, url: base + t.path, pending })
+    )
+    // 评论积分：过审才计（awardCommentPoints 内按 ref_id 去重，反复切换状态不重复记）
+    const commentId = Number(ins.meta.last_row_id)
+    if (!pending && commentId) c.executionCtx.waitUntil(awardCommentPoints(db, member.id, commentId))
+    return c.json({ ok: true, pending })
+  }
   const nickname = String(body?.nickname || '').trim().slice(0, 24)
   if (!nickname) return jsonError(`昵称和${o.noun}内容不能为空`)
-  const pending = settings.moderateComments === '1'
   if (o.withContact) {
     await db
       .prepare(
@@ -1592,7 +1762,7 @@ api.get('/public/weibo/:id/comments', async (c) => {
   const settings = await getSettings(c.env.DB)
   const { results } = await c.env.DB
     .prepare(
-      "SELECT id, parent_id, is_admin, nickname, content, created_at FROM comments WHERE weibo_id = ? AND status = 'approved' ORDER BY created_at ASC LIMIT 200"
+      "SELECT cm.id, cm.parent_id, cm.is_admin, cm.nickname, cm.content, cm.created_at, m.display_name AS member_name, m.tier AS member_tier FROM comments cm LEFT JOIN members m ON m.id = cm.member_id WHERE cm.weibo_id = ? AND cm.status = 'approved' ORDER BY cm.created_at ASC LIMIT 200"
     )
     .bind(id)
     .all()

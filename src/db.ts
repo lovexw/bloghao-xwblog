@@ -1,4 +1,23 @@
-import type { CategoryRow, CommentRow, FriendLinkRow, PageRow, PostRow, SettingsMap, WeiboRow } from './types'
+import type {
+  CategoryRow,
+  CommentRow,
+  FriendLinkRow,
+  MemberRow,
+  PageRow,
+  PostRow,
+  SettingsMap,
+  WeiboRow,
+} from './types'
+
+/** 排行榜行（listRankTop）：对外只给昵称口径需要的最小字段 */
+export interface RankMemberRow {
+  id: number
+  username: string
+  display_name: string
+  avatar: string
+  tier: MemberRow['tier']
+  points: number
+}
 import { clampInt, cstDate, excerpt, fmtDate, jsonItemLikePattern, likePattern, WEIBO_MAX_TOPICS } from './utils'
 
 export const DEFAULT_SETTINGS: Record<string, string> = {
@@ -45,6 +64,10 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   siteClosed: '0',
   // 闭站页公告文案，空 = 使用内置默认文案
   siteClosedMessage: '',
+  // 会员体系总开关（契约见 docs/DEVPLAN-2026-10-07.md 附录 A）：关闭时前台无会员入口、/api/member/* 返回 404
+  membersEnabled: '0',
+  // 排行榜展示条数上限（/rank 页与首页挂件共用，1-50）
+  rankTopN: '10',
 }
 
 export async function getSettings(db: D1Database): Promise<SettingsMap> {
@@ -182,8 +205,11 @@ export async function uniqueSlug(db: D1Database, base: string, excludeId?: numbe
 }
 
 export async function listApprovedComments(db: D1Database, postId: number): Promise<CommentRow[]> {
+  // LEFT JOIN members 带会员徽标数据（member_id = 0 的游客行为 NULL），渲染层按契约 DEVPLAN 附录 A 消费
   const { results } = await db
-    .prepare('SELECT * FROM comments WHERE post_id = ? AND status = ? ORDER BY created_at ASC LIMIT 500')
+    .prepare(
+      'SELECT c.*, m.display_name AS member_name, m.tier AS member_tier FROM comments c LEFT JOIN members m ON m.id = c.member_id WHERE c.post_id = ? AND c.status = ? ORDER BY c.created_at ASC LIMIT 500'
+    )
     .bind(postId, 'approved')
     .all<CommentRow>()
   return results ?? []
@@ -192,7 +218,9 @@ export async function listApprovedComments(db: D1Database, postId: number): Prom
 /** 留言板（/guestbook）：post_id 与 weibo_id 都为 0 的评论即留言板留言 */
 export async function listGuestbookComments(db: D1Database): Promise<CommentRow[]> {
   const { results } = await db
-    .prepare("SELECT * FROM comments WHERE post_id = 0 AND weibo_id = 0 AND status = 'approved' ORDER BY created_at ASC LIMIT 500")
+    .prepare(
+      "SELECT c.*, m.display_name AS member_name, m.tier AS member_tier FROM comments c LEFT JOIN members m ON m.id = c.member_id WHERE c.post_id = 0 AND c.weibo_id = 0 AND c.status = 'approved' ORDER BY c.created_at ASC LIMIT 500"
+    )
     .all<CommentRow>()
   return results ?? []
 }
@@ -835,4 +863,83 @@ export async function seedWelcomePost(db: D1Database, authorId: number): Promise
       now
     )
     .run()
+}
+
+/* ---------------- 会员（访客注册身份，与 users 管理员彻底分离，契约见 docs/DEVPLAN-2026-10-07.md 附录 A） ---------------- */
+
+export async function getMemberByUsername(db: D1Database, username: string): Promise<MemberRow | null> {
+  return db.prepare('SELECT * FROM members WHERE username = ?').bind(username).first<MemberRow>()
+}
+
+export async function getMemberById(db: D1Database, id: number): Promise<MemberRow | null> {
+  return db.prepare('SELECT * FROM members WHERE id = ?').bind(id).first<MemberRow>()
+}
+
+export async function createMember(
+  db: D1Database,
+  v: { username: string; hash: string; salt: string; email: string }
+): Promise<number> {
+  const now = Date.now()
+  const res = await db
+    .prepare(
+      "INSERT INTO members (username, password_hash, salt, email, display_name, avatar, tier, points, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, '', 'normal', 0, 'active', ?, ?)"
+    )
+    .bind(v.username, v.hash, v.salt, v.email, now, now)
+    .run()
+  return Number(res.meta.last_row_id)
+}
+
+/** 后台会员列表：q 模糊匹配用户名/邮箱（likePattern 同口径转义），20 条/页，新会员在前 */
+const MEMBER_PAGE_SIZE = 20
+export async function listMembersAdmin(
+  db: D1Database,
+  q: string,
+  page: number
+): Promise<{ items: MemberRow[]; total: number; page: number; totalPages: number }> {
+  const pattern = q ? likePattern(q) : ''
+  const where = q ? "WHERE username LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\'" : ''
+  const binds = q ? [pattern, pattern] : []
+  const cnt = await db.prepare(`SELECT COUNT(*) AS n FROM members ${where}`).bind(...binds).first<{ n: number }>()
+  const total = cnt?.n ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / MEMBER_PAGE_SIZE))
+  const p = Math.min(Math.max(1, page), totalPages)
+  const { results } = await db
+    .prepare(`SELECT * FROM members ${where} ORDER BY id DESC LIMIT ${MEMBER_PAGE_SIZE} OFFSET ?`)
+    .bind(...binds, (p - 1) * MEMBER_PAGE_SIZE)
+    .all<MemberRow>()
+  return { items: results ?? [], total, page: p, totalPages }
+}
+
+/** 后台改档位/封禁：缺键即保留（同 posts PUT 语义），返回是否命中行 */
+export async function updateMemberAdmin(
+  db: D1Database,
+  id: number,
+  patch: { tier?: string; status?: string }
+): Promise<boolean> {
+  const sets: string[] = []
+  const binds: unknown[] = []
+  if (patch.tier !== undefined) {
+    sets.push('tier = ?')
+    binds.push(patch.tier)
+  }
+  if (patch.status !== undefined) {
+    sets.push('status = ?')
+    binds.push(patch.status)
+  }
+  if (!sets.length) return true
+  sets.push('updated_at = ?')
+  binds.push(Date.now(), id)
+  const r = await db.prepare(`UPDATE members SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run()
+  return (r.meta.changes ?? 0) > 0
+}
+
+/** 排行榜（/rank 页与首页挂件共用）：只含 active 且积分 > 0（全员 0 分时不做无意义长名单），积分倒序、同分按加入先后 */
+export async function listRankTop(db: D1Database, limit: number): Promise<RankMemberRow[]> {
+  const { results } = await db
+    .prepare(
+      "SELECT id, username, display_name, avatar, tier, points FROM members WHERE status = 'active' AND points > 0 ORDER BY points DESC, id ASC LIMIT ?"
+    )
+    .bind(limit)
+    .all<RankMemberRow>()
+  return results ?? []
 }
