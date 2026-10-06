@@ -785,6 +785,18 @@ export function memberAuthHtml(): string {
 </section>`
 }
 
+/** 付费墙遮挡卡：locked 文章在试读段之后的升级提示（正文已被服务端截断，浏览器拿不到全文）。
+ *  CTA 统一指向 /member；minTier 'top' 提示顶级会员，其余（coffee/缺省）按咖啡会员文案 */
+export function paywallHtml(minTier: string | undefined | null): string {
+  const tierName = minTier === 'top' ? TIER_LABELS.top : TIER_LABELS.coffee
+  return `<section class="paywall" aria-label="会员专属内容">
+  <svg class="paywall-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/><circle cx="12" cy="15.5" r="1.3"/></svg>
+  <h2 class="paywall-title">${esc(tierName)}专属内容</h2>
+  <p class="paywall-text">本文剩余部分仅限${esc(tierName)}阅读。已是会员？登录后继续；还不是会员？加入即可解锁。</p>
+  <a class="paywall-cta" href="/member">登录 / 加入会员</a>
+</section>`
+}
+
 /* ---------------- 历史上的今天（首页时光机卡，共享构建器） ----------------
  * 结构全主题共用（语义化 .otd-* class），视觉由主题 CSS 塑形；没有命中时不渲染。
  */

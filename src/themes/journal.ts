@@ -17,6 +17,7 @@ import {
   memberCardHtml,
   onThisDayCard,
   pagerHtml,
+  paywallHtml,
   rankCard,
   rankListHtml,
   shareBtn,
@@ -146,6 +147,7 @@ export function post(d: PostData): string {
     <p class="jrn-meta"><time>${fmtDateCN(p.published_at)}</time><span>·</span><span>约 ${p.readingMinutes} 分钟</span><span>·</span><span>${fmtViews(p.views)} 阅读</span></p>
     ${p.cover ? `<figure class="jrn-cover"><img src="${esc(p.cover)}" alt=""><figcaption>摄于 ${fmtDateCN(p.published_at)}</figcaption></figure>` : ''}
     <div class="rich">${p.contentHtml}</div>
+    ${p.locked ? paywallHtml(p.minTier) : ''}
     <div class="jrn-foot">
       ${likesBtn(p.slug, p.likes)}
       ${d.share ? shareBtn(d.share.url, d.share.qr) : ''}

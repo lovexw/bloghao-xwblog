@@ -618,3 +618,10 @@ main .gb-section { margin-top: 12px; }
 .mem-points b { display: block; font-size: 22px; color: var(--mn-ink); font-variant-numeric: tabular-nums; }
 .mem-points span { font-size: 11px; color: var(--mn-sub); }
 .mem-email { margin: 12px 0 0; font-size: 13px; color: var(--mn-sub); word-break: break-all; }
+
+/* ---------- 付费墙遮挡卡（locked 文章试读段之后，结构在 render.ts paywallHtml） ---------- */
+.paywall { margin: 24px 0; padding: 26px 20px; border: 1px solid var(--mn-line); text-align: center; }
+.paywall-ico { width: 22px; height: 22px; color: var(--mn-ink); }
+.paywall-title { margin: 12px 0 6px; font-size: 15px; font-weight: 600; color: var(--mn-ink); }
+.paywall-text { margin: 0 0 18px; font-size: 13.5px; line-height: 1.7; color: var(--mn-sub); }
+.paywall-cta { display: inline-block; padding: 11px 28px; border-radius: 0; background: var(--mn-ink); color: #fff; font-size: 14px; text-decoration: none; }

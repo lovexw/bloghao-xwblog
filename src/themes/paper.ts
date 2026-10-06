@@ -15,6 +15,7 @@ import {
   memberCardHtml,
   onThisDayCard,
   pagerHtml,
+  paywallHtml,
   rankCard,
   rankListHtml,
   shareBtn,
@@ -120,6 +121,7 @@ export function post(d: PostData): string {
     <div class="pp-meta"><time>${fmtDate(p.published_at)}</time><span>·</span><span>${p.readingMinutes} 分钟读完</span><span>·</span><span>${p.views} 次阅读</span></div>
     ${p.cover ? `<div class="pp-cover"><img src="${esc(p.cover)}" alt=""></div>` : ''}
     <div class="pp-body rich">${p.contentHtml}</div>
+    ${p.locked ? paywallHtml(p.minTier) : ''}
     <div class="pp-end">
       <span class="pp-end-line"></span><span class="pp-end-word">终</span><span class="pp-end-line"></span>
     </div>
