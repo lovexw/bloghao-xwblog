@@ -62,6 +62,21 @@ Linux 上宿主目录属主不用管——容器入口 `entrypoint.sh` 首次启
 - 访问 `/admin/` 走首装流程创建管理员，发一篇文章、传一张图
 - 在 Cloudflare 控制台看缓存命中率是否随图片访问上升
 
+## 已有 1Panel / openresty 的机器（80 被占用）
+
+容器改绑本机回环，公网流量由面板的 openresty 按域名分流：
+
+```bash
+XWLBLOG_BIND=127.0.0.1 docker compose up -d     # 只监听 127.0.0.1:8787，公网摸不到
+```
+
+1Panel 里：网站 → 创建网站 → 反向代理 → 域名填 `poc.xiaowuleyi.com`、
+代理地址 `http://127.0.0.1:8787`。确认生成的反代配置带
+`proxy_set_header Host $host;`（多租户路由靠 Host 头识别站点，丢了会全部 404）。
+
+Cloudflare 照旧橙云解析到本机 IP；回源走 openresty 的 80（灵活 SSL）。
+443 被 xray 等服务占用时不要抢，灵活 SSL 只需要源站 80。
+
 ## 6. 排练通过后要做的事
 
 - **Caddy 反代**：TLS 终结 + `/images/*` 直接吐 `data/<域名>/uploads/` 目录（带
