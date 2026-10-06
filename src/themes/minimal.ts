@@ -15,6 +15,7 @@ import {
   memberCardHtml,
   onThisDayCard,
   pagerHtml,
+  paywallHtml,
   rankCard,
   rankListHtml,
   shareBtn,
@@ -113,6 +114,7 @@ export function post(d: PostData): string {
     <div class="mn-meta"><time>${fmtDate(p.published_at)}</time><span>·</span><span>${p.readingMinutes} min</span><span>·</span><span>${p.views} views</span></div>
     ${p.cover ? `<div class="mn-cover"><img src="${esc(p.cover)}" alt=""></div>` : ''}
     <div class="rich">${p.contentHtml}</div>
+    ${p.locked ? paywallHtml(p.minTier) : ''}
     <div class="mn-foot">
       ${likesBtn(p.slug, p.likes)}
       ${d.share ? shareBtn(d.share.url, d.share.qr) : ''}

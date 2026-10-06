@@ -17,6 +17,7 @@ import {
   memberCardHtml,
   onThisDayCard,
   pagerHtml,
+  paywallHtml,
   rankCard,
   rankListHtml,
   shareBtn,
@@ -154,6 +155,7 @@ export function post(d: PostData): string {
   </div>
   ${p.cover ? `<div class="wx-cover"><img src="${esc(p.cover)}" alt=""></div>` : ''}
   <article class="rich" id="rich-content">${p.contentHtml}</article>
+  ${p.locked ? paywallHtml(p.minTier) : ''}
   ${tagChips || catChip ? `<div class="wx-tags">${catChip}${tagChips}</div>` : ''}
   <div class="wx-actions">
     ${likesBtn(p.slug, p.likes)}

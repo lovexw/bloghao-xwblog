@@ -481,6 +481,7 @@ export async function mountEditor(root, postId, opts = {}) {
     published_at: null,
     publish_at: null,
     og_image: '',
+    minTier: 'all',
   }
   if (postId) {
     const d = await api(`/admin/posts/${postId}`)
@@ -575,6 +576,14 @@ export async function mountEditor(root, postId, opts = {}) {
         <option value="">未分类</option>
       </select>
       <div style="font-size:12px;color:var(--sub);margin-top:6px;">在后台「分类」里维护</div>
+
+      <div class="drawer-title">谁能看</div>
+      <select class="input" id="ed-min-tier">
+        <option value="all"${post.minTier === 'coffee' || post.minTier === 'top' ? '' : ' selected'}>所有人可见</option>
+        <option value="coffee"${post.minTier === 'coffee' ? ' selected' : ''}>咖啡会员及以上</option>
+        <option value="top"${post.minTier === 'top' ? ' selected' : ''}>仅顶级会员</option>
+      </select>
+      <div style="font-size:12px;color:var(--sub);margin-top:6px;">设为会员可见后，游客与低档位会员只能读到试读部分（正文在服务端截断，不整篇下发）</div>
 
       <div class="drawer-title">链接 Slug</div>
       <input class="input" id="ed-slug" value="${esc(post.slug)}" placeholder="留空则根据标题自动生成">
@@ -747,6 +756,7 @@ export async function mountEditor(root, postId, opts = {}) {
       tags: post.tags,
       categoryId: catVal ? Number(catVal) : null,
       pinned: document.getElementById('ed-pinned').checked,
+      minTier: document.getElementById('ed-min-tier').value,
       slug: document.getElementById('ed-slug').value.trim(),
       status: post.status,
       publishAt: post.publish_at,
@@ -1131,6 +1141,7 @@ export async function mountEditor(root, postId, opts = {}) {
     }
   })
   ;['ed-summary', 'ed-slug'].forEach((id) => document.getElementById(id).addEventListener('input', markDirty))
+  document.getElementById('ed-min-tier').addEventListener('change', markDirty)
   document.getElementById('ed-pinned').addEventListener('change', markDirty)
 
   /* ---------- 定时发布 ---------- */

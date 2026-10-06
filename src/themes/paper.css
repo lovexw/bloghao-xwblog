@@ -697,3 +697,10 @@ img { max-width: 100%; height: auto; }
   .rk-sub { display: none; }
   .mem-card { padding: 18px 14px; }
 }
+
+/* ---------- 付费墙遮挡卡（locked 文章试读段之后，结构在 render.ts paywallHtml） ---------- */
+.paywall { margin: 8px 0 20px; padding: 24px 20px; background: var(--pp-card); border: 1px dashed var(--pp-line); border-radius: 6px; text-align: center; }
+.paywall-ico { width: 22px; height: 22px; color: var(--pp-accent); }
+.paywall-title { margin: 10px 0 6px; font-size: 16px; font-weight: 600; color: var(--pp-ink); letter-spacing: 0.02em; }
+.paywall-text { margin: 0 0 16px; font-size: 14px; line-height: 1.8; color: var(--pp-sub); }
+.paywall-cta { display: inline-block; padding: 10px 28px; border-radius: 4px; background: var(--pp-accent); color: #fff; font-size: 14px; letter-spacing: 0.1em; text-decoration: none; }

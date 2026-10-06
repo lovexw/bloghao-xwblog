@@ -15,6 +15,7 @@ import {
   memberCardHtml,
   onThisDayCard,
   pagerHtml,
+  paywallHtml,
   rankCard,
   rankListHtml,
   shareBtn,
@@ -118,6 +119,7 @@ export function post(d: PostData): string {
     <h1 class="md-title">${esc(p.title)}</h1>
     ${p.cover ? `<div class="md-cover"><img src="${esc(p.cover)}" alt=""></div>` : ''}
     <div class="rich">${p.contentHtml}</div>
+    ${p.locked ? paywallHtml(p.minTier) : ''}
     <div class="md-foot">
       ${likesBtn(p.slug, p.likes)}
       ${d.share ? shareBtn(d.share.url, d.share.qr) : ''}

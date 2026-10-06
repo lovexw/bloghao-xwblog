@@ -186,6 +186,21 @@ for (const [themeId, theme] of Object.entries(THEMES as Record<string, ThemeModu
       }
   })
 
+  test(`${themeId}: post 渲染付费墙遮挡卡（locked）`, () => {
+    const d = postData()
+    d.post.locked = true
+    d.post.minTier = 'coffee'
+    const html = theme.post(d)
+    checkPage(themeId, 'post+locked', html)
+    assert.ok(html.includes('class="paywall"'), 'locked 时应渲染付费墙遮挡卡')
+    assert.ok(html.includes('咖啡会员专属内容'), '遮挡文案随档位')
+    assert.ok(html.includes('href="/member"'), 'CTA 指向会员中心')
+    assert.ok(html.includes('<p>正文</p>'), '试读段照常渲染')
+    const top = theme.post({ ...d, post: { ...d.post, minTier: 'top' } })
+    assert.ok(top.includes('顶级会员专属内容'), 'top 档位切换文案')
+    assert.ok(!theme.post(postData()).includes('class="paywall"'), '未锁定不出遮挡卡')
+  })
+
   test(`${themeId}: about 与 page 渲染（标题区分）`, () => {
     const about = theme.about(aboutData())
     const page = theme.page(pageData())

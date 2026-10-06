@@ -1325,3 +1325,10 @@ main .gb-section { margin-top: 8px; }
   .rk-sub { display: none; }
   .mem-card { padding: 18px 14px; }
 }
+
+/* ---------- 付费墙遮挡卡（locked 文章试读段之后，结构在 render.ts paywallHtml） ---------- */
+.paywall { margin: 8px 0 20px; padding: 24px 20px; background: var(--jrn-card); border: 1px dashed var(--jrn-line); border-radius: 14px; text-align: center; box-shadow: 0 2px 8px rgba(63, 58, 49, 0.06); }
+.paywall-ico { width: 22px; height: 22px; color: var(--jrn-accent); }
+.paywall-title { margin: 10px 0 6px; font-size: 15.5px; font-weight: 700; color: var(--jrn-ink); }
+.paywall-text { margin: 0 0 16px; font-size: 13.5px; line-height: 1.7; color: var(--jrn-ink-soft); }
+.paywall-cta { display: inline-block; padding: 10px 26px; border-radius: 999px; background: var(--jrn-accent); color: #fff; font-size: 14px; font-weight: 700; text-decoration: none; }

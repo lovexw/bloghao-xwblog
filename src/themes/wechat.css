@@ -894,3 +894,10 @@ a.wx-account:hover { opacity: 0.75; }
   .rk-sub { display: none; }
   .mem-card { padding: 16px 14px; }
 }
+
+/* ---------- 付费墙遮挡卡（locked 文章试读段之后，结构在 render.ts paywallHtml） ---------- */
+.paywall { margin: 6px 0 18px; padding: 22px 18px; background: var(--wx-card); border: 1px dashed var(--wx-line); border-radius: 14px; text-align: center; }
+.paywall-ico { width: 22px; height: 22px; color: var(--wx-accent); }
+.paywall-title { margin: 10px 0 6px; font-size: 15.5px; font-weight: 600; color: #1a1a1a; }
+.paywall-text { margin: 0 0 16px; font-size: 13.5px; line-height: 1.7; color: var(--wx-sub); }
+.paywall-cta { display: inline-block; padding: 10px 26px; border-radius: 999px; background: var(--wx-accent); color: #fff; font-size: 14px; font-weight: 600; text-decoration: none; }
