@@ -19,6 +19,47 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions (expires_at);
 
+-- 会员：访客注册的站内身份。架构红线：与 users/sessions 彻底分离（users 只承载管理员，
+-- /api/auth/setup 靠 countUsers()===0 判断首装，游客混入会破坏部署初始化流程），见 docs/ROADMAP.md 会员体系小节
+CREATE TABLE IF NOT EXISTS members (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  username      TEXT    NOT NULL UNIQUE,
+  password_hash TEXT    NOT NULL,
+  salt          TEXT    NOT NULL,
+  email         TEXT    NOT NULL DEFAULT '',          -- 可选；邮件服务（B1）落地后启用验证与找回
+  display_name  TEXT    NOT NULL DEFAULT '',          -- 前台展示名，空 = 用 username
+  avatar        TEXT    NOT NULL DEFAULT '',          -- 头像地址（站内 /images/ 或外链），空 = 首字图标
+  tier          TEXT    NOT NULL DEFAULT 'normal',    -- normal | coffee | top（档位与 min_tier 语义见 docs/DEVPLAN-2026-10-07.md 附录 A）
+  points        INTEGER NOT NULL DEFAULT 0,           -- 当前积分余额（冗余，明细在 member_points_log）
+  status        TEXT    NOT NULL DEFAULT 'active',    -- active | banned（封禁后禁登录与评论，历史评论保留）
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  last_login_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_members_points ON members (points DESC);
+
+-- 会员会话：独立于管理员 sessions（Cookie xw_member_session），独立 TTL 与清理，互不干扰
+CREATE TABLE IF NOT EXISTS member_sessions (
+  token      TEXT    PRIMARY KEY,
+  member_id  INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_member_sessions_expiry ON member_sessions (expires_at);
+
+-- 积分账本：每笔变动一条（规则键常量表在 src/points.ts），余额冗余在 members.points；
+-- delta 可为负（扣减 / 管理员调整），ref_id 关联对象（评论 id 等），0 = 无
+CREATE TABLE IF NOT EXISTS member_points_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  member_id  INTEGER NOT NULL,
+  delta      INTEGER NOT NULL,
+  reason     TEXT    NOT NULL DEFAULT '',
+  ref_id     INTEGER NOT NULL DEFAULT 0,
+  note       TEXT    NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_points_log_member ON member_points_log (member_id, created_at);
+
 CREATE TABLE IF NOT EXISTS posts (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   slug         TEXT    NOT NULL UNIQUE,
@@ -31,6 +72,7 @@ CREATE TABLE IF NOT EXISTS posts (
   pinned       INTEGER NOT NULL DEFAULT 0,
   views        INTEGER NOT NULL DEFAULT 0,
   likes        INTEGER NOT NULL DEFAULT 0,
+  min_tier     INTEGER NOT NULL DEFAULT 0, -- 可见门槛：0=公开 1=登录会员 2=咖啡会员及以上 3=顶级会员（判定 viewerRank >= min_tier）
   author_id    INTEGER,
   published_at INTEGER,
   publish_at   INTEGER,                -- 定时发布时间：到点由 Cron 翻成 published（src/scheduler.ts）
@@ -47,6 +89,7 @@ CREATE TABLE IF NOT EXISTS comments (
   weibo_id   INTEGER NOT NULL DEFAULT 0,  -- 微博评论；文章评论固定为 0
   parent_id  INTEGER NOT NULL DEFAULT 0,  -- 楼中楼：父评论 id，0 = 顶层（作者回复用）
   is_admin   INTEGER NOT NULL DEFAULT 0,  -- 1 = 作者（管理员）发言，前台加徽标
+  member_id  INTEGER NOT NULL DEFAULT 0,  -- 会员身份：0 = 游客，>0 = members.id（评论自动带会员昵称/头像/徽标）
   nickname   TEXT    NOT NULL,
   email      TEXT    NOT NULL DEFAULT '',
   website    TEXT    NOT NULL DEFAULT '',
@@ -58,6 +101,7 @@ CREATE TABLE IF NOT EXISTS comments (
 CREATE INDEX IF NOT EXISTS idx_comments_post ON comments (post_id, created_at);
 -- idx_comments_weibo 由 src/db.ts ensureSchema() 在运行时创建：
 -- 老库执行本文件时 weibo_id 列尚不存在（ALTER 由运行时补齐），在这里建索引会报错
+-- （idx_comments_member 同理：挂在运行时补齐的 member_id 列上，只进 db.ts SCHEMA_INDEXES）
 CREATE INDEX IF NOT EXISTS idx_comments_status ON comments (status, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS categories (

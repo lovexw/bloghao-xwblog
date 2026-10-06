@@ -657,8 +657,43 @@ const SCHEMA_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: 'posts', column: 'deleted_at', ddl: 'ALTER TABLE posts ADD COLUMN deleted_at INTEGER' },
   { table: 'weibo', column: 'deleted_at', ddl: 'ALTER TABLE weibo ADD COLUMN deleted_at INTEGER' },
   { table: 'pages', column: 'deleted_at', ddl: 'ALTER TABLE pages ADD COLUMN deleted_at INTEGER' },
+  // 会员体系（docs/DEVPLAN-2026-10-07.md）：评论挂会员身份（0 = 游客）+ 文章可见门槛（0=公开 1=会员 2=咖啡+ 3=顶级）
+  { table: 'comments', column: 'member_id', ddl: 'ALTER TABLE comments ADD COLUMN member_id INTEGER NOT NULL DEFAULT 0' },
+  { table: 'posts', column: 'min_tier', ddl: 'ALTER TABLE posts ADD COLUMN min_tier INTEGER NOT NULL DEFAULT 0' },
 ]
 const SCHEMA_TABLES = [
+  // 会员体系（2026-10-07 起，见 docs/DEVPLAN-2026-10-07.md 附录 A 契约）：
+  // members 与 users/sessions 彻底分离（users 只承载管理员，游客注册混入会破坏 /api/auth/setup 首装判断）
+  `CREATE TABLE IF NOT EXISTS members (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT    NOT NULL UNIQUE,
+    password_hash TEXT    NOT NULL,
+    salt          TEXT    NOT NULL,
+    email         TEXT    NOT NULL DEFAULT '',
+    display_name  TEXT    NOT NULL DEFAULT '',
+    avatar        TEXT    NOT NULL DEFAULT '',
+    tier          TEXT    NOT NULL DEFAULT 'normal',
+    points        INTEGER NOT NULL DEFAULT 0,
+    status        TEXT    NOT NULL DEFAULT 'active',
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL,
+    last_login_at INTEGER
+  )`,
+  `CREATE TABLE IF NOT EXISTS member_sessions (
+    token      TEXT    PRIMARY KEY,
+    member_id  INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS member_points_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id  INTEGER NOT NULL,
+    delta      INTEGER NOT NULL,
+    reason     TEXT    NOT NULL DEFAULT '',
+    ref_id     INTEGER NOT NULL DEFAULT 0,
+    note       TEXT    NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+  )`,
   // Telegram 相册缓冲（src/external.ts）：多选拆成的多条消息先落这里，几秒后合并成一条微博
   `CREATE TABLE IF NOT EXISTS tg_buffer (
     media_group_id TEXT PRIMARY KEY,
@@ -714,6 +749,11 @@ const SCHEMA_TABLES = [
 ]
 const SCHEMA_INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_comments_weibo ON comments (weibo_id, created_at)',
+  // comments.member_id 与 posts.min_tier 是老库运行时补齐的列，索引只能在这里建（schema.sql 不能建，见该文件内说明）
+  'CREATE INDEX IF NOT EXISTS idx_comments_member ON comments (member_id, created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_members_points ON members (points DESC)',
+  'CREATE INDEX IF NOT EXISTS idx_member_sessions_expiry ON member_sessions (expires_at)',
+  'CREATE INDEX IF NOT EXISTS idx_points_log_member ON member_points_log (member_id, created_at)',
   'CREATE INDEX IF NOT EXISTS idx_friend_links_status ON friend_links (status, sort, id)',
   'CREATE INDEX IF NOT EXISTS idx_visit_day ON visit_log (day, ts)',
 ]
