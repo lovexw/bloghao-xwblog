@@ -145,14 +145,13 @@ const HOP_BY_HOP = new Set([
   'trailer',
 ])
 
-function sendToNode(req: http.IncomingMessage, res: http.ServerResponse, appRes: Response) {
+function sendToNode(req: http.IncomingMessage, res: http.ServerResponse, appRes: Response, isHttps: boolean) {
   const headers: Record<string, string | string[]> = {}
   appRes.headers.forEach((value, key) => {
     if (key !== 'set-cookie') headers[key] = value
   })
   // 会话 cookie 带 Secure：明文 http（本地冒烟 / 未挂 TLS）浏览器和 curl 都不会携带。
-  // 生产由 Caddy/nginx 终结 TLS（X-Forwarded-Proto: https），原样保留
-  const isHttps = req.headers['x-forwarded-proto'] === 'https'
+  // isHttps 由 resolveScheme 统一判定（CF 灵活 SSL 下 X-Forwarded-Proto 是回源段的 http，不可作数）
   const cookies = appRes.headers.getSetCookie()
   if (cookies.length) {
     headers['set-cookie'] = cookies.map((sc) =>
@@ -167,12 +166,39 @@ function sendToNode(req: http.IncomingMessage, res: http.ServerResponse, appRes:
   Readable.fromWeb(appRes.body as never).pipe(res)
 }
 
+/**
+ * 浏览器侧真实 scheme。优先级：
+ *  1. Origin 头（host 与请求一致时）——api.ts 的同源 CSRF 校验拿它和 c.req.url.origin 全等比较，
+ *     scheme 不一致就会误判跨站（CF 灵活 SSL 实测被拒）
+ *  2. CF-Visitor——Cloudflare 注入的访客侧 scheme（灵活 SSL 下也是 https，X-Forwarded-Proto 则是回源段）
+ *  3. X-Forwarded-Proto（常规 TLS 反代）
+ *  4. http
+ */
+function resolveScheme(headers: Headers, host: string): string {
+  const origin = headers.get('origin')
+  if (origin) {
+    try {
+      const o = new URL(origin)
+      if (o.host === host) return o.protocol.replace(':', '')
+    } catch {
+      /* 非法 Origin 走兜底链 */
+    }
+  }
+  try {
+    const visitor = JSON.parse(headers.get('cf-visitor') || '{}') as { scheme?: string }
+    if (visitor.scheme) return visitor.scheme
+  } catch {
+    /* 头损坏走兜底链 */
+  }
+  const xfp = (headers.get('x-forwarded-proto') || '').split(',')[0].trim()
+  return xfp || 'http'
+}
+
 async function handle(req: http.IncomingMessage, res: http.ServerResponse, tenants: Map<string, Tenant>) {
   const started = Date.now()
   const hostHeader = req.headers.host || 'localhost'
   const host = hostHeader.split(':')[0].toLowerCase()
   const url = new URL(req.url || '/', `http://${hostHeader}`)
-  const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'
 
   // 1) 静态资源（/admin/ SPA、插件、favicon 等；public/ 里没有的路径自然落空）
   if (req.method === 'GET' || req.method === 'HEAD') {
@@ -202,6 +228,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, tenan
     else headers.set(key, value)
   }
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD'
+  const proto = resolveScheme(headers, url.host)
   const appReq = new Request(`${proto}://${hostHeader}${url.pathname}${url.search}`, {
     method: req.method,
     headers,
@@ -209,7 +236,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, tenan
     duplex: 'half',
   } as RequestInit)
   const appRes = await xwblog.fetch(appReq, tenant.env as never, execCtx)
-  sendToNode(req, res, appRes)
+  sendToNode(req, res, appRes, proto === 'https')
   console.log(`[http] ${req.method} ${host}${url.pathname} ${appRes.status} ${Date.now() - started}ms`)
 }
 

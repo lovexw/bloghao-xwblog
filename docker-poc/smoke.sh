@@ -57,6 +57,8 @@ JAR=$(mktemp)
 SETUP=$(curl -s -o /dev/null -w '%{http_code}' --resolve "main.localhost:${PORT}:127.0.0.1" -c "$JAR" -H 'Content-Type: application/json' -d '{"username":"owner","password":"password123","displayName":"站长"}' http://main.localhost:${PORT}/api/auth/setup)
 check "首次创建管理员（重跑时已存在也算过）" 1 "$([ "$SETUP" = 200 ] || [ "$SETUP" = 403 ] && echo 1 || echo 0)"
 check "登录"           200 "$(curl -s -o /dev/null -w '%{http_code}' --resolve "main.localhost:${PORT}:127.0.0.1" -b "$JAR" -c "$JAR" -H 'Content-Type: application/json' -d '{"username":"owner","password":"password123"}' http://main.localhost:${PORT}/api/auth/login)"
+check "带同源 Origin 的 POST 放行（模拟 CF 灵活 SSL 后的浏览器）" 200 "$(curl -s -o /dev/null -w '%{http_code}' --resolve "main.localhost:${PORT}:127.0.0.1" -b "$JAR" -H 'Origin: http://main.localhost:8787' -H 'Content-Type: application/json' -d '{"username":"owner","password":"password123"}' http://main.localhost:${PORT}/api/auth/login)"
+check "跨站 Origin 仍被拒绝（CSRF 防线未被适配层拆掉）" 403 "$(curl -s -o /dev/null -w '%{http_code}' --resolve "main.localhost:${PORT}:127.0.0.1" -b "$JAR" -H 'Origin: https://evil.example' -H 'Content-Type: application/json' -d '{"username":"owner","password":"password123"}' http://main.localhost:${PORT}/api/auth/login)"
 
 CREATE=$(curl -s --resolve "main.localhost:${PORT}:127.0.0.1" -b "$JAR" -H 'Content-Type: application/json' \
   -d '{"title":"POC 冒烟文章","content":"<p>来自 docker-poc 的文章，正文配图稍后上传。</p>","status":"published","tags":["poc"]}' \
