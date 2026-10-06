@@ -8,12 +8,18 @@
 
 FROM node:26-alpine AS build
 WORKDIR /app
+# 运行时依赖只有 hono（root package.json 的 dependencies）：装到 /app/node_modules，
+# esbuild 从 src/ 向上解析刚好命中——docker-poc/node_modules 不在 src 的解析链上
+COPY package.json ./
+RUN npm install --omit=dev --no-audit --no-fund
 COPY docker-poc/package.json ./docker-poc/
 RUN cd docker-poc && npm install --no-audit --no-fund
 COPY src/ ./src/
 COPY public/ ./public/
 COPY schema.sql ./
-COPY docker-poc/server.ts docker-poc/shims ./docker-poc/
+# COPY 对目录是「拷内容、不拷目录本身」，shims 必须显式落到 ./docker-poc/shims/
+COPY docker-poc/server.ts ./docker-poc/
+COPY docker-poc/shims/ ./docker-poc/shims/
 RUN cd docker-poc && npm run build
 
 FROM node:26-alpine
