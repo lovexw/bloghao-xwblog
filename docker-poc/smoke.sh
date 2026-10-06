@@ -44,6 +44,7 @@ check "demo 租户 health"          200 "$(code demo.localhost /api/health)"
 check "t1 租户 health"            200 "$(code t1.localhost /api/health)"
 check "未登记域名 404"            404 "$(code nobody.localhost /api/health)"
 check "后台 SPA 静态直出"         200 "$(code main.localhost /admin/)"
+check "后台无斜杠 301 补斜杠（防相对路径资源 404）" 301 "$(code main.localhost /admin)"
 check "demo 租户 RSS"             200 "$(code demo.localhost /rss.xml)"
 check "main 租户首页（空库也能渲染）" 200 "$(code main.localhost /)"
 

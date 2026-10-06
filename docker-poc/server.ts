@@ -93,7 +93,7 @@ const MIME: Record<string, string> = {
 }
 
 /** 静态资源直出（对齐 wrangler assets：精确文件命中才返回，其余进应用） */
-function serveStatic(pathname: string): Response | null {
+function serveStatic(pathname: string, search: string): Response | null {
   let decoded: string
   try {
     decoded = decodeURIComponent(pathname)
@@ -103,17 +103,27 @@ function serveStatic(pathname: string): Response | null {
   if (decoded.includes('\0') || decoded.includes('\\')) return null
   const file = path.resolve(PUBLIC_ROOT, `.${decoded}`)
   if (file !== PUBLIC_ROOT && !file.startsWith(PUBLIC_ROOT + path.sep)) return null
-  const candidates = decoded.endsWith('/')
-    ? [path.join(file, 'index.html')]
-    : [file, path.join(file, 'index.html')]
+  let st: fs.Stats
+  try {
+    st = fs.statSync(file)
+  } catch {
+    return null
+  }
+  // 目录路径不带斜杠：301 补斜杠（对齐 wrangler assets 的 auto-trailing-slash）。
+  // 否则 index.html 在 /admin 下被直出，页面里的相对路径资源 ./admin.css 会解析成
+  // /admin.css → 404 → 后台整页空白（甲骨文服务器实测抓出）
+  if (!decoded.endsWith('/') && st.isDirectory()) {
+    return new Response(null, { status: 301, headers: { Location: `${decoded}/${search}` } })
+  }
+  const candidates = [file, path.join(file, 'index.html')]
   for (const f of candidates) {
-    let st: fs.Stats
+    let fst: fs.Stats
     try {
-      st = fs.statSync(f)
+      fst = fs.statSync(f)
     } catch {
       continue
     }
-    if (!st.isFile()) continue
+    if (!fst.isFile()) continue
     return new Response(fs.readFileSync(f), {
       headers: {
         'Content-Type': MIME[path.extname(f).toLowerCase()] || 'application/octet-stream',
@@ -166,7 +176,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, tenan
 
   // 1) 静态资源（/admin/ SPA、插件、favicon 等；public/ 里没有的路径自然落空）
   if (req.method === 'GET' || req.method === 'HEAD') {
-    const hit = serveStatic(url.pathname)
+    const hit = serveStatic(url.pathname, url.search)
     if (hit) {
       res.writeHead(hit.status, Object.fromEntries(hit.headers as never))
       if (req.method === 'HEAD') res.end()
