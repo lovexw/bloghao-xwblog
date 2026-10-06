@@ -11,7 +11,12 @@
 set -e
 DATA_DIR="${TENANTS_DIR:-/data/tenants}"
 mkdir -p "$DATA_DIR"
-if ! find "$DATA_DIR" -maxdepth 0 -user node >/dev/null 2>&1; then
+# 注意不能用 find 判断属主：find 没匹配到也退出 0（退出码只反映操作错误，
+# 不反映有没有找到），「! find -user node」永远为假——真机 bind mount（root 属主）
+# 上 chown 会被跳过，容器崩溃循环 EACCES（甲骨文服务器实测踩过）。
+# 用 stat 比对 uid：顶层不是 node 的（首次挂载/被 root 动过）才递归修，之后跳过，
+# 百万文件级大图床重启不做全量扫描。BusyBox stat 兼容 alpine。
+if [ "$(stat -c %u "$DATA_DIR")" != "$(id -u node)" ]; then
   echo "[entrypoint] 修正数据卷属主 → node:node（仅首次或属主变化时递归）"
   chown -R node:node "$DATA_DIR" || echo "[entrypoint] chown 失败，仍尝试以 node 启动"
 fi
