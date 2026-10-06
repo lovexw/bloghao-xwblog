@@ -90,10 +90,10 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 
 ## Git 约定
 
-- 本工作区同时服务**两个同源仓库**（2.0 起内容完全一致）：origin = `github.com/lovexw/bloghao-xwblog`（作者实例/开发仓库），upstream = `github.com/lovexw/bloghao`（官方发布仓库，对外开放部署）。不做这两个仓库之外的操作
-- 发布流程：提交后**双推**——`git push origin main && git push upstream main`，两仓库始终指向同一提交（同分支同内容，两仓库各自维护 README 会造成同步冲突，故统一一份官方口吻文档）
+- 本工作区服务**两个仓库**（历史上同源、2.0 起曾保持同一提交，**2026-10-06 起分叉、各自演进**）：origin = `github.com/lovexw/bloghao-xwblog`（作者实例/开发仓库，本工作区的主仓库），upstream = `github.com/lovexw/bloghao`（官方发布仓库，对外开放部署）。不做这两个仓库之外的操作
+- 发布流程（2026-10 起，**双推已废止**）：提交后只推 `git push origin main`，不再推 upstream；两仓库内容允许分叉、不追求指向同一提交。需要更新官方发布仓库时，按用户当次的明确指示单独处理，不要自动代推
 - README / docs / 官网以「博客号 BlogHao」官方项目口吻书写，对两个仓库都自洽；线上地址 blog.xiaowuleyi.com 在文档中一律表述为「在线示例」
-- 旧「同步上游」流程已废止（官方仓库不再单独演进），**不要**从 upstream pull 覆盖本地
+- **不要**从 upstream pull / merge 覆盖本地（两仓库已分叉，互相同步会搅乱双方历史）；旧「同步上游」流程已废止
 - 2026-10-05 仓库整理：官方发布仓库由 bloghao-blog **改名**为 `lovexw/bloghao`（旧地址 GitHub 自动重定向）；更早的独立官网仓库已删除、内容并入 `website/`——遇到提这两个旧名字的链接/文档一律以现名为准
 - 提交信息沿用 `theme:` / `mobile:` / `docs:` / `brand:` 等前缀的中文风格
 
