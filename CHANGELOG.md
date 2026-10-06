@@ -10,7 +10,17 @@
 
 ### 新增
 
-- **Docker 自托管**（`docker-poc/`）：业务代码零改动跑进普通 Node 容器——文章存内置 SQLite（WAL），图片存本地磁盘目录或 Cloudflare R2 桶（S3 兼容接口直连、SigV4 零依赖实现，启动自检 + `--copy-local-to-r2` 幂等迁移存量图片）；单进程按域名托管多个完全独立的博客站（库与上传物物理隔离），定时发布与北京时间 00:30 备份 / 回收站清理随容器运行；`XWLBLOG_PORT` 换端口、`XWLBLOG_BIND` 绑回环交给面板反代；数据卷属主由容器入口自动修复后降权运行；已在甲骨文 ARM 实机全链路排练通过（验收 45 项，4核8G 舒适跑 100 站）
+### 变更
+
+### 修复
+
+## [2.1.0] - 2026-10-06
+
+本版本带来 **Docker 自托管**：同一套业务代码零改动跑进普通 Node 容器，不想把代码跑在 Cloudflare 上、手头有 VPS 的用户多了一条路（Cloudflare 版的部署方式不变）。
+
+### 新增
+
+- **Docker 自托管**（`docker-poc/`）：文章存内置 SQLite（WAL），图片存本地磁盘目录或 Cloudflare R2 桶（S3 兼容接口直连、SigV4 零依赖实现，启动自检 + `--copy-local-to-r2` 幂等迁移存量图片）；单进程按域名托管多个完全独立的博客站（库与上传物物理隔离），定时发布与北京时间 00:30 备份 / 回收站清理随容器运行；`XWLBLOG_PORT` 换端口、`XWLBLOG_BIND` 绑回环交给面板反代；数据卷属主由容器入口自动修复后降权运行；已在真实服务器全链路排练通过（验收 45 项，4核8G 舒适跑 100 站）。部署指引见 README「部署 → 方式三」与 [docker-poc/DEPLOY.md](docker-poc/DEPLOY.md)
 
 ### 修复
 
@@ -29,5 +39,6 @@
 - 运维省心：媒体库体检（未引用 / 重复文件扫描清理）、回收站（删除 30 天可找回）、一键灰度 / 闭站、定时备份与告警
 - 五套主题全部适配移动端；官方演示站每 2 小时自动重置体验
 
-[Unreleased]: https://github.com/lovexw/bloghao/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/lovexw/bloghao/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/lovexw/bloghao/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/lovexw/bloghao/releases/tag/v2.0.0
