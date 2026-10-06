@@ -21,6 +21,7 @@ import xwblog from '../src/index'
 import { ensureSchema } from '../src/db'
 import { createD1 } from './shims/d1'
 import { createR2Disk } from './shims/r2disk'
+import { createR2S3, signAuthorization } from './shims/r2s3'
 // D1 的建表靠部署时 `wrangler d1 execute schema.sql`，ensureSchema 只管增量补列——
 // 租户库是全新文件，这里要自己先跑一遍 schema.sql（官方幂等设计，可重复执行），
 // 与演示站 src/demo.ts 的 ensureTables 同款思路
@@ -41,28 +42,100 @@ interface Tenant {
 
 const HOST_RE = /^[a-z0-9][a-z0-9.-]*$/
 
-/** 按配置逐个初始化租户：域名 → 自己的 blog.db（WAL）+ uploads/ 图床目录 */
+interface R2SharedConfig {
+  accountId: string
+  bucket: string
+  accessKeyId: string
+  secretAccessKey: string
+}
+
+/** 读 tenants.json，两种格式兼容：
+ *  旧：{ "域名": { demo } } 平铺
+ *  新：{ r2: { accountId, bucket, accessKeyId, secretAccessKey }, tenants: { "域名": { demo, storage: "local"|"r2" } } }
+ *  新格式里多个租户共享一个 R2 桶，shim 用 <域名>/ 前缀做租户隔离 */
+function readTenantsConfig(): { r2?: R2SharedConfig; tenants: Record<string, { demo?: boolean; storage?: string }> } {
+  const raw = JSON.parse(fs.readFileSync(TENANTS_CONFIG, 'utf8'))
+  if (raw && typeof raw === 'object' && !Array.isArray(raw) && raw.tenants) {
+    return { r2: raw.r2, tenants: raw.tenants }
+  }
+  return { tenants: raw }
+}
+
+/** 按租户配置初始化存储：storage 缺省/"local" = 本地磁盘目录；"r2" = 共享桶 + 域名前缀 */
+function createTenantImages(host: string, cfg: { storage?: string }, r2Shared?: R2SharedConfig): { images: unknown; label: string } {
+  if (cfg.storage === 'r2') {
+    if (!r2Shared) {
+      throw new Error(`租户 ${host} 配置了 storage:"r2"，但 tenants.json 缺少顶层 r2 共享配置（accountId/bucket/accessKeyId/secretAccessKey）`)
+    }
+    return { images: createR2S3({ ...r2Shared, prefix: host }), label: `R2 桶 ${r2Shared.bucket}（前缀 ${host}/）` }
+  }
+  return { images: createR2Disk(path.join(TENANTS_DIR, host, 'uploads')), label: '本地磁盘' }
+}
+
+/** 逐个初始化租户：域名 → 自己的 blog.db（WAL）+ 图床存储，互不可见 */
 async function loadTenants(): Promise<Map<string, Tenant>> {
-  const raw = JSON.parse(fs.readFileSync(TENANTS_CONFIG, 'utf8')) as Record<string, { demo?: boolean }>
+  const { r2: r2Shared, tenants } = readTenantsConfig()
   const map = new Map<string, Tenant>()
-  for (const [host, cfg] of Object.entries(raw)) {
+  let r2Used = false
+  for (const [host, tc] of Object.entries(tenants)) {
     if (!HOST_RE.test(host)) throw new Error(`tenants.json 里的域名不合法: ${host}`)
+    const cfg = (tc ?? {}) as { demo?: boolean; storage?: string }
     const dir = path.join(TENANTS_DIR, host)
     fs.mkdirSync(dir, { recursive: true })
+    const { images, label } = createTenantImages(host, cfg, r2Shared)
+    if (cfg.storage === 'r2') r2Used = true
     const env: Record<string, unknown> = {
       DB: createD1(path.join(dir, 'blog.db')),
-      IMAGES: createR2Disk(path.join(dir, 'uploads')),
+      IMAGES: images,
       // 业务代码从不调用 ASSETS（静态资源在适配层直出），兜底防误用
       ASSETS: { fetch: async () => new Response('ASSETS binding is handled by the self-host adapter', { status: 404 }) },
     }
-    if (cfg?.demo) env.DEMO_MODE = '1'
+    if (cfg.demo) env.DEMO_MODE = '1'
     const db = env.DB as { exec: (sql: string) => Promise<unknown> }
     await db.exec(SCHEMA_SQL)
     await ensureSchema(env.DB as never)
     map.set(host, { host, env })
-    console.log(`[tenant] ${host} 就绪（${cfg?.demo ? '演示种子' : '空库'}）→ ${dir}`)
+    console.log(`[tenant] ${host} 就绪（存储: ${label}，${cfg?.demo ? '演示种子' : '空库'}）→ ${dir}`)
+  }
+  // R2 自检：同一共享配置只探测一次（空前缀 LIST），凭据/桶名错误在启动时失败，好过首个请求 500
+  if (r2Used && r2Shared) {
+    const probe = createR2S3({ ...r2Shared, prefix: '__healthcheck__' })
+    const r = await probe.list({ limit: 1 })
+    console.log(`[r2] 自检通过：桶 ${r2Shared.bucket} 可达`)
+    void r
   }
   return map
+}
+
+/** 存量迁移：把租户本地盘 uploads/ 逐个搬到 R2（幂等，跳过已存在的 key），用于 local → r2 切换 */
+async function migrateLocalToR2(host: string): Promise<void> {
+  const { r2: r2Shared } = readTenantsConfig()
+  if (!r2Shared) {
+    console.error('tenants.json 缺少顶层 r2 配置，无法迁移')
+    process.exit(1)
+  }
+  const localDir = path.join(TENANTS_DIR, host, 'uploads')
+  if (!fs.existsSync(localDir)) {
+    console.error(`本地图床目录不存在：${localDir}`)
+    process.exit(1)
+  }
+  const local = createR2Disk(localDir)
+  const remote = createR2S3({ ...r2Shared, prefix: host })
+  const { objects } = await local.list({ limit: 1_000_000 })
+  let copied = 0
+  let skipped = 0
+  for (const o of objects) {
+    if (await remote.head(o.key)) {
+      skipped++
+      continue
+    }
+    const src = await local.get(o.key)
+    if (!src) continue
+    await remote.put(o.key, await src.arrayBuffer(), { httpMetadata: src.httpMetadata as { contentType?: string; cacheControl?: string } })
+    copied++
+    if (copied % 50 === 0) console.log(`  ... 已上传 ${copied} 个`)
+  }
+  console.log(`[migrate] ${host}：新上传 ${copied} 个对象到 R2（前缀 ${host}/），已存在跳过 ${skipped} 个；本地目录保留作为回退，确认无误后可自行清理`)
 }
 
 /** Workers ExecutionContext 的等价物：waitUntil 的异步任务失败只记日志，不炸请求 */
@@ -266,6 +339,33 @@ function startCron(tenants: Map<string, Tenant>) {
     }
   }, CRON_TICK_MS)
   timer.unref()
+}
+
+// 维护模式（不启动 HTTP 服务、不加载租户）：
+//   node dist/server.js --selftest                  —— SigV4 签名对照 AWS 官方测试向量
+//   node dist/server.js --copy-local-to-r2 <域名>   —— 该租户本地盘图片迁移到 R2（幂等）
+const arg1 = process.argv[2]
+if (arg1 === '--selftest') {
+  // 向量取自 AWS S3 文档「Get Bucket (List Objects)」例子（与签名器的
+  // SignedHeaders=host;x-amz-content-sha256;x-amz-date 组合一致，且覆盖查询串签名路径）：
+  // GET https://examplebucket.s3.amazonaws.com/?max-keys=2&prefix=J，时间 20130524T000000Z
+  const got = signAuthorization(
+    'GET',
+    'https://examplebucket.s3.amazonaws.com/?max-keys=2&prefix=J',
+    'AKIAIOSFODNN7EXAMPLE',
+    'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+    'us-east-1',
+    new Date('2013-05-24T00:00:00Z')
+  )
+  const want =
+    'AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=34b48302e7b5fa45bde8084f4b7868a86f0a534bc59db6670ed5711ef69dc6f7'
+  const ok = got === want
+  console.log(ok ? '[selftest] SigV4 签名与 AWS 官方测试向量一致 ✓' : `[selftest] 签名不符\n  got:  ${got}\n  want: ${want}`)
+  process.exit(ok ? 0 : 1)
+}
+if (arg1 === '--copy-local-to-r2') {
+  await migrateLocalToR2(process.argv[3] || '')
+  process.exit(0)
 }
 
 const tenants = await loadTenants()

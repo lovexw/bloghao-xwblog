@@ -60,6 +60,50 @@ npm run smoke
 覆盖：三租户健康检查、演示租户播种与 RSS、真实租户 注册→登录→发文→传图→图片回读、
 **跨租户隔离**（A 租户的文章/图片在 B 租户 404）、后台 SPA 静态直出。
 
+## 存储后端二选一：本地盘 / Cloudflare R2
+
+每个租户独立选择图片存哪：`storage` 缺省/`"local"` = 本地磁盘目录（默认，快、零依赖）；
+`"r2"` = Cloudflare R2 共享桶（服务器可随时重建、磁盘无天花板、备份自动异地）。
+R2 **零出口流量费**，200GB 图片约 $3/月。
+
+**Cloudflare 后台一次性准备（约 2 分钟）**：
+
+1. R2 → 创建桶（如 `xwblog-images`，位置选 APAC 更近）
+2. R2 概览右侧记下 **账户 ID**
+3. R2 → 管理 R2 API 令牌 → 创建 API 令牌（权限：对象读和写）→ 记下**访问密钥 ID** 和**机密访问密钥**（只显示一次）
+
+**tenants.json 切到新格式**（旧平铺格式仍兼容）：
+
+```json
+{
+  "r2": {
+    "accountId": "你的账户ID",
+    "bucket": "xwblog-images",
+    "accessKeyId": "xxx",
+    "secretAccessKey": "xxx"
+  },
+  "tenants": {
+    "poc.xiaowuleyi.com": { "demo": false, "storage": "r2" },
+    "main.localhost": { "demo": false }
+  }
+}
+```
+
+多租户共享一个桶时按 `<域名>/` 前缀隔离，互相不可见；`chmod 600 tenants.json` 保护密钥。
+
+**启用步骤**：
+
+```bash
+git pull && XWLBLOG_BIND=127.0.0.1 docker compose up --build -d
+# 启动日志出现 [r2] 自检通过：桶 xxx 可达 即配置正确（凭据错会直接启动失败并说明原因）
+# 存量图片迁移（幂等，跳过已存在；本地目录保留作回退）：
+docker compose exec xwblog node docker-poc/dist/server.js --copy-local-to-r2 poc.xiaowuleyi.com
+```
+
+**顺带收益**：应用自带的每晚备份 cron 把数据库快照写进图床桶 `backups/`——桶在 R2 上时
+备份自动变成异地备份。进阶（可选）：给桶绑自定义域名后，让 openresty 把 `/images/*`
+映射过去，图片请求连服务器都不回源。
+
 ## Docker 跑
 
 ```bash

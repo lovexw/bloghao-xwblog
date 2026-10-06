@@ -20,6 +20,9 @@ FAIL=0
 echo "==> 打包"
 npm run --silent build
 
+echo "==> SigV4 签名自检（AWS 官方测试向量）"
+node dist/server.js --selftest
+
 echo "==> 启动服务（端口 ${PORT}）"
 node dist/server.js >server.smoke.log 2>&1 &
 SERVER_PID=$!
