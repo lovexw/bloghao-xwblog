@@ -91,7 +91,8 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 ## Git 约定
 
 - 本工作区服务**双仓库、两角色**：origin = `github.com/lovexw/bloghao-xwblog`（滚动开发测试仓库，日常提交只推这里），upstream = `github.com/lovexw/bloghao`（官方稳定版仓库，对外开放部署入口，main 永远保持可部署）。不做这两个仓库之外的操作
-- 发布流程（2026-10-06 起废止旧「双推、两仓库同一提交」约定）：日常提交**只推 origin**；upstream 只在迭代稳定、审查清洗后手动发布——`git fetch upstream`，从 `upstream/main` 切发布分支，`git merge --squash` 本地 main（此时按需挑选/清洗，个人实例定制与实验内容不进官方版），确认 diff 后以单个版本提交推 upstream。两仓库历史自此允许分叉，**不要** `git push upstream origin/main:main` 直灌开发历史。**发布操作照 docs/RELEASING.md 清单执行**（版本号规则、挑洗依据「个人定制台账」、CHANGELOG 回填与镜像回开发线）；个人定制**合入 main 当天登记进台账**
+- 发布流程（2026-10-06 起废止旧「双推、两仓库同一提交」约定；同日收紧为 **upstream 默认冻结**）：日常提交**只推 origin**；**未经用户明确指示，任何改动都不同步到 upstream**——迭代稳定、攒了成批 feat、修了安全 / 数据问题，都不构成自行发布的理由，只有用户明确说「发布」才走流程：`git fetch upstream`，从 `upstream/main` 切发布分支，`git merge --squash` 本地 main（此时按需挑选/清洗，个人实例定制与实验内容不进官方版），确认 diff 后以单个版本提交推 upstream。两仓库历史自此允许分叉，**不要** `git push upstream origin/main:main` 直灌开发历史。**发布操作照 docs/RELEASING.md 清单执行**（版本号规则、挑洗依据「个人定制台账」、CHANGELOG 回填与镜像回开发线）；个人定制**合入 main 当天登记进台账**
+- 开发线定位（2026-10-07 起）：xwblog 进入「互动与创收」阶段，规划会员系统、积分系统、排行榜等增强互动 / 粘性 / 创收的功能（调研见 docs/ROADMAP.md「会员体系」小节）；本站专属的运营属性（收费配置、站点人设内容）落地时按规则登记个人定制台账，官方版挑洗时剔除
 - README / docs / 官网以「博客号 BlogHao」官方项目口吻书写，对两个仓库都自洽；线上地址 blog.xiaowuleyi.com 在文档中一律表述为「在线示例」
 - 同步方向永远 dev→stable 单向：**不要**从 upstream pull 覆盖本地（upstream 只接收发布，永不反向流入开发线）
 - 2026-10-05 仓库整理：官方发布仓库由 bloghao-blog **改名**为 `lovexw/bloghao`（旧地址 GitHub 自动重定向）；更早的独立官网仓库已删除、内容并入 `website/`——遇到提这两个旧名字的链接/文档一律以现名为准
