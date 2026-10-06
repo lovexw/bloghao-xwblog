@@ -13,9 +13,11 @@ import type { Env } from './types'
 
 const BACKUP_PREFIX = 'backups/'
 const KEEP_FILES = 30
-// 会话表是临时凭证、tg_buffer 是相册合并缓冲，都不值得备份
+// 会话表是临时凭证（管理员的 sessions 与会员的 member_sessions）、tg_buffer 是相册合并缓冲，都不值得备份
 const BACKUP_TABLES = [
   'users',
+  'members',
+  'member_points_log',
   'posts',
   'pages',
   'comments',
