@@ -577,3 +577,44 @@ main .gb-section { margin-top: 12px; }
 
 /* 微博+博客模式：首页微博流（头部复用 .wb-home-head，卡片复用 .wb-list 间距） */
 .wb-home-feed { margin: 0 0 40px; }
+
+/* ---------- 会员 / 排行榜（首页 rankCard 挂件 + /rank /member 页，结构在 render.ts 共享） ---------- */
+.rk-card { margin: 28px 0 0; border-top: 1px solid var(--mn-line); border-bottom: 1px solid var(--mn-line); }
+.rk-head { display: flex; align-items: baseline; gap: 8px; padding: 16px 0 12px; }
+.rk-ico { width: 15px; height: 15px; color: var(--mn-ink); align-self: center; flex: 0 0 auto; }
+.rk-title { font-size: 13px; font-weight: 600; letter-spacing: 0.08em; }
+.rk-sub { font-size: 12px; color: var(--mn-sub); }
+.rk-more { margin-left: auto; font-size: 12px; color: var(--mn-sub); text-decoration: none; flex: 0 0 auto; }
+.rk-more:hover { color: var(--mn-ink); }
+.rk-list { margin: 0; padding: 0; list-style: none; }
+.rk-item { display: flex; align-items: center; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--mn-line); }
+.rk-item:last-child { border-bottom: none; }
+.rk-no { flex: 0 0 24px; font-size: 13px; color: var(--mn-sub); font-variant-numeric: tabular-nums; text-align: center; }
+.rk-item.is-top1 .rk-no, .rk-item.is-top2 .rk-no, .rk-item.is-top3 .rk-no { color: var(--mn-ink); font-weight: 700; }
+.rk-name { flex: 1 1 auto; min-width: 0; font-size: 14px; color: var(--mn-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rk-tier { flex: 0 0 auto; font-size: 11px; color: var(--mn-sub); border: 1px solid var(--mn-line); border-radius: 999px; padding: 1px 8px; }
+.rk-pts { flex: 0 0 auto; font-size: 14px; font-weight: 600; color: var(--mn-ink); font-variant-numeric: tabular-nums; }
+.rk-item.is-me { background: #fafafa; box-shadow: inset 2px 0 0 var(--mn-ink); }
+.mn-rank, .mn-member { margin: 8px 0 32px; }
+.rk-list-page { margin: 0; border-top: 1px solid var(--mn-line); }
+.rk-list-page .rk-item { padding: 14px 0; }
+.mem-card { border: 1px solid var(--mn-line); padding: 22px 20px; margin: 16px 0; }
+.mem-form-title { margin: 0 0 14px; font-size: 15px; font-weight: 600; }
+.mem-input { display: block; width: 100%; box-sizing: border-box; padding: 12px; margin-bottom: 12px; border: 1px solid var(--mn-line); border-radius: 0; background: #fff; font-size: 16px; color: var(--mn-ink); outline: none; }
+.mem-input:focus { border-color: var(--mn-ink); }
+.mem-btn { display: block; width: 100%; padding: 13px; border: 1px solid var(--mn-ink); border-radius: 0; background: var(--mn-ink); color: #fff; font-size: 14px; cursor: pointer; }
+.mem-btn:disabled { opacity: 0.5; }
+.mem-btn-ghost { background: transparent; border: 1px solid var(--mn-line); color: var(--mn-sub); margin-top: 16px; }
+.mem-swap { margin: 12px 0 0; font-size: 13px; color: var(--mn-sub); text-align: center; }
+.mem-swap-btn { border: none; background: none; color: var(--mn-ink); font-size: 13px; cursor: pointer; padding: 0; text-decoration: underline; }
+.mem-tip { margin: 10px 0 0; font-size: 13px; color: var(--mn-ink); min-height: 1em; text-align: center; }
+.mem-who { display: flex; align-items: center; gap: 14px; }
+.mem-avatar { width: 48px; height: 48px; flex: 0 0 48px; border-radius: 0; background: var(--mn-ink); color: #fff; font-size: 20px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; }
+.mem-avatar-img { object-fit: cover; }
+.mem-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.mem-name { font-size: 16px; color: var(--mn-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-tier { align-self: flex-start; font-size: 11px; color: var(--mn-sub); border: 1px solid var(--mn-line); border-radius: 999px; padding: 1px 8px; }
+.mem-points { flex: 0 0 auto; text-align: center; }
+.mem-points b { display: block; font-size: 22px; color: var(--mn-ink); font-variant-numeric: tabular-nums; }
+.mem-points span { font-size: 11px; color: var(--mn-sub); }
+.mem-email { margin: 12px 0 0; font-size: 13px; color: var(--mn-sub); word-break: break-all; }

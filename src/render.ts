@@ -240,7 +240,8 @@ export interface NavPage {
  * mode 传站点模式（siteMode(settings)）：纯博客隐藏「微博」，纯微博把「微博」提为首位并隐藏
  * 归档/分类话题/随机等博客专属模块（未传按博客+微博处理，兼容第三方主题）。
  * 分类与标签收进同一折叠菜单（标签可能很多，菜单内部滚动），
- * active 传 'home' / 'weibo' / 'archives' / 'guestbook' / 'links' / 'about' / 分类 slug / 'tag:标签名' / 'p:页面slug'。
+ * active 传 'home' / 'weibo' / 'archives' / 'guestbook' / 'links' / 'member' / 'rank' / 'about' / 分类 slug / 'tag:标签名' / 'p:页面slug'。
+ * memberEnabled 传 settings.membersEnabled === '1'：true 时在「关于我」前渲染会员中心与排行榜入口。
  */
 export function siteNav(o: {
   cls: string
@@ -249,6 +250,7 @@ export function siteNav(o: {
   tags?: TagCount[]
   pages?: NavPage[]
   active?: string
+  memberEnabled?: boolean
 }): string {
   const m = o.mode || 'blog-weibo'
   const item = (href: string, label: string, active = false) =>
@@ -283,6 +285,8 @@ export function siteNav(o: {
   ${m === 'weibo' ? '' : drop}
   ${item('/links', '友情链接', o.active === 'links')}
   ${(o.pages || []).map((p) => item(p.href, p.title, o.active === p.key)).join('')}
+  ${o.memberEnabled ? item('/member', '会员', o.active === 'member') : ''}
+  ${o.memberEnabled ? item('/rank', '排行榜', o.active === 'rank') : ''}
   ${item('/about', '关于我', o.active === 'about')}
   ${m === 'weibo' ? '' : item('/random', '随机')}
 </nav>`
@@ -534,8 +538,13 @@ function adminIdentity(name: string): string {
   return `<p class="cmt-as">以作者 <b>${esc(name)}</b> 的身份发言</p><input class="cmt-hp" name="link" tabindex="-1" autocomplete="off" aria-hidden="true">`
 }
 
-/** 卡片内折叠评论区骨架：列表与表单内容由 site.js 按需填充；adminName 传入时表单免填昵称 */
-export function weiboCommentPanel(w: WeiboItemView, allowComments: boolean, adminName?: string): string {
+/** 会员登录时的发言身份行：结构与 adminIdentity 同构（蜜罐字段随行带上），徽标文案区分身份 */
+function memberIdentity(name: string): string {
+  return `<p class="cmt-as">以会员 <b>${esc(name)}</b> 的身份发言</p><input class="cmt-hp" name="link" tabindex="-1" autocomplete="off" aria-hidden="true">`
+}
+
+/** 卡片内折叠评论区骨架：列表与表单内容由 site.js 按需填充；adminName / memberName 传入时表单免填昵称（管理员优先） */
+export function weiboCommentPanel(w: WeiboItemView, allowComments: boolean, adminName?: string, memberName?: string): string {
   return `<div class="wb-cmt" data-wb-cmt="${w.id}" hidden>
   <div class="wb-cmt-list" data-role="list"><p class="wb-cmt-loading">加载中…</p></div>
   ${
@@ -544,7 +553,9 @@ export function weiboCommentPanel(w: WeiboItemView, allowComments: boolean, admi
   ${
     adminName
       ? adminIdentity(adminName)
-      : `<div class="wb-cmt-row">
+      : memberName
+        ? memberIdentity(memberName)
+        : `<div class="wb-cmt-row">
     <input class="wb-cmt-input" name="nickname" maxlength="24" placeholder="昵称" required>
     <input class="cmt-hp" name="link" tabindex="-1" autocomplete="off" aria-hidden="true">
   </div>`
@@ -564,6 +575,8 @@ export function weiboCards(o: {
   allowComments?: boolean
   /** 登录管理员昵称：评论表单免填昵称，以作者身份发言；传入即在卡片上渲染管理操作（编辑/置顶/删除） */
   adminName?: string
+  /** 登录会员昵称（管理员未登录时生效）：评论表单免填昵称，以会员身份发言 */
+  memberName?: string
 }): string {
   const name = o.settings.siteName || '微博'
   const allowComments = o.allowComments !== false
@@ -571,7 +584,7 @@ export function weiboCards(o: {
   return o.items
     .map((w) => {
       const foot = weiboCardFoot(w, isAdmin)
-      const panel = weiboCommentPanel(w, allowComments, o.adminName)
+      const panel = weiboCommentPanel(w, allowComments, o.adminName, o.memberName)
       return `<article class="wb-card${w.pinned ? ' is-pinned' : ''}" id="wb-${w.id}">
   <header class="wb-head">
     <span class="wb-avatar">${o.avatarHtml}</span>
@@ -637,6 +650,7 @@ export function weiboHomeFeed(o: {
   avatarHtml: string
   allowComments?: boolean
   adminName?: string
+  memberName?: string
 }): string {
   if (!o.items.length) return ''
   const cards = weiboCards({
@@ -645,10 +659,129 @@ export function weiboHomeFeed(o: {
     avatarHtml: o.avatarHtml,
     allowComments: o.allowComments,
     adminName: o.adminName,
+    memberName: o.memberName,
   })
   return `<section class="wb-home-feed" aria-label="微博随手记">
   ${weiboHomeHead(o.total)}
   <div class="wb-list">${cards}</div>
+</section>`
+}
+
+/* ---------------- 会员 / 排行榜（共享构建器） ----------------
+ * 结构全主题共用（语义化 .mem-* / .rk-* class），视觉由主题 CSS 塑形。
+ * 数据由会员服务端产出（members 表 / points，见 DEVPLAN-2026-10-07 附录 A 契约）；
+ * 档位枚举 'all'|'coffee'|'top' / 'normal'|'coffee'|'top'，标签集中在这里，主题不手写文案。
+ */
+
+export type MemberTier = 'normal' | 'coffee' | 'top'
+
+export const TIER_LABELS: Record<MemberTier, string> = {
+  normal: '普通会员',
+  coffee: '咖啡会员',
+  top: '顶级会员',
+}
+
+/** 档位 → 展示文案：脏值/缺省一律按普通会员兜底（hasOwnProperty 防原型链穿透） */
+export function tierLabel(tier: string | undefined | null): string {
+  return tier && Object.prototype.hasOwnProperty.call(TIER_LABELS, tier) ? TIER_LABELS[tier as MemberTier] : TIER_LABELS.normal
+}
+
+/** 会员身份视图（/member 页、评论表单、排行挂件共用）；服务端产出，渲染层只读 */
+export interface MemberView {
+  nickname: string
+  tier: MemberTier
+  points: number
+  email?: string
+  /** P1 预留：会员自定义头像（无则退回昵称首字，与站点头像同款降级） */
+  avatarUrl?: string
+  createdAt?: number
+}
+
+/** 排行榜条目：rank 为服务端排好的名次（1 起）；选择隐藏自己的会员不出现在数据里 */
+export interface RankEntryView {
+  rank: number
+  nickname: string
+  tier: MemberTier
+  points: number
+  /** 当前访客本人行（榜单页高亮用） */
+  isMe?: boolean
+}
+
+/** 会员头像位：有 avatarUrl 用图片，否则退回昵称首字；cls 传主题侧样式类（如 mem-avatar） */
+export function memberAvatarHtml(m: MemberView, cls: string): string {
+  if (m.avatarUrl) return `<img class="${cls} ${cls}-img" src="${esc(m.avatarUrl)}" alt="${esc(m.nickname)}">`
+  const ch = (m.nickname || '客').trim().charAt(0) || '客'
+  return `<span class="${cls}" aria-hidden="true">${esc(ch)}</span>`
+}
+
+/** 排行榜单行（首页挂件与 /rank 页共用结构） */
+function rankRow(e: RankEntryView): string {
+  return `<li class="rk-item${e.rank <= 3 ? ` is-top${e.rank}` : ''}${e.isMe ? ' is-me' : ''}">
+  <span class="rk-no">${e.rank}</span>
+  <span class="rk-name">${esc(e.nickname)}</span>
+  <span class="rk-tier">${tierLabel(e.tier)}</span>
+  <b class="rk-pts">${e.points}</b>
+</li>`
+}
+
+/** 首页积分排行挂件：top N 榜（数据缺省/为空不渲染），完整榜单指向 /rank */
+export function rankCard(entries: RankEntryView[] | null | undefined): string {
+  if (!entries?.length) return ''
+  return `<section class="rk-card" aria-label="会员积分排行">
+  <header class="rk-head">
+    <svg class="rk-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 21h8M12 17v4"/><path d="M7 4h10v4a5 5 0 0 1-10 0z"/><path d="M7 5H4v2a3 3 0 0 0 3 3M17 5h3v2a3 3 0 0 1-3 3"/></svg>
+    <span class="rk-title">会员排行</span>
+    <span class="rk-sub">留言、常回来，积分自然涨</span>
+    <a class="rk-more" href="/rank">完整榜单 →</a>
+  </header>
+  <ol class="rk-list">${entries.map(rankRow).join('\n')}</ol>
+</section>`
+}
+
+/** /rank 完整榜单列表（页面壳由主题渲染）；空榜返回空串，由页面出空态文案 */
+export function rankListHtml(entries: RankEntryView[]): string {
+  if (!entries.length) return ''
+  return `<ol class="rk-list rk-list-page">${entries.map(rankRow).join('\n')}</ol>`
+}
+
+/** 会员中心卡（已登录态）：身份 + 积分 + 退出；退出交互在 site.js（POST /api/member/logout） */
+export function memberCardHtml(m: MemberView): string {
+  return `<section class="mem-card" data-member-card>
+  <div class="mem-who">
+    ${memberAvatarHtml(m, 'mem-avatar')}
+    <div class="mem-main">
+      <b class="mem-name">${esc(m.nickname)}</b>
+      <span class="mem-tier" data-tier="${esc(m.tier)}">${tierLabel(m.tier)}</span>
+    </div>
+    <div class="mem-points"><b>${m.points}</b><span>积分</span></div>
+  </div>
+  ${m.email ? `<p class="mem-email">${esc(m.email)}</p>` : ''}
+  <button class="mem-btn mem-btn-ghost" type="button" data-member-logout>退出登录</button>
+</section>`
+}
+
+/** 会员登录 / 注册双表单（未登录态）：提交与切换交互在 site.js；蜜罐字段照评论表单口径（name=link） */
+export function memberAuthHtml(): string {
+  return `<section class="mem-auth">
+  <form class="mem-card mem-form" data-member-form="login">
+    <h2 class="mem-form-title">登录</h2>
+    <input class="mem-input" name="username" maxlength="24" placeholder="用户名" autocomplete="username" required aria-label="用户名">
+    <input class="mem-input" type="password" name="password" maxlength="72" placeholder="密码" autocomplete="current-password" required aria-label="密码">
+    <input class="cmt-hp" name="link" tabindex="-1" autocomplete="off" aria-hidden="true">
+    <button class="mem-btn" type="submit">登录</button>
+    <p class="mem-swap">还没有账号？<button type="button" class="mem-swap-btn" data-member-swap="register">注册一个</button></p>
+    <p class="mem-tip" data-member-tip aria-live="polite"></p>
+  </form>
+  <form class="mem-card mem-form" data-member-form="register">
+    <h2 class="mem-form-title">注册会员</h2>
+    <input class="mem-input" name="username" maxlength="24" placeholder="用户名（2-24 位字母、数字、_ 或 -）" autocomplete="username" required aria-label="用户名">
+    <input class="mem-input" type="password" name="password" maxlength="72" placeholder="密码（至少 8 位）" autocomplete="new-password" required aria-label="密码">
+    <input class="mem-input" type="email" name="email" maxlength="120" placeholder="邮箱（选填）" autocomplete="email" aria-label="邮箱（选填）">
+    <input class="cmt-hp" name="link" tabindex="-1" autocomplete="off" aria-hidden="true">
+    <button class="mem-btn" type="submit">注册并登录</button>
+    <p class="mem-swap">已有账号？<button type="button" class="mem-swap-btn" data-member-swap="login">去登录</button></p>
+    <p class="mem-tip" data-member-tip aria-live="polite"></p>
+  </form>
 </section>`
 }
 
@@ -779,6 +912,8 @@ export function commentsHtml(o: {
   isAdmin?: boolean
   /** 登录管理员昵称：表单免填昵称，以作者身份发言 */
   adminName?: string
+  /** 登录会员昵称（管理员未登录时生效）：表单免填昵称，以会员身份发言 */
+  memberName?: string
   title?: string
   tip?: string
   /** 留言板模式：区块与表单换成 guestbook 专用 id，提交目标不同 */
@@ -822,7 +957,9 @@ export function commentsHtml(o: {
   ${
     o.adminName
       ? adminIdentity(o.adminName)
-      : `<div class="cmt-form-row">
+      : o.memberName
+        ? memberIdentity(o.memberName)
+        : `<div class="cmt-form-row">
     <input class="cmt-input" name="nickname" maxlength="24" placeholder="昵称" required>
     <input class="cmt-input cmt-hp" name="link" tabindex="-1" autocomplete="off" aria-hidden="true">
   </div>`

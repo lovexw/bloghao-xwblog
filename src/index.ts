@@ -4,7 +4,7 @@ import { runScheduledPublish } from './scheduler'
 import { api } from './api'
 import { siteClosedResponse } from './closed'
 import { ensureSchema, getSettings, listCategories, listPublishedTags, listPosts, listSitemapPages, listSitemapPosts } from './db'
-import { renderAbout, renderArchive, renderCategory, renderGuestbook, renderHome, renderLinks, renderNotFound, renderPage, renderPost, renderSearch, renderWeibo } from './pages'
+import { renderAbout, renderArchive, renderCategory, renderGuestbook, renderHome, renderLinks, renderMember, renderNotFound, renderPage, renderPost, renderRank, renderSearch, renderWeibo } from './pages'
 import { buildRss, buildSitemap } from './rss'
 import { siteBase } from './render'
 import { purgeVisits } from './stats'
@@ -56,6 +56,8 @@ app.get('/archives', renderArchive)
 app.get('/guestbook', renderGuestbook)
 app.get('/weibo', (c) => renderWeibo(c))
 app.get('/links', renderLinks)
+app.get('/member', renderMember)
+app.get('/rank', renderRank)
 app.get('/search', renderSearch)
 
 // 随机来一篇：从已发布文章里随机挑一篇跳过去
