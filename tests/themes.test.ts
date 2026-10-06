@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { register } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import type { ThemeModule } from '../src/themes/registry.ts'
-import type { AboutData, ArchivesData, GuestbookData, HomeData, LinksData, PageData, PostData, WeiboData } from '../src/themes/registry.ts'
-import type { HomePostView, WeiboItemView, ArchiveYearGroup, FriendLinkView, CategoryLink, TagCount } from '../src/render.ts'
+import type { AboutData, ArchivesData, GuestbookData, HomeData, LinksData, MemberData, PageData, PostData, RankData, WeiboData } from '../src/themes/registry.ts'
+import type { HomePostView, MemberView, RankEntryView, WeiboItemView, ArchiveYearGroup, FriendLinkView, CategoryLink, TagCount } from '../src/render.ts'
 import { packMatrix, qrMatrix } from '../src/qrcode.ts'
 
 // 主题模块 import 了 .css（wrangler 部署走 Text rule）——测试环境先用 hook 顶替，再动态加载注册表
@@ -105,6 +105,15 @@ const weiboData = (): WeiboData => ({
   topics: [{ name: '话题', count: 1 }],
 })
 const linksData = (): LinksData => ({ settings, categories: [cat], pages, items: [friend], total: 1 })
+
+/* 会员 / 排行榜（B 序列 fixture：数据形状见 DEVPLAN-2026-10-07 附录 A） */
+const memberView: MemberView = { nickname: '小张', tier: 'coffee', points: 42, createdAt: TS }
+const rankEntries: RankEntryView[] = [
+  { rank: 1, nickname: '小张', tier: 'coffee', points: 42 },
+  { rank: 2, nickname: '阿李', tier: 'normal', points: 18, isMe: true },
+]
+const memberData = (): MemberData => ({ settings, categories: [cat], pages, navActive: 'member', member: null })
+const rankData = (): RankData => ({ settings, categories: [cat], pages, navActive: 'rank', entries: rankEntries, total: 2, me: rankEntries[1] })
 
 /** 每个页面函数的冒烟断言：能渲染 + 页脚 + 导航都在。
  *  页脚链接组按页面类型有变体（部分页面无 RSS），由各主题 foot() 公共件统一承载 */
@@ -209,6 +218,41 @@ for (const [themeId, theme] of Object.entries(THEMES as Record<string, ThemeModu
     const html = theme.links(linksData())
     checkPage(themeId, 'links', html)
     assert.ok(html.includes('example.com'))
+  })
+
+  test(`${themeId}: rank 渲染（榜单行/名次标记/空态）`, () => {
+    const html = theme.rank!(rankData())
+    checkPage(themeId, 'rank', html)
+    assert.ok(html.includes('rk-list'), '应渲染榜单列表')
+    assert.ok(html.includes('小张'))
+    assert.ok(html.includes('咖啡会员'), '档位应转成中文标签')
+    assert.ok(html.includes('2 位'), '页头应带上榜总数（各主题文案措辞不同，只断数量片段）')
+    assert.ok(html.includes('is-top1'), '第一名应有 top1 标记')
+    assert.ok(html.includes('is-me'), '本人行应带 is-me 标记')
+    const empty = theme.rank!({ ...rankData(), entries: [], total: 0, me: null })
+    assert.ok(!empty.includes('rk-list'), '空榜不渲染列表，出空态文案')
+  })
+
+  test(`${themeId}: member 渲染（未登录表单/已登录会员卡）`, () => {
+    const anon = theme.member!(memberData())
+    checkPage(themeId, 'member(anon)', anon)
+    assert.ok(anon.includes('data-member-form="login"'), '未登录应有登录表单')
+    assert.ok(anon.includes('data-member-form="register"'), '未登录应有注册表单')
+    assert.ok((anon.match(/class="cmt-hp"/g) || []).length >= 2, '两个表单都要带蜜罐字段')
+    const loggedIn = theme.member!({ ...memberData(), member: memberView })
+    checkPage(themeId, 'member(logged)', loggedIn)
+    assert.ok(loggedIn.includes('data-member-card'), '已登录应渲染会员卡')
+    assert.ok(loggedIn.includes('小张'))
+    assert.ok(loggedIn.includes('data-member-logout'), '会员卡应有退出按钮')
+    assert.ok(!loggedIn.includes('data-member-form'), '已登录不再渲染登录/注册表单')
+  })
+
+  test(`${themeId}: home 会员排行挂件（有数据渲染/缺省不渲染）`, () => {
+    const withRank = theme.home({ ...homeData(), rank: rankEntries })
+    assert.ok(withRank.includes('rk-card'), '传入 rank 时应渲染排行挂件')
+    assert.ok(withRank.includes('完整榜单'))
+    const without = theme.home(homeData())
+    assert.ok(!without.includes('rk-card'), 'rank 缺省时不渲染挂件')
   })
 
   test(`${themeId}: page 未实现时运行时兜底由 pages.ts 负责（本主题已实现）`, () => {

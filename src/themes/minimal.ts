@@ -1,5 +1,5 @@
 import type { SettingsMap } from '../types'
-import type { AboutData, ArchivesData, GuestbookData, HomeData, LinksData, PageData, PostData, WeiboData } from './registry'
+import type { AboutData, ArchivesData, GuestbookData, HomeData, LinksData, MemberData, PageData, PostData, RankData, WeiboData } from './registry'
 import {
   archiveListHtml,
   categoryLink,
@@ -11,8 +11,12 @@ import {
   homeListBase,
   homeSortBar,
   likesBtn,
+  memberAuthHtml,
+  memberCardHtml,
   onThisDayCard,
   pagerHtml,
+  rankCard,
+  rankListHtml,
   shareBtn,
   siteMode,
   siteNav,
@@ -65,7 +69,7 @@ export function home(d: HomeData): string {
     )
     .join('\n')
   return `<div class="mn-wrap">
-  ${siteNav({ mode: siteMode(d.settings), cls: 'mn-snav', categories: d.categories, tags: d.tags, pages: d.pages, active: d.navActive })}
+  ${siteNav({ mode: siteMode(d.settings), memberEnabled: d.settings.membersEnabled === '1', cls: 'mn-snav', categories: d.categories, tags: d.tags, pages: d.pages, active: d.navActive })}
   <header class="mn-header">
     <a class="mn-logo" href="/">${avatar(s)}${esc(s.siteName)}</a>
     <nav class="mn-nav">
@@ -77,6 +81,7 @@ export function home(d: HomeData): string {
   ${d.weiboFeed ? weiboHomeFeed({ settings: s, items: d.weiboFeed.items, total: d.weiboFeed.total, avatarHtml: avatar(s), allowComments: d.weiboFeed.allowComments, adminName: d.weiboFeed.adminName }) : ''}
   ${d.weibo ? weiboHomeEntry(d.weibo) : ''}
   ${onThisDayCard(d.onThisDay)}
+  ${rankCard(d.rank)}
   ${searchForm(d.q)}
   ${homeSortBar({ sort: d.sort, seed: d.seed, tag: d.tag, categorySlug: d.categorySlug, q: d.q })}
   <main class="mn-list">
@@ -99,7 +104,7 @@ export function post(d: PostData): string {
         .join('')}</aside>`
     : ''
   return `<div class="mn-wrap">
-  ${siteNav({ mode: siteMode(d.settings), cls: 'mn-snav', categories: d.categories, tags: d.tags, pages: d.pages })}
+  ${siteNav({ mode: siteMode(d.settings), memberEnabled: d.settings.membersEnabled === '1', cls: 'mn-snav', categories: d.categories, tags: d.tags, pages: d.pages })}
   <header class="mn-header">
     <a class="mn-logo" href="/">← ${esc(d.settings.siteName)}</a>
   </header>
@@ -127,7 +132,7 @@ export function about(d: AboutData): string {
 /** 独立页面页（/page/:slug，slug='about' 时渲染 /about）：结构同关于我，标题由页面数据决定 */
 export function page(d: PageData): string {
   return `<div class="mn-wrap">
-  ${siteNav({ mode: siteMode(d.settings), cls: 'mn-snav', categories: d.categories, tags: d.tags, pages: d.pages, active: d.navActive })}
+  ${siteNav({ mode: siteMode(d.settings), memberEnabled: d.settings.membersEnabled === '1', cls: 'mn-snav', categories: d.categories, tags: d.tags, pages: d.pages, active: d.navActive })}
   <header class="mn-header"><a class="mn-logo" href="/">← ${esc(d.settings.siteName)}</a></header>
   <article class="mn-article">
     <h1 class="mn-title">${esc(d.title)}</h1>
@@ -141,7 +146,7 @@ export function page(d: PageData): string {
 export function archives(d: ArchivesData): string {
   const s = d.settings
   return `<div class="mn-wrap">
-  ${siteNav({ mode: siteMode(d.settings), cls: 'mn-snav', categories: d.categories, tags: d.tags, pages: d.pages, active: 'archives' })}
+  ${siteNav({ mode: siteMode(d.settings), memberEnabled: d.settings.membersEnabled === '1', cls: 'mn-snav', categories: d.categories, tags: d.tags, pages: d.pages, active: 'archives' })}
   <header class="mn-header">
     <a class="mn-logo" href="/">${esc(s.siteName)}</a>
     <nav class="mn-nav"><a class="mn-nav-link is-active" href="/archives">归档</a><a class="mn-nav-link" href="/guestbook">留言板</a><a class="mn-nav-link" href="/about">关于我</a></nav>
@@ -157,7 +162,7 @@ export function archives(d: ArchivesData): string {
 export function guestbook(d: GuestbookData): string {
   const s = d.settings
   return `<div class="mn-wrap">
-  ${siteNav({ mode: siteMode(d.settings), cls: 'mn-snav', categories: d.categories, tags: d.tags, pages: d.pages, active: 'guestbook' })}
+  ${siteNav({ mode: siteMode(d.settings), memberEnabled: d.settings.membersEnabled === '1', cls: 'mn-snav', categories: d.categories, tags: d.tags, pages: d.pages, active: 'guestbook' })}
   <header class="mn-header">
     <a class="mn-logo" href="/">${esc(s.siteName)}</a>
     <nav class="mn-nav"><a class="mn-nav-link" href="/archives">归档</a><a class="mn-nav-link is-active" href="/guestbook">留言板</a><a class="mn-nav-link" href="/about">关于我</a></nav>
@@ -182,7 +187,7 @@ export function weibo(d: WeiboData): string {
     adminName: d.adminName,
   })
   return `<div class="mn-wrap">
-  ${siteNav({ mode: siteMode(d.settings), cls: 'mn-snav', categories: d.categories, tags: d.tags, pages: d.pages, active: 'weibo' })}
+  ${siteNav({ mode: siteMode(d.settings), memberEnabled: d.settings.membersEnabled === '1', cls: 'mn-snav', categories: d.categories, tags: d.tags, pages: d.pages, active: 'weibo' })}
   <header class="mn-header">
     <a class="mn-logo" href="/">${avatar(s)}${esc(s.siteName)}</a>
     <nav class="mn-nav"><a class="mn-nav-link is-active" href="/weibo">微博</a><a class="mn-nav-link" href="/about">关于我</a></nav>
@@ -201,7 +206,7 @@ export function weibo(d: WeiboData): string {
 export function links(d: LinksData): string {
   const s = d.settings
   return `<div class="mn-wrap">
-  ${siteNav({ mode: siteMode(d.settings), cls: 'mn-snav', categories: d.categories, tags: d.tags, pages: d.pages, active: 'links' })}
+  ${siteNav({ mode: siteMode(d.settings), memberEnabled: d.settings.membersEnabled === '1', cls: 'mn-snav', categories: d.categories, tags: d.tags, pages: d.pages, active: 'links' })}
   <header class="mn-header">
     <a class="mn-logo" href="/">${avatar(s)}${esc(s.siteName)}</a>
     <nav class="mn-nav"><a class="mn-nav-link is-active" href="/links">友链</a><a class="mn-nav-link" href="/about">关于我</a></nav>
@@ -210,6 +215,38 @@ export function links(d: LinksData): string {
     ${friendLinkCards(d.items) || '<p class="wb-empty">No links yet.</p>'}
   </main>
   ${friendLinkApply()}
+  ${foot(s, FOOT_LINKS.home)}
+</div>`
+}
+
+/** 排行榜页（/rank）：会员积分总榜，榜单行结构共用 .rk-* */
+export function rank(d: RankData): string {
+  const s = d.settings
+  return `<div class="mn-wrap">
+  ${siteNav({ mode: siteMode(d.settings), memberEnabled: s.membersEnabled === '1', cls: 'mn-snav', categories: d.categories, tags: d.tags, pages: d.pages, active: 'rank' })}
+  <header class="mn-header">
+    <a class="mn-logo" href="/">${esc(s.siteName)}</a>
+    <nav class="mn-nav"><a class="mn-nav-link is-active" href="/rank">排行榜</a><a class="mn-nav-link" href="/about">关于我</a></nav>
+  </header>
+  <h1 class="mn-title mn-page-title">排行榜</h1>
+  <p class="mn-intro">${d.total > 0 ? `共 ${d.total} 位会员 · 按积分倒序` : '还没有会员上榜。'}</p>
+  <main class="mn-rank">${rankListHtml(d.entries) || '<p class="mn-empty">还没有会员上榜。</p>'}</main>
+  ${foot(s, FOOT_LINKS.home)}
+</div>`
+}
+
+/** 会员中心页（/member）：未登录出登录/注册表单，已登录出会员卡（结构共用 .mem-*） */
+export function member(d: MemberData): string {
+  const s = d.settings
+  return `<div class="mn-wrap">
+  ${siteNav({ mode: siteMode(d.settings), memberEnabled: s.membersEnabled === '1', cls: 'mn-snav', categories: d.categories, tags: d.tags, pages: d.pages, active: 'member' })}
+  <header class="mn-header">
+    <a class="mn-logo" href="/">${esc(s.siteName)}</a>
+    <nav class="mn-nav"><a class="mn-nav-link" href="/rank">排行榜</a><a class="mn-nav-link" href="/about">关于我</a></nav>
+  </header>
+  <h1 class="mn-title mn-page-title">会员中心</h1>
+  <p class="mn-intro">${d.member ? '留言、常回来，积分与专属内容都在这里' : '登录或注册，加入本站会员'}</p>
+  <main class="mn-member">${d.member ? memberCardHtml(d.member) : memberAuthHtml()}</main>
   ${foot(s, FOOT_LINKS.home)}
 </div>`
 }

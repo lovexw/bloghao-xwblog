@@ -650,3 +650,50 @@ img { max-width: 100%; height: auto; }
 
 /* 微博+博客模式：首页微博流（头部复用 .wb-home-head，卡片复用 .wb-list 间距） */
 .wb-home-feed { margin: 24px 0 0; }
+
+/* ---------- 会员 / 排行榜（首页 rankCard 挂件 + /rank /member 页，结构在 render.ts 共享） ---------- */
+.rk-card { margin: 20px 0 4px; background: var(--pp-card); border: 1px solid var(--pp-line); border-radius: 6px; padding: 2px 20px; }
+.rk-head { display: flex; align-items: baseline; gap: 8px; padding: 14px 0 12px; border-bottom: 1px solid var(--pp-line); }
+.rk-ico { width: 16px; height: 16px; color: var(--pp-accent); align-self: center; flex: 0 0 auto; }
+.rk-title { font-size: 15px; font-weight: 600; color: var(--pp-ink); letter-spacing: 0.02em; }
+.rk-sub { font-size: 12px; color: var(--pp-sub); }
+.rk-more { margin-left: auto; font-size: 12px; color: var(--pp-accent); text-decoration: none; flex: 0 0 auto; }
+.rk-list { margin: 0; padding: 0; list-style: none; }
+.rk-item { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--pp-line); }
+.rk-item:last-child { border-bottom: none; }
+.rk-no { flex: 0 0 22px; font-size: 14px; font-weight: 700; color: var(--pp-sub); font-variant-numeric: tabular-nums; text-align: center; }
+.rk-item.is-top1 .rk-no, .rk-item.is-top2 .rk-no, .rk-item.is-top3 .rk-no { color: var(--pp-accent); }
+.rk-name { flex: 1 1 auto; min-width: 0; font-size: 14.5px; color: var(--pp-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rk-tier { flex: 0 0 auto; font-size: 11px; color: var(--pp-accent); border: 1px solid currentColor; border-radius: 999px; padding: 1px 8px; opacity: 0.8; }
+.rk-pts { flex: 0 0 auto; font-size: 14.5px; color: var(--pp-ink); font-variant-numeric: tabular-nums; }
+.rk-item.is-me { background: linear-gradient(90deg, rgba(160, 60, 46, 0.05), transparent 70%); }
+.rk-item.is-me .rk-name { color: var(--pp-accent); font-weight: 600; }
+.pp-rank, .pp-member { margin: 6px 0 12px; }
+.rk-list-page { margin: 0; padding: 2px 20px; background: var(--pp-card); border: 1px solid var(--pp-line); border-radius: 6px; }
+.rk-list-page .rk-item { padding: 14px 0; }
+.mem-card { background: var(--pp-card); border: 1px solid var(--pp-line); border-radius: 6px; padding: 22px 20px; margin: 16px 0; }
+.mem-form-title { margin: 0 0 14px; font-size: 17px; font-weight: 600; color: var(--pp-ink); }
+.mem-input { display: block; width: 100%; box-sizing: border-box; padding: 11px 12px; margin-bottom: 12px; border: 1px solid var(--pp-line); border-radius: 4px; background: #fff; font-family: inherit; font-size: 16px; color: var(--pp-ink); outline: none; }
+.mem-input:focus { border-color: var(--pp-accent); box-shadow: 0 0 0 3px rgba(160, 60, 46, 0.1); }
+.mem-btn { display: block; width: 100%; padding: 12px; border: none; border-radius: 4px; background: var(--pp-accent); color: #fff; font-family: inherit; font-size: 15px; cursor: pointer; letter-spacing: 0.1em; }
+.mem-btn:disabled { opacity: 0.6; }
+.mem-btn-ghost { background: transparent; border: 1px solid var(--pp-line); color: var(--pp-sub); margin-top: 16px; letter-spacing: 0; }
+.mem-swap { margin: 12px 0 0; font-size: 13px; color: var(--pp-sub); text-align: center; }
+.mem-swap-btn { border: none; background: none; color: var(--pp-accent); font-size: 13px; cursor: pointer; padding: 0; font-family: inherit; }
+.mem-tip { margin: 10px 0 0; font-size: 13px; color: var(--pp-accent); min-height: 1em; text-align: center; }
+.mem-who { display: flex; align-items: center; gap: 14px; }
+.mem-avatar { width: 48px; height: 48px; flex: 0 0 48px; border-radius: 4px; background: var(--pp-accent); color: #fff; font-size: 20px; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; }
+.mem-avatar-img { object-fit: cover; }
+.mem-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.mem-name { font-size: 16px; color: var(--pp-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-tier { align-self: flex-start; font-size: 11px; color: var(--pp-accent); border: 1px solid currentColor; border-radius: 999px; padding: 1px 8px; }
+.mem-tier[data-tier="normal"] { color: var(--pp-sub); }
+.mem-tier[data-tier="top"] { color: #9a6c00; }
+.mem-points { flex: 0 0 auto; text-align: center; }
+.mem-points b { display: block; font-size: 22px; color: var(--pp-accent); font-variant-numeric: tabular-nums; }
+.mem-points span { font-size: 11px; color: var(--pp-sub); }
+.mem-email { margin: 12px 0 0; font-size: 13px; color: var(--pp-sub); word-break: break-all; }
+@media (max-width: 480px) {
+  .rk-sub { display: none; }
+  .mem-card { padding: 18px 14px; }
+}

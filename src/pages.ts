@@ -30,7 +30,10 @@ import {
   archiveGroups,
   commentsHtml,
   HOME_SORTS,
+  memberAuthHtml,
+  memberCardHtml,
   page,
+  rankListHtml,
   siteBase,
   siteMode,
   toHomePost,
@@ -41,6 +44,7 @@ import {
 } from './render'
 import { extractOgImage, sanitizeHtml } from './sanitize'
 import { getTheme, THEMES } from './themes/registry'
+import type { MemberData, RankData } from './themes/registry'
 import type { Env, PostRow, SessionUser, SettingsMap } from './types'
 import { packMatrix, qrMatrix } from './qrcode'
 import { clampInt, esc, excerpt, isDemo, readingMinutes } from './utils'
@@ -116,6 +120,25 @@ function themePageHtml(theme: ReturnType<typeof getTheme>, d: Parameters<typeof 
   return `<div style="max-width:760px;margin:0 auto;padding:32px 20px 60px;">
   <h1 style="margin-bottom:18px;">${esc(d.title)}</h1>
   <div class="rich">${d.contentHtml}</div>
+  <p style="margin-top:32px;"><a href="/">← 返回首页</a></p>
+</div>`
+}
+
+/** 主题 member() 的运行时兜底：第三方主题未实现时渲染通用版（会员卡/表单 + 返回首页） */
+function themeMemberHtml(theme: ReturnType<typeof getTheme>, d: MemberData): string {
+  if (typeof theme.member === 'function') return theme.member(d)
+  return `<div style="max-width:520px;margin:0 auto;padding:32px 20px 60px;">
+  ${d.member ? memberCardHtml(d.member) : memberAuthHtml()}
+  <p style="margin-top:32px;"><a href="/">← 返回首页</a></p>
+</div>`
+}
+
+/** 主题 rank() 的运行时兜底：第三方主题未实现时渲染通用版（榜单列表 + 返回首页） */
+function themeRankHtml(theme: ReturnType<typeof getTheme>, d: RankData): string {
+  if (typeof theme.rank === 'function') return theme.rank(d)
+  return `<div style="max-width:640px;margin:0 auto;padding:32px 20px 60px;">
+  <h1 style="margin-bottom:18px;">排行榜</h1>
+  ${rankListHtml(d.entries) || '<p>还没有会员上榜。</p>'}
   <p style="margin-top:32px;"><a href="/">← 返回首页</a></p>
 </div>`
 }
@@ -698,6 +721,61 @@ export async function renderLinks(c: C): Promise<Response> {
       title: '友情链接',
       description: `${settings.siteName}的朋友站点，也欢迎申请收录`,
       path: '/links',
+      origin: new URL(c.req.url).origin,
+      body: html,
+    }))
+  )
+}
+
+/** 会员体系总开关（settings.membersEnabled）：'1' 开启；关闭时 /member 与 /rank 随公开页口径 404。
+ *  默认关闭（键不存在视为关），站长在后台「设置」里打开——避免新部署站凭空多出两个空页面 */
+function membersEnabled(settings: { membersEnabled?: string }): boolean {
+  return settings.membersEnabled === '1'
+}
+
+/** 会员中心页（/member）：未登录渲染登录/注册双表单，已登录渲染会员中心卡。
+ *  TODO(A)：member 会话解析待会员服务端落地——`await getMemberUser(c.env.DB, c.req.raw)` 替换下面的 null；
+ *  登录/注册/退出的 JSON API 见 DEVPLAN-2026-10-07 附录 A5 */
+export async function renderMember(c: C): Promise<Response> {
+  baseHeaders(c)
+  const settings = await getSettings(c.env.DB)
+  if (!membersEnabled(settings)) return renderNotFound(c)
+  const theme = getTheme(settings.theme)
+  const [categories, tags, pages] = await Promise.all([navCategories(c), navTags(c), navPages(c)])
+  const member = null
+  const html = themeMemberHtml(theme, { settings, categories, tags, pages, navActive: 'member', member })
+  c.header('Cache-Control', 'no-cache')
+  return c.html(
+    page(pageOpts(c, {
+      settings,
+      css: theme.css,
+      title: '会员中心',
+      description: `${settings.siteName}的会员中心，登录注册、攒积分、解锁会员专属内容`,
+      path: '/member',
+      origin: new URL(c.req.url).origin,
+      body: html,
+    }))
+  )
+}
+
+/** 排行榜页（/rank）：会员积分总榜（总榜起步，周榜/天榜待定）。
+ *  TODO(A)：榜单查询待会员服务端落地——按 points 倒序、过滤选择隐藏的会员、标记 isMe 替换下面的空数组 */
+export async function renderRank(c: C): Promise<Response> {
+  baseHeaders(c)
+  const settings = await getSettings(c.env.DB)
+  if (!membersEnabled(settings)) return renderNotFound(c)
+  const theme = getTheme(settings.theme)
+  const [categories, tags, pages] = await Promise.all([navCategories(c), navTags(c), navPages(c)])
+  const entries: RankData['entries'] = []
+  const html = themeRankHtml(theme, { settings, categories, tags, pages, navActive: 'rank', entries, total: entries.length, me: null })
+  c.header('Cache-Control', 'no-cache')
+  return c.html(
+    page(pageOpts(c, {
+      settings,
+      css: theme.css,
+      title: '排行榜',
+      description: `${settings.siteName}的会员积分排行榜，留言、常回来，积分自然涨`,
+      path: '/rank',
       origin: new URL(c.req.url).origin,
       body: html,
     }))

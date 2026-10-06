@@ -847,3 +847,50 @@ a.wx-account:hover { opacity: 0.75; }
 
 /* 微博+博客模式：首页微博流（头部复用 .wb-home-head，卡片复用 .wb-list 间距） */
 .wb-home-feed { margin: 24px 0 4px; }
+
+/* ---------- 会员 / 排行榜（首页 rankCard 挂件 + /rank /member 页，结构在 render.ts 共享） ---------- */
+.rk-card { margin: 18px 0 4px; background: var(--wx-card); border: 1px solid var(--wx-line); border-radius: 14px; padding: 2px 18px; box-shadow: 0 1px 3px rgba(43, 36, 25, 0.04); }
+.rk-head { display: flex; align-items: baseline; gap: 8px; padding: 13px 0 11px; border-bottom: 1px solid var(--wx-line); }
+.rk-ico { width: 16px; height: 16px; color: var(--wx-accent); align-self: center; flex: 0 0 auto; }
+.rk-title { font-size: 14.5px; font-weight: 600; color: #1a1a1a; }
+.rk-sub { font-size: 12px; color: #b5aea1; }
+.rk-more { margin-left: auto; font-size: 12px; color: var(--wx-link); text-decoration: none; flex: 0 0 auto; }
+.rk-list { margin: 0; padding: 0; list-style: none; }
+.rk-item { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--wx-line); }
+.rk-item:last-child { border-bottom: none; }
+.rk-no { flex: 0 0 22px; font-size: 13px; font-weight: 700; color: var(--wx-sub); font-variant-numeric: tabular-nums; text-align: center; }
+.rk-item.is-top1 .rk-no, .rk-item.is-top2 .rk-no, .rk-item.is-top3 .rk-no { color: var(--wx-accent); }
+.rk-name { flex: 1 1 auto; min-width: 0; font-size: 14px; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rk-tier { flex: 0 0 auto; font-size: 11px; color: var(--wx-accent); border: 1px solid currentColor; border-radius: 999px; padding: 1px 8px; opacity: 0.75; }
+.rk-pts { flex: 0 0 auto; font-size: 14px; color: #1a1a1a; font-variant-numeric: tabular-nums; }
+.rk-item.is-me { background: linear-gradient(90deg, rgba(178, 58, 41, 0.06), transparent 70%); }
+.rk-item.is-me .rk-name { color: var(--wx-accent); font-weight: 600; }
+.wx-rank, .wx-member { margin: 6px 0 12px; }
+.rk-list-page { margin: 0; padding: 2px 18px; background: var(--wx-card); border: 1px solid var(--wx-line); border-radius: 14px; box-shadow: 0 1px 3px rgba(43, 36, 25, 0.04); }
+.rk-list-page .rk-item { padding: 13px 0; }
+.mem-card { background: var(--wx-card); border: 1px solid var(--wx-line); border-radius: 14px; padding: 20px 18px; box-shadow: 0 1px 3px rgba(43, 36, 25, 0.04); margin: 14px 0; }
+.mem-form-title { margin: 0 0 14px; font-size: 16px; font-weight: 600; color: #1a1a1a; }
+.mem-input { display: block; width: 100%; box-sizing: border-box; padding: 11px 12px; margin-bottom: 12px; border: 1px solid var(--wx-line); border-radius: 10px; background: #fff; font-size: 16px; color: var(--wx-text); outline: none; }
+.mem-input:focus { border-color: var(--wx-accent); box-shadow: 0 0 0 3px rgba(178, 58, 41, 0.12); }
+.mem-btn { display: block; width: 100%; padding: 12px; border: none; border-radius: 10px; background: var(--wx-accent); color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
+.mem-btn:disabled { opacity: 0.6; }
+.mem-btn-ghost { background: transparent; border: 1px solid var(--wx-line); color: var(--wx-sub); font-weight: 400; margin-top: 16px; }
+.mem-swap { margin: 12px 0 0; font-size: 13px; color: var(--wx-sub); text-align: center; }
+.mem-swap-btn { border: none; background: none; color: var(--wx-link); font-size: 13px; cursor: pointer; padding: 0; }
+.mem-tip { margin: 10px 0 0; font-size: 13px; color: var(--wx-accent); min-height: 1em; text-align: center; }
+.mem-who { display: flex; align-items: center; gap: 14px; }
+.mem-avatar { width: 48px; height: 48px; flex: 0 0 48px; border-radius: 10px; background: var(--wx-accent); color: #fff; font-size: 20px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; }
+.mem-avatar-img { object-fit: cover; }
+.mem-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.mem-name { font-size: 16px; color: #1a1a1a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-tier { align-self: flex-start; font-size: 11px; color: var(--wx-accent); border: 1px solid currentColor; border-radius: 999px; padding: 1px 8px; }
+.mem-tier[data-tier="normal"] { color: var(--wx-sub); }
+.mem-tier[data-tier="top"] { color: #9a6c00; }
+.mem-points { flex: 0 0 auto; text-align: center; }
+.mem-points b { display: block; font-size: 22px; color: var(--wx-accent); font-variant-numeric: tabular-nums; }
+.mem-points span { font-size: 11px; color: var(--wx-sub); }
+.mem-email { margin: 12px 0 0; font-size: 13px; color: var(--wx-sub); word-break: break-all; }
+@media (max-width: 480px) {
+  .rk-sub { display: none; }
+  .mem-card { padding: 16px 14px; }
+}

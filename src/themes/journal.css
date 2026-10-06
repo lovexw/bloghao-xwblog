@@ -1280,3 +1280,48 @@ main .gb-section { margin-top: 8px; }
 
 /* 微博+博客模式：首页微博流（头部复用 .wb-home-head，卡片复用 .wb-list 间距） */
 .wb-home-feed { margin-top: 30px; }
+
+/* ---------- 会员 / 排行榜（首页 rankCard 挂件 + /rank /member 页，结构在 render.ts 共享） ---------- */
+.rk-card { margin: 20px 0 4px; background: var(--jrn-card); border: 1px dashed var(--jrn-line); border-radius: 14px; padding: 2px 18px; box-shadow: 0 2px 8px rgba(63, 58, 49, 0.06); }
+.rk-head { display: flex; align-items: baseline; gap: 8px; padding: 14px 0 12px; border-bottom: 1px dashed var(--jrn-line); }
+.rk-ico { width: 16px; height: 16px; color: var(--jrn-accent); align-self: center; flex: 0 0 auto; }
+.rk-title { font-size: 14.5px; font-weight: 700; color: var(--jrn-ink); }
+.rk-sub { font-size: 12px; color: var(--jrn-ink-soft); }
+.rk-more { margin-left: auto; font-size: 12px; color: var(--jrn-accent); text-decoration: none; flex: 0 0 auto; }
+.rk-list { margin: 0; padding: 0; list-style: none; }
+.rk-item { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px dashed var(--jrn-line); }
+.rk-item:last-child { border-bottom: none; }
+.rk-no { flex: 0 0 22px; font-size: 13px; font-weight: 700; color: var(--jrn-ink-soft); font-variant-numeric: tabular-nums; text-align: center; }
+.rk-item.is-top1 .rk-no, .rk-item.is-top2 .rk-no, .rk-item.is-top3 .rk-no { color: var(--jrn-accent); }
+.rk-name { flex: 1 1 auto; min-width: 0; font-size: 14px; color: var(--jrn-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rk-tier { flex: 0 0 auto; font-size: 11px; color: var(--jrn-accent); background: var(--jrn-hl); border-radius: 999px; padding: 1px 8px; }
+.rk-pts { flex: 0 0 auto; font-size: 14px; color: var(--jrn-ink); font-variant-numeric: tabular-nums; }
+.rk-item.is-me { background: var(--jrn-hl); border-radius: 10px; }
+.rk-item.is-me .rk-name { font-weight: 700; }
+.jrn-rank, .jrn-member { margin: 4px 0 12px; }
+.rk-list-page { margin: 0; padding: 2px 18px; background: var(--jrn-card); border: 1px dashed var(--jrn-line); border-radius: 14px; box-shadow: 0 2px 8px rgba(63, 58, 49, 0.06); }
+.rk-list-page .rk-item { padding: 14px 0; }
+.mem-card { background: var(--jrn-card); border: 1px dashed var(--jrn-line); border-radius: 14px; padding: 22px 18px; box-shadow: 0 2px 8px rgba(63, 58, 49, 0.06); margin: 16px 0; }
+.mem-form-title { margin: 0 0 14px; font-size: 16px; font-weight: 700; color: var(--jrn-ink); }
+.mem-input { display: block; width: 100%; box-sizing: border-box; padding: 11px 12px; margin-bottom: 12px; border: 1px solid var(--jrn-line); border-radius: 10px; background: var(--jrn-field); font-family: inherit; font-size: 16px; color: var(--jrn-ink); outline: none; }
+.mem-input:focus { border-color: var(--jrn-accent); box-shadow: 0 0 0 3px var(--jrn-hl); }
+.mem-btn { display: block; width: 100%; padding: 12px; border: none; border-radius: 999px; background: var(--jrn-accent); color: #fff; font-family: inherit; font-size: 15px; font-weight: 700; cursor: pointer; }
+.mem-btn:disabled { opacity: 0.6; }
+.mem-btn-ghost { background: transparent; border: 1px dashed var(--jrn-line); color: var(--jrn-ink-soft); margin-top: 16px; }
+.mem-swap { margin: 12px 0 0; font-size: 13px; color: var(--jrn-ink-soft); text-align: center; }
+.mem-swap-btn { border: none; background: none; color: var(--jrn-accent); font-size: 13px; font-weight: 700; cursor: pointer; padding: 0; font-family: inherit; }
+.mem-tip { margin: 10px 0 0; font-size: 13px; color: var(--jrn-accent); min-height: 1em; text-align: center; }
+.mem-who { display: flex; align-items: center; gap: 14px; }
+.mem-avatar { width: 48px; height: 48px; flex: 0 0 48px; border-radius: 12px; background: var(--jrn-accent); color: #fff; font-size: 20px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; transform: rotate(-2deg); }
+.mem-avatar-img { object-fit: cover; }
+.mem-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.mem-name { font-size: 16px; color: var(--jrn-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-tier { align-self: flex-start; font-size: 11px; color: var(--jrn-accent); background: var(--jrn-hl); border-radius: 999px; padding: 1px 8px; }
+.mem-points { flex: 0 0 auto; text-align: center; }
+.mem-points b { display: block; font-size: 22px; color: var(--jrn-accent); font-variant-numeric: tabular-nums; }
+.mem-points span { font-size: 11px; color: var(--jrn-ink-soft); }
+.mem-email { margin: 12px 0 0; font-size: 13px; color: var(--jrn-ink-soft); word-break: break-all; }
+@media (max-width: 480px) {
+  .rk-sub { display: none; }
+  .mem-card { padding: 18px 14px; }
+}
