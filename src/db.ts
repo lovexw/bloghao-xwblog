@@ -657,9 +657,9 @@ const SCHEMA_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: 'posts', column: 'deleted_at', ddl: 'ALTER TABLE posts ADD COLUMN deleted_at INTEGER' },
   { table: 'weibo', column: 'deleted_at', ddl: 'ALTER TABLE weibo ADD COLUMN deleted_at INTEGER' },
   { table: 'pages', column: 'deleted_at', ddl: 'ALTER TABLE pages ADD COLUMN deleted_at INTEGER' },
-  // 会员体系（docs/DEVPLAN-2026-10-07.md）：评论挂会员身份（0 = 游客）+ 文章可见门槛（0=公开 1=会员 2=咖啡+ 3=顶级）
+  // 会员体系（docs/DEVPLAN-2026-10-07.md）：评论挂会员身份（0 = 游客）+ 文章可见档位（all | member | coffee | top）
   { table: 'comments', column: 'member_id', ddl: 'ALTER TABLE comments ADD COLUMN member_id INTEGER NOT NULL DEFAULT 0' },
-  { table: 'posts', column: 'min_tier', ddl: 'ALTER TABLE posts ADD COLUMN min_tier INTEGER NOT NULL DEFAULT 0' },
+  { table: 'posts', column: 'min_tier', ddl: "ALTER TABLE posts ADD COLUMN min_tier TEXT NOT NULL DEFAULT 'all'" },
 ]
 const SCHEMA_TABLES = [
   // 会员体系（2026-10-07 起，见 docs/DEVPLAN-2026-10-07.md 附录 A 契约）：
