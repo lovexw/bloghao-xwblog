@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS posts (
   pinned       INTEGER NOT NULL DEFAULT 0,
   views        INTEGER NOT NULL DEFAULT 0,
   likes        INTEGER NOT NULL DEFAULT 0,
-  min_tier     INTEGER NOT NULL DEFAULT 0, -- 可见门槛：0=公开 1=登录会员 2=咖啡会员及以上 3=顶级会员（判定 viewerRank >= min_tier）
+  min_tier     TEXT    NOT NULL DEFAULT 'all', -- 可见档位：all | member（登录会员）| coffee | top（契约见 docs/DEVPLAN-2026-10-07.md 附录 A）
   author_id    INTEGER,
   published_at INTEGER,
   publish_at   INTEGER,                -- 定时发布时间：到点由 Cron 翻成 published（src/scheduler.ts）
