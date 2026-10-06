@@ -13,6 +13,37 @@ export interface SessionUser {
   avatar: string
 }
 
+/* ---------------- 会员体系（访客注册身份，与 users 管理员彻底分离，契约见 docs/DEVPLAN-2026-10-07.md 附录 A） ---------------- */
+
+export type MemberTier = 'normal' | 'coffee' | 'top'
+
+/** members 表整行（含口令字段，仅服务端登录/管理口径使用；对外一律过 memberView 裁剪） */
+export interface MemberRow {
+  id: number
+  username: string
+  password_hash: string
+  salt: string
+  email: string
+  display_name: string
+  avatar: string
+  tier: MemberTier
+  points: number
+  status: 'active' | 'banned'
+  created_at: number
+  updated_at: number
+  last_login_at: number | null
+}
+
+/** 会员会话身份（Cookie xw_member_session；banned 在查询层即视为未登录） */
+export interface MemberSessionUser {
+  id: number
+  username: string
+  display_name: string
+  avatar: string
+  tier: MemberTier
+  points: number
+}
+
 export type PostStatus = 'draft' | 'published' | 'scheduled'
 
 export interface PostRow {
@@ -65,6 +96,9 @@ export interface CommentRow {
   status: 'approved' | 'pending'
   ip: string
   created_at: number
+  /** 会员徽标冗余字段：评论列表 LEFT JOIN members 带出（member_id > 0 时非空，契约 DEVPLAN 附录 A） */
+  member_name?: string
+  member_tier?: MemberTier
 }
 
 export interface CategoryRow {

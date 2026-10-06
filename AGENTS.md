@@ -55,6 +55,14 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - 恢复文章时过期定时文自动转草稿并**清掉 publish_at**（`trash.ts restorePostStatus` + api.ts 恢复端点，防「恢复即撞发」，也防草稿被切回 scheduled 时按旧定时点撞发，冒烟守着）；purgeTrash 挂在 index.ts scheduled() 的 00:30 备份 cron 分支（与 purgeVisits 并排），保留期常量 `TRASH_RETENTION_DAYS = 30`
 - 后台「回收站」页（viewTrash）已登记 MENU 与 navigate；不进 `MOBILE_TAB_IDS`（自动落移动端「更多」抽屉）；前台 site.js 的微博删除确认文案是「移入回收站」口径，与删除端点的软删语义必须一致
 
+**会员体系（tests/members.test.ts、tests/member-schema.test.ts，契约与 A/B 分工见 docs/DEVPLAN-2026-10-07.md 附录 A）**
+
+- 会员数据只在 members / member_sessions / member_points_log 三表：**严禁写 users / sessions**（users 只承载管理员，`/api/auth/setup` 靠 `countUsers() === 0` 判断首装）；会员会话 Cookie 独立（`xw_member_session`），勿与管理员 `bloghao_session` 混用
+- 积分数值与单日上限**只改 `src/points.ts` 常量表一处**（2026-10-07 拍板：评论 +2 每日上限 10 条、每日登录 +1）；记分必须走 `awardPoints`（自带北京时间日上限与 hasOwnProperty reason 校验），评论积分**过审才计**且同一评论只计一次（`awardCommentPoints` 按 ref_id 去重——即时通过在发言当下、先审后展挂到后台「通过」动作，两路共用防重复）
+- `/api/member/*` 受 settings `membersEnabled` 门控（关 = 404）；封禁（status='banned'）后 `getMemberUser` 查询层即视为未登录，后台拉黑时同时清空该会员全部会话；`rankTopN` 由 `clampInt(1,50)` 兜底
+- 评论三路会员发言走 publicComment 公共核心的 member 分支：身份来自会话，**表单昵称/邮箱/网站字段一律忽略**；会员暂不可回复楼中楼（与游客同口径，放开属契约变更）；评论列表（SSR 文章/留言板 + 微博 JSON）经 LEFT JOIN members 带出 `member_name`/`member_tier` 徽标数据，渲染消费在 B 序列（契约 A3）
+- schema 三张会员表已登记备份（members / member_points_log 进，member_sessions 与 sessions 同理属临时凭证不进）；排行查询只出 active 且积分 > 0；A/B 双机并行期间文件所有权与契约变更纪律照 DEVPLAN 公约，越界改动前先对齐
+
 **后台交互（public/admin/，无自动化测试，靠约定）**
 
 - 后台所有请求走 `api()`：401 会话过期已统一拦截回登录页（勿在别处重复处理，也别动 `state.user` 的判断顺序——登录表单的密码错误提示依赖它）；每个写操作按钮必须 try/catch + toast，请求期间 disabled 防连击
