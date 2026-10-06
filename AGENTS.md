@@ -90,10 +90,10 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 
 ## Git 约定
 
-- 本工作区服务**两个仓库**（历史上同源、2.0 起曾保持同一提交，**2026-10-06 起分叉、各自演进**）：origin = `github.com/lovexw/bloghao-xwblog`（作者实例/开发仓库，本工作区的主仓库），upstream = `github.com/lovexw/bloghao`（官方发布仓库，对外开放部署）。不做这两个仓库之外的操作
-- 发布流程（2026-10 起，**双推已废止**）：提交后只推 `git push origin main`，不再推 upstream；两仓库内容允许分叉、不追求指向同一提交。需要更新官方发布仓库时，按用户当次的明确指示单独处理，不要自动代推
+- 本工作区服务**双仓库、两角色**：origin = `github.com/lovexw/bloghao-xwblog`（滚动开发测试仓库，日常提交只推这里），upstream = `github.com/lovexw/bloghao`（官方稳定版仓库，对外开放部署入口，main 永远保持可部署）。不做这两个仓库之外的操作
+- 发布流程（2026-10-06 起废止旧「双推、两仓库同一提交」约定）：日常提交**只推 origin**；upstream 只在迭代稳定、审查清洗后手动发布——`git fetch upstream`，从 `upstream/main` 切发布分支，`git merge --squash` 本地 main（此时按需挑选/清洗，个人实例定制与实验内容不进官方版），确认 diff 后以单个版本提交推 upstream。两仓库历史自此允许分叉，**不要** `git push upstream origin/main:main` 直灌开发历史。**发布操作照 docs/RELEASING.md 清单执行**（版本号规则、挑洗依据「个人定制台账」、CHANGELOG 回填与镜像回开发线）；个人定制**合入 main 当天登记进台账**
 - README / docs / 官网以「博客号 BlogHao」官方项目口吻书写，对两个仓库都自洽；线上地址 blog.xiaowuleyi.com 在文档中一律表述为「在线示例」
-- **不要**从 upstream pull / merge 覆盖本地（两仓库已分叉，互相同步会搅乱双方历史）；旧「同步上游」流程已废止
+- 同步方向永远 dev→stable 单向：**不要**从 upstream pull 覆盖本地（upstream 只接收发布，永不反向流入开发线）
 - 2026-10-05 仓库整理：官方发布仓库由 bloghao-blog **改名**为 `lovexw/bloghao`（旧地址 GitHub 自动重定向）；更早的独立官网仓库已删除、内容并入 `website/`——遇到提这两个旧名字的链接/文档一律以现名为准
 - 提交信息沿用 `theme:` / `mobile:` / `docs:` / `brand:` 等前缀的中文风格
 
@@ -116,5 +116,6 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - `src/demo.ts` + `demo-content.ts` / `demo-posts.ts` / `demo-images.ts`：官方演示站引擎（独立 wrangler.demo.jsonc，DEMO_MODE 门控）——空库自播种、每 2 小时 cron 清库重灌、演示守卫（登录页公示 demo 账号、禁改密码、禁闭站、禁外发通知、全站 noindex）；种子内容确定性生成，文档 docs/DEMO.md
 - `public/admin/`：后台（app.js 路由与页面——侧栏菜单看顶部 `MENU` 配置数组，editor.js 写作编辑器，admin.css 样式）；「皮肤 / 插件」是独立页面（`#/appearance`、`#/plugins`），市场目录在 `public/market/catalog.json`
 - `website/`：「博客号」官网静态页（朱砂红新版设计），部署走 Cloudflare Pages 项目 `bloghao`，**勿用 Workers assets 另起部署通道**；「博客号目录」数据在 `website/public/data/showcase.json`，上榜入口指向 bloghao 的 issues；官网 UI 改动同样过 390px 移动端检查
+- `docker-poc/`：Docker 自托管——业务代码零改动跑进 Node 单进程多站点（D1→node:sqlite、R2→磁盘目录 `shims/r2disk.ts` 或 R2 S3 接口 `shims/r2s3.ts`，静态直出与 cron 对齐 wrangler 行为，文档在其 README.md / DEPLOY.md）；**改 Workers 专有 API 面（D1/R2 用法、静态资源、cron、waitUntil）或 schema.sql 时，必须同步 docker-poc 的 shim 并跑 `docker-poc/smoke.sh` 冒烟**
 - 编辑器内容样式（`.ed-editor`）与文章页（`.rich`）需保持视觉一致——改一处记得镜像另一处
 - 前台微博卡管理（编辑 / 置顶 / 删除，site.js 末段）：管理按钮由 `render.ts weiboCards` 仅在 `adminName`（⟺ 管理员登录）时渲染，**访客 HTML 里不存在**；写操作复用 `/api/admin/weibo*`（session 鉴权）——`PUT` 是全量更新，**必须带原 images 否则配图被清**、必须显式传 `status:'published'` 否则会转草稿；编辑保存后的就地渲染（wbTextHtml / imgsClass）与后端 `weiboTextHtml / weiboImageGrid` 同口径，改正则或网格分列规则要两边同步；编辑态切换显隐用内联 `style.display`（主题 CSS 的 display 会盖掉 `[hidden]`）
