@@ -113,6 +113,34 @@ export function clampInt(v: unknown, min: number, max: number, fallback: number)
   return Math.min(max, Math.max(min, n))
 }
 
+/* ---------------- 会员昵称（注册选填 + 30 天一次修改，中英文均可） ----------------
+ * 展示名不做唯一约束（username 才是登录凭证），渲染层 esc 兜底 XSS；
+ * 清洗与窗口判定是纯函数：SSR 渲染、API 校验、Node 测试三处共用同一口径。 */
+
+export const NICKNAME_MAX_LEN = 24
+
+/** 昵称清洗：trim、剥控制字符（含 \t\r\n，防止渲染出怪异换行）、限长。
+ *  空/纯空白返回空串，由调用方决定回落 username 还是拒绝 */
+export function cleanNickname(raw: unknown): string {
+  return String(raw ?? '')
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .trim()
+    .slice(0, NICKNAME_MAX_LEN)
+}
+
+/** 昵称修改冷却窗口（30 天）：NULL = 从未改过，首次修改不受限 */
+export const NICKNAME_CHANGE_COOLDOWN_MS = 30 * 24 * 3600_000
+
+/** 30 天窗口判定：allowed = 现在能不能改；nextAt = 冷却中时的解禁时间（毫秒，可喂给 fmtDateCN） */
+export function nicknameCooldown(
+  changedAt: number | null | undefined,
+  now = Date.now()
+): { allowed: boolean; nextAt: number } {
+  if (!changedAt) return { allowed: true, nextAt: 0 }
+  const nextAt = changedAt + NICKNAME_CHANGE_COOLDOWN_MS
+  return { allowed: nextAt <= now, nextAt }
+}
+
 /** 插件停用列表（settings 的 pluginsDisabled，逗号分隔的 manifest id）清洗：去空白、保序去重、
  *  逐项过字符集白名单（与插件文件名/id 约定一致：字母数字_-）。
  *  含非法字符时返回 null，由调用方决定拒绝（400）还是忽略 */

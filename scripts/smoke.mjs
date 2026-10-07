@@ -501,7 +501,23 @@ try {
   console.log('\n▸ 会员链路')
   const MEMBER_NAME = 'smokemember'
   const MEMBER_PASS = 'smoke-member-12345'
+  const MEMBER_NICK = '冒烟昵称'
   const mJson = (res) => res.json().catch(() => null)
+
+  // 上一轮残留的昵称与冷却窗口先夹具化（幂等，行不存在时无操作）：链路内昵称口径断言依赖它
+  await run(
+    NODE,
+    [
+      WRANGLER_JS,
+      'd1',
+      'execute',
+      'DB',
+      '--local',
+      '--command',
+      `UPDATE members SET display_name = '${MEMBER_NICK}', display_name_changed_at = NULL WHERE username = '${MEMBER_NAME}'`,
+    ],
+    '重置冒烟会员昵称与修改窗口（幂等）'
+  )
 
   // 开关默认关：/member /rank 与注册全部 404（契约 A6：关闭 = 全套 404，前台无入口）
   await check('GET', '/member', 404)
@@ -518,11 +534,11 @@ try {
   results.push(['会员链路：开启 membersEnabled', mOn.status === 200])
   console.log(`  ${mOn.status === 200 ? '✓' : '✗'} 会员链路：开启 membersEnabled`)
 
-  // 注册即登录（幂等：上一轮冒烟残留同号时改走登录）
+  // 注册即登录（幂等：上一轮冒烟残留同号时改走登录）；昵称选填（中英文均可），注册填写不占用 30 天修改窗口
   let mCookie = ''
   const mReg = await raw('POST', '/api/member/register', {
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: MEMBER_NAME, password: MEMBER_PASS, link: '' }),
+    body: JSON.stringify({ username: MEMBER_NAME, password: MEMBER_PASS, nickname: MEMBER_NICK, link: '' }),
   })
   mCookie = (mReg.headers.get('set-cookie') || '').split(';')[0]
   if (mReg.status === 400) {
@@ -559,15 +575,15 @@ try {
   results.push(['会员链路：评论计分落账（每日登录+1、评论+2）', ptsOk])
   console.log(`  ${ptsOk ? '✓' : '✗'} 会员链路：评论计分落账（当前 ${mMeAfter?.member?.points ?? '?'} 分）`)
 
-  // 榜单页：上榜会员可见（只出 active 且积分>0）；首页不再渲染排行挂件（榜单收敛到 /rank）
-  await check('GET', '/rank', 200, MEMBER_NAME)
+  // 榜单页：上榜会员可见（只出 active 且积分>0；昵称口径 display_name 优先）；首页不再渲染排行挂件（榜单收敛到 /rank）
+  await check('GET', '/rank', 200, MEMBER_NICK)
   await check('GET', '/', 200, undefined, { notContains: 'rk-card' })
 
   // 会员登录态贯通前台评论表单（memberName 接线）：文章页/微博页免填昵称、以会员身份发言；游客仍需填昵称
-  await check('GET', '/post/smoke-multi-tag', 200, '以会员 <b>smokemember</b>', { headers: { Cookie: mCookie } })
+  await check('GET', '/post/smoke-multi-tag', 200, `以会员 <b>${MEMBER_NICK}</b>`, { headers: { Cookie: mCookie } })
   await check('GET', '/post/smoke-multi-tag', 200, 'name="nickname"')
-  await check('GET', '/weibo', 200, '以会员 <b>smokemember</b>', { headers: { Cookie: mCookie } })
-  await check('GET', '/guestbook', 200, '以会员 <b>smokemember</b>', { headers: { Cookie: mCookie } })
+  await check('GET', '/weibo', 200, `以会员 <b>${MEMBER_NICK}</b>`, { headers: { Cookie: mCookie } })
+  await check('GET', '/guestbook', 200, `以会员 <b>${MEMBER_NICK}</b>`, { headers: { Cookie: mCookie } })
 
   // 微博正文链接自动超链（服务端 weiboTextHtml）：非白名单外链包 /go 中间页，话题不受影响
   const wbLinkRes = await raw('POST', '/api/admin/weibo', {
@@ -659,6 +675,86 @@ try {
     results.push(['会员管理：恢复 active', mUnban.status === 200])
     console.log(`  ${mUnban.status === 200 ? '✓' : '✗'} 会员管理：恢复 active`)
   }
+
+  // ── 会员资料链路（/member 页会员卡）：改昵称（30 天一次，窗口判定下沉 SQL 条件更新）+ 改密码（无找回，改后踢其他设备）──
+  console.log('\n▸ 会员资料链路')
+  // 拉黑测试已踢掉全部会话，重新登录拿新会话（昵称与冷却窗口已在链路开头夹具化）
+  const mPf = await raw('POST', '/api/member/login', {
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: MEMBER_NAME, password: MEMBER_PASS }),
+  })
+  const mPfCookie = (mPf.headers.get('set-cookie') || '').split(';')[0]
+
+  // 会员中心页出昵称/密码两张修改卡（冷却中输入框与按钮 disabled）
+  await check('GET', '/member', 200, 'data-member-nickname-form', { headers: { Cookie: mPfCookie } })
+  await check('GET', '/member', 200, 'data-member-password-form', { headers: { Cookie: mPfCookie } })
+  await check('GET', '/member', 200, '不提供密码找回', { headers: { Cookie: mPfCookie } })
+
+  // 改昵称：空值拒绝 → 成功落库且 SSR 即显 → 立即再改撞 30 天窗口（403）
+  await check('POST', '/api/member/profile', 400, '不能为空', {
+    headers: { 'Content-Type': 'application/json', Cookie: mPfCookie },
+    body: JSON.stringify({ nickname: '   ' }),
+  })
+  const mNick = await mJson(
+    await raw('POST', '/api/member/profile', {
+      headers: { 'Content-Type': 'application/json', Cookie: mPfCookie },
+      body: JSON.stringify({ nickname: '冒烟新昵称' }),
+    })
+  )
+  const mNickOk = mNick?.ok === true && mNick?.nickname === '冒烟新昵称'
+  results.push(['会员资料：修改昵称成功', mNickOk])
+  console.log(`  ${mNickOk ? '✓' : '✗'} 会员资料：修改昵称成功`)
+  await check('GET', '/member', 200, '冒烟新昵称', { headers: { Cookie: mPfCookie } })
+  await check('POST', '/api/member/profile', 403, '30 天', {
+    headers: { 'Content-Type': 'application/json', Cookie: mPfCookie },
+    body: JSON.stringify({ nickname: '刚改完又改' }),
+  })
+
+  // 改密码：错旧密码拒绝 → 长度校验 → 改密前先登录一个「第二设备」会话 → 成功改密
+  const MEMBER_PASS2 = 'smoke-member-67890'
+  await check('POST', '/api/member/password', 400, '当前密码不正确', {
+    headers: { 'Content-Type': 'application/json', Cookie: mPfCookie },
+    body: JSON.stringify({ currentPassword: 'wrong-pass-123', newPassword: MEMBER_PASS2 }),
+  })
+  await check('POST', '/api/member/password', 400, '8-64 位', {
+    headers: { 'Content-Type': 'application/json', Cookie: mPfCookie },
+    body: JSON.stringify({ currentPassword: MEMBER_PASS, newPassword: 'short7' }),
+  })
+  const mOld = await raw('POST', '/api/member/login', {
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: MEMBER_NAME, password: MEMBER_PASS }),
+  })
+  const mOldCookie = (mOld.headers.get('set-cookie') || '').split(';')[0]
+  const mPwd = await raw('POST', '/api/member/password', {
+    headers: { 'Content-Type': 'application/json', Cookie: mPfCookie },
+    body: JSON.stringify({ currentPassword: MEMBER_PASS, newPassword: MEMBER_PASS2 }),
+  })
+  const mPwdOk = mPwd.status === 200
+  results.push(['会员资料：修改密码成功', mPwdOk])
+  console.log(`  ${mPwdOk ? '✓' : '✗'} 会员资料：修改密码成功（${mPwd.status}）`)
+  // 当前会话保留；其他设备（mOldCookie）被踢下线；旧密码 401、新密码可登录
+  const mKeep = await mJson(await raw('GET', '/api/member/me', { headers: { Cookie: mPfCookie } }))
+  const mKicked = await mJson(await raw('GET', '/api/member/me', { headers: { Cookie: mOldCookie } }))
+  const keepOk = mKeep?.member !== null && mKicked?.member === null
+  results.push(['会员资料：改密后保留当前会话、踢其他设备', keepOk])
+  console.log(`  ${keepOk ? '✓' : '✗'} 会员资料：改密后保留当前会话、踢其他设备`)
+  await check('POST', '/api/member/login', 401, '用户名或密码错误', {
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: MEMBER_NAME, password: MEMBER_PASS }),
+  })
+  const mRe = await raw('POST', '/api/member/login', {
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: MEMBER_NAME, password: MEMBER_PASS2 }),
+  })
+  const mReCookie = (mRe.headers.get('set-cookie') || '').split(';')[0]
+  // 改回原密码（下轮冒烟从同一状态开始）；改回动作同样踢掉 mPfCookie，改密者会话 mReCookie 保留
+  const mPwdBack = await raw('POST', '/api/member/password', {
+    headers: { 'Content-Type': 'application/json', Cookie: mReCookie },
+    body: JSON.stringify({ currentPassword: MEMBER_PASS2, newPassword: MEMBER_PASS }),
+  })
+  const mBackOk = mPwdBack.status === 200 && (await mJson(await raw('GET', '/api/member/me', { headers: { Cookie: mReCookie } })))?.member !== null
+  results.push(['会员资料：改回原密码（幂等收尾）', mBackOk])
+  console.log(`  ${mBackOk ? '✓' : '✗'} 会员资料：改回原密码（幂等收尾）`)
 
   // 收尾关回开关（默认关口径），下轮冒烟从同一状态开始
   const mOff = await raw('PUT', '/api/admin/settings', {

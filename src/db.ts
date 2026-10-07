@@ -8,6 +8,7 @@ import type {
   SettingsMap,
   WeiboRow,
 } from './types'
+import { NICKNAME_CHANGE_COOLDOWN_MS } from './utils'
 
 /** 排行榜行（listRankTop）：对外只给昵称口径需要的最小字段 */
 export interface RankMemberRow {
@@ -692,6 +693,8 @@ const SCHEMA_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: 'posts', column: 'min_tier', ddl: "ALTER TABLE posts ADD COLUMN min_tier TEXT NOT NULL DEFAULT 'all'" },
   // 文章访问密码（src/protect.ts）：salt:hash（PBKDF2），空 = 未加密；解锁 Cookie 的 HMAC key 就用它
   { table: 'posts', column: 'password_hash', ddl: "ALTER TABLE posts ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''" },
+  // 会员昵称 30 天一次修改窗口（src/utils.ts nicknameCooldown）：NULL = 从未改过，首次修改不受限
+  { table: 'members', column: 'display_name_changed_at', ddl: 'ALTER TABLE members ADD COLUMN display_name_changed_at INTEGER' },
 ]
 const SCHEMA_TABLES = [
   // 会员体系（2026-10-07 起，见 docs/DEVPLAN-2026-10-07.md 附录 A 契约）：
@@ -709,7 +712,8 @@ const SCHEMA_TABLES = [
     status        TEXT    NOT NULL DEFAULT 'active',
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL,
-    last_login_at INTEGER
+    last_login_at INTEGER,
+    display_name_changed_at INTEGER
   )`,
   `CREATE TABLE IF NOT EXISTS member_sessions (
     token      TEXT    PRIMARY KEY,
@@ -881,16 +885,30 @@ export async function getMemberById(db: D1Database, id: number): Promise<MemberR
 
 export async function createMember(
   db: D1Database,
-  v: { username: string; hash: string; salt: string; email: string }
+  v: { username: string; hash: string; salt: string; email: string; displayName?: string }
 ): Promise<number> {
   const now = Date.now()
   const res = await db
     .prepare(
-      "INSERT INTO members (username, password_hash, salt, email, display_name, avatar, tier, points, status, created_at, updated_at) VALUES (?, ?, ?, ?, '', '', 'normal', 0, 'active', ?, ?)"
+      "INSERT INTO members (username, password_hash, salt, email, display_name, avatar, tier, points, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, '', 'normal', 0, 'active', ?, ?)"
     )
-    .bind(v.username, v.hash, v.salt, v.email, now, now)
+    .bind(v.username, v.hash, v.salt, v.email, v.displayName ?? '', now, now)
     .run()
   return Number(res.meta.last_row_id)
+}
+
+/**
+ * 改昵称：30 天一次的窗口判定用 SQL 条件更新原子完成（防双开/并发请求同时过检查）。
+ * 返回 false = 命中冷却窗口（调用方提示解禁日期）；改前应先 getMemberById 做前置检查给出精确文案。
+ */
+export async function updateMemberNickname(db: D1Database, id: number, displayName: string, now: number): Promise<boolean> {
+  const r = await db
+    .prepare(
+      'UPDATE members SET display_name = ?, display_name_changed_at = ?, updated_at = ? WHERE id = ? AND (display_name_changed_at IS NULL OR display_name_changed_at <= ?)'
+    )
+    .bind(displayName, now, now, id, now - NICKNAME_CHANGE_COOLDOWN_MS)
+    .run()
+  return (r.meta.changes ?? 0) > 0
 }
 
 /** 后台会员列表：q 模糊匹配用户名/邮箱（likePattern 同口径转义），20 条/页，新会员在前 */

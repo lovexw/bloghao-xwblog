@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { awardPoints, awardCommentPoints, canRead, cstDayStart, normalizeMinTier, POINTS_RULES } from '../src/points.ts'
-import { listMembersAdmin, listRankTop, updateMemberAdmin } from '../src/db.ts'
-import { teaserHtml } from '../src/utils.ts'
+import { createMember, listMembersAdmin, listRankTop, updateMemberAdmin, updateMemberNickname } from '../src/db.ts'
+import { cleanNickname, NICKNAME_CHANGE_COOLDOWN_MS, nicknameCooldown, teaserHtml } from '../src/utils.ts'
 
 // ── 会员体系（契约见 docs/DEVPLAN-2026-10-07.md 附录 A）：积分引擎 / 会员查询 SQL 形状 ──
 
@@ -208,6 +208,76 @@ test('updateMemberAdmin：缺键即保留（只更新传入列），命中行看
   const empty = fakeCaptureDb()
   assert.ok(await updateMemberAdmin(empty.db, 1, {}), '空 patch 视为无操作成功')
   assert.equal(empty.sqls.length, 0, '空 patch 不得发 UPDATE')
+})
+
+// ── 会员个人资料（/member 页会员卡）：昵称清洗 / 30 天修改窗口 / 条件更新 ──
+
+test('cleanNickname：trim、剥控制字符、限长，空值返回空串', () => {
+  assert.equal(cleanNickname('  小王  '), '小王')
+  assert.equal(cleanNickname('Bob'), 'Bob')
+  assert.equal(cleanNickname('中英 mix_01'), '中英 mix_01')
+  // 控制字符（含换行/制表）剥除：渲染层防怪异换行，也不会把昵称当换行注入
+  assert.equal(cleanNickname('a\n\tb\r'), 'ab')
+  assert.equal(cleanNickname('a\u0000b\u007f'), 'ab')
+  // 超长截断到 24（与展示层 (display_name || username).slice(0, 24) 同口径）
+  assert.equal(cleanNickname('x'.repeat(30)).length, 24)
+  assert.equal(cleanNickname(''.padStart(5)), '')
+  assert.equal(cleanNickname(undefined), '')
+  assert.equal(cleanNickname(null), '')
+})
+
+test('nicknameCooldown：NULL 首改不受限，30 天内挡下，30 天外解禁（边界含等于）', () => {
+  const now = Date.now()
+  assert.deepEqual(nicknameCooldown(null, now), { allowed: true, nextAt: 0 }, '从未改过，首次修改不受限')
+  assert.deepEqual(nicknameCooldown(undefined, now), { allowed: true, nextAt: 0 })
+  // 改完 29 天：冷却中，nextAt = 改的时间 + 30 天
+  const changedAt = now - NICKNAME_CHANGE_COOLDOWN_MS + 86_400_000
+  assert.deepEqual(nicknameCooldown(changedAt, now), { allowed: false, nextAt: changedAt + NICKNAME_CHANGE_COOLDOWN_MS })
+  // 恰好 30 天：解禁（<= 判定，与 SQL 条件 display_name_changed_at <= now - cooldown 同口径）
+  const edge = now - NICKNAME_CHANGE_COOLDOWN_MS
+  assert.equal(nicknameCooldown(edge, now).allowed, true)
+  assert.equal(nicknameCooldown(edge - 1000, now).allowed, true)
+})
+
+test('updateMemberNickname：窗口判定下沉 SQL 条件更新（防并发双开），changes=0 报 false', async () => {
+  const { db, sqls, allBinds } = fakeCaptureDb()
+  const ok = await updateMemberNickname(db, 7, '小王', 1_000)
+  assert.ok(ok)
+  assert.match(
+    sqls[0],
+    /SET display_name = \?, display_name_changed_at = \?, updated_at = \? WHERE id = \? AND \(display_name_changed_at IS NULL OR display_name_changed_at <= \?\)/,
+    '窗口判定必须是原子条件更新：并发双开同时过应用层检查时只有一动能落库'
+  )
+  assert.deepEqual(allBinds[0], ['小王', 1_000, 1_000, 7, 1_000 - NICKNAME_CHANGE_COOLDOWN_MS])
+  // 冷却窗口内：SQL 条件不命中（changes=0）→ false，调用方提示解禁日期
+  const blockedDb = {
+    prepare: () => ({ bind: () => ({ run: async () => ({ meta: { changes: 0 } }) }) }),
+  } as unknown as D1Database
+  assert.equal(await updateMemberNickname(blockedDb, 7, '小王', 1_000), false)
+})
+
+test('createMember：注册昵称进 INSERT（选填，空串占位），列序与值序对齐', async () => {
+  const sqls: string[] = []
+  const allBinds: unknown[][] = []
+  const db = {
+    prepare: (sql: string) => {
+      sqls.push(sql)
+      const stmt = {
+        bind: (...a: unknown[]) => {
+          allBinds.push(a)
+          return stmt
+        },
+        run: async () => ({ meta: { last_row_id: 42 } }),
+      }
+      return stmt
+    },
+  } as unknown as D1Database
+  const id = await createMember(db, { username: 'bob', hash: 'h', salt: 's', email: '', displayName: '小明' })
+  assert.equal(id, 42)
+  assert.match(sqls[0], /INSERT INTO members/)
+  assert.match(sqls[0], /display_name/)
+  assert.equal(allBinds[0].length, 7, 'username/hash/salt/email/display_name/created_at/updated_at')
+  assert.equal(allBinds[0][4], '小明')
 })
 
 // ── 可见档位（契约 A0/A2）与付费墙试读段 ──

@@ -32,6 +32,8 @@ export interface MemberRow {
   created_at: number
   updated_at: number
   last_login_at: number | null
+  /** 上次改昵称时间；null = 从未改过，首次修改不受 30 天窗口限制 */
+  display_name_changed_at: number | null
 }
 
 /** 会员会话身份（Cookie xw_member_session；banned 在查询层即视为未登录） */

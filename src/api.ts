@@ -8,11 +8,13 @@ import {
   createSession,
   destroyMemberSession,
   destroyMemberSessionsByMember,
+  destroyOtherMemberSessions,
   destroySession,
   getCookie,
   getMemberUser,
   getSessionUser,
   hashPassword,
+  MEMBER_SESSION_COOKIE,
   rateLimit,
   safeEqual,
   SESSION_COOKIE,
@@ -49,6 +51,7 @@ import {
   setPostCategory,
   uniqueSlug,
   updateMemberAdmin,
+  updateMemberNickname,
   weiboCommentCountMap,
   weiboImageList,
   weiboTopicList,
@@ -69,7 +72,7 @@ import { listTrash, restorePostStatus, trashTable, type TrashTable } from './tra
 import { classifyBrowser, classifyDevice, cleanPath, cleanRef, cleanTitle, cleanVid, getVisitStats, recordVisit } from './stats'
 import { THEMES } from './themes/registry'
 import type { CommentRow, Env, MemberRow, MemberTier, PostRow, SessionUser } from './types'
-import { clampInt, cleanDisabledPlugins, cleanSlug, excerpt, extractWeiboTopics, isDemo, jsonItemLikePattern, normalizeLinkUrl, slugify } from './utils'
+import { clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extractWeiboTopics, fmtDateCN, isDemo, jsonItemLikePattern, nicknameCooldown, normalizeLinkUrl, slugify } from './utils'
 
 type AppEnv = { Bindings: Env; Variables: { user: SessionUser } }
 
@@ -190,6 +193,7 @@ function memberView(m: MemberRow, self = false) {
     v.username = m.username
     v.email = m.email
     v.createdAt = m.created_at
+    v.displayNameChangedAt = m.display_name_changed_at ?? null
   }
   return v
 }
@@ -199,12 +203,14 @@ api.post('/member/register', async (c) => {
   if (settings.membersEnabled !== '1') return jsonError('会员功能未开放', 404)
   const ip = clientIp(c.req.raw)
   if (!rateLimit(`mreg:${ip}`, 5, 10 * 60_000)) return jsonError('注册太频繁，请稍后再试', 429)
-  const body = await c.req.json<{ username?: string; password?: string; email?: string; link?: string }>().catch(() => null)
+  const body = await c.req.json<{ username?: string; password?: string; email?: string; nickname?: string; link?: string }>().catch(() => null)
   // 蜜罐字段 link：正常用户看不到、机器人会填 —— 静默丢弃（同 publicComment 口径）
   if (body?.link) return c.json({ ok: true })
   const username = String(body?.username || '').trim()
   const password = String(body?.password || '')
   const email = String(body?.email || '').trim().slice(0, 100)
+  // 昵称选填（中英文均可，仅展示不做唯一约束）；注册时填写不占用 30 天修改窗口
+  const nickname = cleanNickname(body?.nickname)
   if (!/^[a-zA-Z0-9_-]{2,24}$/.test(username)) return jsonError('用户名需为 2-24 位字母、数字、_ 或 -')
   if (password.length < 8 || password.length > 64) return jsonError('密码长度需为 8-64 位')
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return jsonError('邮箱格式不正确')
@@ -212,7 +218,7 @@ api.post('/member/register', async (c) => {
   const { hash, salt } = await hashPassword(password)
   let memberId: number
   try {
-    memberId = await createMember(c.env.DB, { username, hash, salt, email })
+    memberId = await createMember(c.env.DB, { username, hash, salt, email, displayName: nickname })
   } catch {
     return jsonError('用户名已被占用') // 并发注册撞 UNIQUE 约束的兜底
   }
@@ -263,6 +269,54 @@ api.get('/member/me', async (c) => {
   if (!session) return c.json({ member: null })
   const row = await getMemberById(c.env.DB, session.id)
   return c.json({ member: row ? memberView(row, true) : null })
+})
+
+/* 会员个人资料（/member 页会员卡，契约见 docs/DEVPLAN-2026-10-07.md）：改昵称（30 天一次）与改密码 */
+
+api.post('/member/profile', async (c) => {
+  const settings = await getSettings(c.env.DB)
+  if (settings.membersEnabled !== '1') return jsonError('会员功能未开放', 404)
+  const session = await getMemberUser(c.env.DB, c.req.raw)
+  if (!session) return jsonError('请先登录', 401)
+  const body = await c.req.json<{ nickname?: string }>().catch(() => null)
+  const nickname = cleanNickname(body?.nickname)
+  if (!nickname) return jsonError('昵称不能为空')
+  const row = await getMemberById(c.env.DB, session.id)
+  if (!row) return jsonError('请先登录', 401)
+  const cd = nicknameCooldown(row.display_name_changed_at)
+  if (!cd.allowed) return jsonError(`昵称每 30 天只能修改一次，${fmtDateCN(cd.nextAt)}后可再改`, 403)
+  // 条件更新把窗口判定下沉进 SQL：并发双开同时过上面的前置检查时，只有一动能落库
+  const now = Date.now()
+  if (!(await updateMemberNickname(c.env.DB, session.id, nickname, now))) {
+    return jsonError(`昵称每 30 天只能修改一次，${fmtDateCN(nicknameCooldown(now).nextAt)}后可再改`, 403)
+  }
+  return c.json({ ok: true, nickname, displayNameChangedAt: now })
+})
+
+api.post('/member/password', async (c) => {
+  const settings = await getSettings(c.env.DB)
+  if (settings.membersEnabled !== '1') return jsonError('会员功能未开放', 404)
+  const session = await getMemberUser(c.env.DB, c.req.raw)
+  if (!session) return jsonError('请先登录', 401)
+  // PBKDF2 是慢操作：按 IP 限流防滥用（口径同 /member/login）
+  if (!rateLimit(`mpwd:${clientIp(c.req.raw)}`, 10, 10 * 60_000)) return jsonError('尝试次数过多，请 10 分钟后再试', 429)
+  const body = await c.req.json<{ currentPassword?: string; newPassword?: string }>().catch(() => null)
+  const current = String(body?.currentPassword || '')
+  const next = String(body?.newPassword || '')
+  if (next.length < 8 || next.length > 64) return jsonError('新密码长度需为 8-64 位')
+  const row = await getMemberById(c.env.DB, session.id)
+  if (!row) return jsonError('请先登录', 401)
+  const { hash } = await hashPassword(current, row.salt)
+  if (!safeEqual(hash, row.password_hash)) return jsonError('当前密码不正确')
+  const { hash: newHash, salt: newSalt } = await hashPassword(next)
+  await c.env.DB
+    .prepare('UPDATE members SET password_hash = ?, salt = ?, updated_at = ? WHERE id = ?')
+    .bind(newHash, newSalt, Date.now(), row.id)
+    .run()
+  // 改密即其他设备全部下线（当前会话保留——改密码的人自己不能被登出去）
+  const token = getCookie(c.req.raw, MEMBER_SESSION_COOKIE) || ''
+  await destroyOtherMemberSessions(c.env.DB, row.id, token)
+  return c.json({ ok: true })
 })
 
 /* ---------------- 需要登录的 /admin/* ---------------- */

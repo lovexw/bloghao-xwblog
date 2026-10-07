@@ -128,6 +128,14 @@ export async function destroyMemberSessionsByMember(db: D1Database, memberId: nu
   await db.prepare('DELETE FROM member_sessions WHERE member_id = ?').bind(memberId).run()
 }
 
+/** 改密码后踢掉其他设备：保留当前会话（改密码的人自己不能被登出去），其余全部失效 */
+export async function destroyOtherMemberSessions(db: D1Database, memberId: number, keepToken: string): Promise<void> {
+  await db
+    .prepare('DELETE FROM member_sessions WHERE member_id = ? AND token <> ?')
+    .bind(memberId, keepToken)
+    .run()
+}
+
 /** 清理过期会员会话（随每晚备份 cron，与 purgeExpiredSessions 并排） */
 export async function purgeExpiredMemberSessions(db: D1Database): Promise<void> {
   await db.prepare('DELETE FROM member_sessions WHERE expires_at < ?').bind(Date.now()).run()

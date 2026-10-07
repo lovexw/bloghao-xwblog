@@ -1365,7 +1365,11 @@
         btn.textContent = kind === 'register' ? '注册中…' : '登录中…'
         btn.disabled = true
         var body = { username: username.value.trim(), password: password.value, link: link ? link.value : '' }
-        if (kind === 'register' && email && email.value.trim()) body.email = email.value.trim()
+        if (kind === 'register') {
+          var nick = form.querySelector('[name=nickname]')
+          if (nick && nick.value.trim()) body.nickname = nick.value.trim()
+          if (email && email.value.trim()) body.email = email.value.trim()
+        }
         postJSON('/api/member/' + kind, body)
           .then(function () {
             if (tip) tip.textContent = kind === 'register' ? '注册成功，正在进入…' : '登录成功，正在进入…'
@@ -1379,6 +1383,73 @@
             btn.disabled = false
           })
       })
+    })
+  }
+
+  // 会员中心卡（memberCardHtml）：昵称 30 天一次、密码无找回；提交走 /api/member/profile|password
+  var memNickForm = document.querySelector('[data-member-nickname-form]')
+  if (memNickForm) {
+    memNickForm.addEventListener('submit', function (e) {
+      e.preventDefault()
+      var btn = memNickForm.querySelector('.mem-btn')
+      var tip = memNickForm.querySelector('[data-member-tip]')
+      var input = memNickForm.querySelector('[name=nickname]')
+      if (!btn || btn.disabled) return
+      if (!input || !input.value.trim()) {
+        if (tip) tip.textContent = '昵称不能为空'
+        return
+      }
+      var label = btn.textContent
+      btn.disabled = true
+      btn.textContent = '保存中…'
+      postJSON('/api/member/profile', { nickname: input.value.trim() })
+        .then(function () {
+          if (tip) tip.textContent = '昵称已更新，正在刷新…'
+          setTimeout(function () {
+            location.reload()
+          }, 500)
+        })
+        .catch(function (err) {
+          if (tip) tip.textContent = err.message || '保存失败，请重试'
+          btn.textContent = label
+          btn.disabled = false
+        })
+    })
+  }
+
+  var memPwdForm = document.querySelector('[data-member-password-form]')
+  if (memPwdForm) {
+    memPwdForm.addEventListener('submit', function (e) {
+      e.preventDefault()
+      var btn = memPwdForm.querySelector('.mem-btn')
+      var tip = memPwdForm.querySelector('[data-member-tip]')
+      var cur = memPwdForm.querySelector('[name=current]')
+      var next = memPwdForm.querySelector('[name=next]')
+      if (!btn || btn.disabled) return
+      if (!cur || !cur.value || !next || !next.value) {
+        if (tip) tip.textContent = '请填写当前密码与新密码'
+        return
+      }
+      if (next.value.length < 8) {
+        if (tip) tip.textContent = '新密码至少 8 位'
+        return
+      }
+      var label = btn.textContent
+      btn.disabled = true
+      btn.textContent = '提交中…'
+      postJSON('/api/member/password', { currentPassword: cur.value, newPassword: next.value })
+        .then(function () {
+          if (tip) tip.textContent = '密码已修改，其他设备已退出登录。请务必记好新密码'
+          if (cur) cur.value = ''
+          if (next) next.value = ''
+          btn.textContent = label
+          btn.disabled = false
+        })
+        .catch(function (err) {
+          if (tip) tip.textContent = err.message || '修改失败，请重试'
+          btn.textContent = label
+          btn.disabled = false
+        })
     })
   }
 

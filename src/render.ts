@@ -2,7 +2,7 @@ import type { CommentRow, PostRow, SettingsMap } from './types'
 import type { PostSort } from './db'
 import { renderFooterHtml } from './hooks'
 import { outHref } from './outlink'
-import { cstDate, esc, excerpt, extractWeiboTopics, fmtDate, fmtDateCN, fmtDateTime, isoDate } from './utils'
+import { cstDate, esc, excerpt, extractWeiboTopics, fmtDate, fmtDateCN, fmtDateTime, isoDate, NICKNAME_CHANGE_COOLDOWN_MS, nicknameCooldown } from './utils'
 
 export interface ThemePageOptions {
   settings: SettingsMap
@@ -754,6 +754,8 @@ export interface MemberView {
   /** P1 预留：会员自定义头像（无则退回昵称首字，与站点头像同款降级） */
   avatarUrl?: string
   createdAt?: number
+  /** 上次改昵称时间（本人视角才有；null/缺省 = 从未改过，首次修改不受 30 天窗口限制） */
+  displayNameChangedAt?: number | null
 }
 
 /** 排行榜条目：rank 为服务端排好的名次（1 起）；选择隐藏自己的会员不出现在数据里 */
@@ -789,8 +791,19 @@ export function rankListHtml(entries: RankEntryView[]): string {
   return `<ol class="rk-list rk-list-page">${entries.map(rankRow).join('\n')}</ol>`
 }
 
-/** 会员中心卡（已登录态）：身份 + 积分 + 退出；退出交互在 site.js（POST /api/member/logout） */
+/** 昵称修改窗口的说明文案（30 天一次，天数从常量取防两处漂移）；冷却中附解禁日期 */
+function nicknameRuleText(m: MemberView): { allowed: boolean; text: string } {
+  const days = Math.round(NICKNAME_CHANGE_COOLDOWN_MS / 86_400_000)
+  const cd = nicknameCooldown(m.displayNameChangedAt)
+  if (cd.allowed) return { allowed: true, text: `昵称中英文均可，每 ${days} 天可修改一次` }
+  return { allowed: false, text: `每 ${days} 天只能修改一次，${fmtDateCN(cd.nextAt)}后可再改` }
+}
+
+/** 会员中心（已登录态）：身份卡 + 昵称修改卡（30 天一次）+ 密码修改卡（无找回，警示随表单）。
+ *  三卡都走 .mem-* 共享结构（与登录/注册表单同套样式），提交交互在 site.js */
 export function memberCardHtml(m: MemberView): string {
+  const rule = nicknameRuleText(m)
+  const dis = rule.allowed ? '' : ' disabled'
   return `<section class="mem-card" data-member-card>
   <div class="mem-who">
     ${memberAvatarHtml(m, 'mem-avatar')}
@@ -801,11 +814,32 @@ export function memberCardHtml(m: MemberView): string {
     <div class="mem-points"><b>${m.points}</b><span>积分</span></div>
   </div>
   ${m.email ? `<p class="mem-email">${esc(m.email)}</p>` : ''}
+  ${m.createdAt ? `<p class="mem-email">${fmtDateCN(m.createdAt)}加入</p>` : ''}
   <button class="mem-btn mem-btn-ghost" type="button" data-member-logout>退出登录</button>
+</section>
+<section class="mem-card">
+  <h2 class="mem-form-title">修改昵称</h2>
+  <form data-member-nickname-form>
+    <input class="mem-input" name="nickname" maxlength="24" value="${esc(m.nickname)}" placeholder="昵称（中英文均可）" aria-label="昵称"${dis}>
+    <p class="mem-swap">${esc(rule.text)}</p>
+    <button class="mem-btn" type="submit"${dis}>保存昵称</button>
+    <p class="mem-tip" data-member-tip aria-live="polite"></p>
+  </form>
+</section>
+<section class="mem-card">
+  <h2 class="mem-form-title">修改密码</h2>
+  <form data-member-password-form>
+    <input class="mem-input" type="password" name="current" maxlength="72" placeholder="当前密码" autocomplete="current-password" required aria-label="当前密码">
+    <input class="mem-input" type="password" name="next" maxlength="72" placeholder="新密码（至少 8 位）" autocomplete="new-password" required aria-label="新密码（至少 8 位）">
+    <p class="mem-swap">本站不提供密码找回，请务必记好新密码；修改成功后其他设备将退出登录</p>
+    <button class="mem-btn" type="submit">确认修改</button>
+    <p class="mem-tip" data-member-tip aria-live="polite"></p>
+  </form>
 </section>`
 }
 
-/** 会员登录 / 注册双表单（未登录态）：提交与切换交互在 site.js；蜜罐字段照评论表单口径（name=link） */
+/** 会员登录 / 注册双表单（未登录态）：提交与切换交互在 site.js；蜜罐字段照评论表单口径（name=link）。
+ *  注册可填昵称（选填，中英文均可，不占用 30 天修改窗口），密码无找回的提醒放在提交键旁 */
 export function memberAuthHtml(): string {
   return `<section class="mem-auth">
   <form class="mem-card mem-form" data-member-form="login">
@@ -820,10 +854,12 @@ export function memberAuthHtml(): string {
   <form class="mem-card mem-form" data-member-form="register">
     <h2 class="mem-form-title">注册会员</h2>
     <input class="mem-input" name="username" maxlength="24" placeholder="用户名（2-24 位字母、数字、_ 或 -）" autocomplete="username" required aria-label="用户名">
+    <input class="mem-input" name="nickname" maxlength="24" placeholder="昵称（选填，中英文均可）" aria-label="昵称（选填，中英文均可）">
     <input class="mem-input" type="password" name="password" maxlength="72" placeholder="密码（至少 8 位）" autocomplete="new-password" required aria-label="密码">
     <input class="mem-input" type="email" name="email" maxlength="120" placeholder="邮箱（选填）" autocomplete="email" aria-label="邮箱（选填）">
     <input class="cmt-hp" name="link" tabindex="-1" autocomplete="off" aria-hidden="true">
     <button class="mem-btn" type="submit">注册并登录</button>
+    <p class="mem-swap">密码一旦遗失无法找回，请务必记好</p>
     <p class="mem-swap">已有账号？<button type="button" class="mem-swap-btn" data-member-swap="login">去登录</button></p>
     <p class="mem-tip" data-member-tip aria-live="polite"></p>
   </form>

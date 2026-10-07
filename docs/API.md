@@ -69,11 +69,12 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 会员注册（站点「会员功能」关闭时整组 `/api/member/*` 返回 404）。Body：
 
 ```json
-{ "username": "xiaoke", "password": "至少8位", "email": "可选", "link": "" }
+{ "username": "xiaoke", "password": "至少8位", "nickname": "选填昵称", "email": "可选", "link": "" }
 ```
 
 - `link` 是蜜罐字段，正常客户端永远传空字符串/不传；限流同 IP 10 分钟 5 次
 - 用户名 2-24 位字母/数字/`_`/`-`，密码 8-64 位；用户名占用或校验失败 400
+- `nickname` 选填（中英文均可，剥控制字符后 ≤24 字符，仅展示不做唯一约束）；注册填写**不占用** 30 天修改窗口
 - 成功即登录：`{ok:true, member:{nickname,tier,points,...}}` 并签发 `xw_member_session` Cookie（HttpOnly，30 天，与管理员会话完全独立）
 
 ### POST /api/member/login
@@ -83,7 +84,20 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 清除会员会话 → `{ok:true}`。
 
 ### GET /api/member/me
-`{member: {...} | null}`，恒 200（未登录为 `null`，前端据此渲染登录表单或会员卡）；本人视角额外含 `username` / `email` / `createdAt`。会员发言走上方评论三路接口即可：带会员 Cookie 时服务端自动挂身份，`nickname`/`email`/`website` 字段被忽略。
+`{member: {...} | null}`，恒 200（未登录为 `null`，前端据此渲染登录表单或会员卡）；本人视角额外含 `username` / `email` / `createdAt` / `displayNameChangedAt`（上次改昵称时间戳，null = 从未改过）。会员发言走上方评论三路接口即可：带会员 Cookie 时服务端自动挂身份，`nickname`/`email`/`website` 字段被忽略。
+
+### POST /api/member/profile
+修改昵称（需登录；会员功能关闭时 404）。Body：`{ "nickname": "新昵称" }`。
+
+- 清洗口径与注册一致（剥控制字符、trim、≤24 字符），空值 400「昵称不能为空」
+- **30 天一次**：冷却中 403（消息含解禁日期，如「昵称每 30 天只能修改一次，2026年11月6日后可再改」）；窗口判定下沉为 SQL 条件更新（`display_name_changed_at IS NULL OR <= now-30d`），并发双开同时过前置检查时只有一动能落库
+- 成功 `{ok:true, nickname, displayNameChangedAt}`；前台 `/member` 会员卡即显「下次可改日期」
+
+### POST /api/member/password
+修改密码（需登录；会员功能关闭时 404）。Body：`{ "currentPassword": "当前密码", "newPassword": "新密码" }`。
+
+- 新密码 8-64 位；当前密码错误 400（PBKDF2 验证，按 IP 10 分钟 10 次限流防滥用）
+- 成功后**其他设备的会员会话全部失效**（当前会话保留）；本站不提供密码找回，表单旁有固定提醒
 
 ### GET /go?u=<url>（SSR 页面）
 外链中间页（机制见 `src/outlink.ts`）：白名单域名（`TRUSTED_OUT_DOMAINS`，子域名自动跟随）与本站同源地址 302 直跳；其余第三方 http(s) 地址渲染「即将离开本站」确认页（展示目标域名与完整链接、附免责声明，`noindex`，无 JS、不自动跳转，故不构成开放重定向）。目标缺失 / 非 http(s) / 超 2048 字符一律 302 回首页。正文外链在渲染层包装进来：文章 / 页面 / 关于我走 `sanitizeHtml(html, { origin })`，微博文本走 `weiboTextHtml`（客户端镜像在 site.js）——存库与 RSS / 导出保持原始 URL。

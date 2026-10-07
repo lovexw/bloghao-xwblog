@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS members (
   status        TEXT    NOT NULL DEFAULT 'active',    -- active | banned（封禁后禁登录与评论，历史评论保留）
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL,
-  last_login_at INTEGER
+  last_login_at INTEGER,
+  display_name_changed_at INTEGER                    -- 上次改昵称时间（30 天一次，src/utils.ts NICKNAME_CHANGE_COOLDOWN_MS）；NULL = 从未改过，首次修改不受限
 );
 CREATE INDEX IF NOT EXISTS idx_members_points ON members (points DESC);
 

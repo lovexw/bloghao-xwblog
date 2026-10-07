@@ -816,6 +816,7 @@ export async function renderMember(c: C): Promise<Response> {
         email: row.email,
         avatarUrl: row.avatar || undefined,
         createdAt: row.created_at,
+        displayNameChangedAt: row.display_name_changed_at,
       }
     }
   }
