@@ -93,6 +93,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - 侧边栏菜单由 app.js 顶部 `MENU` 配置数组渲染（分组标签 + 待审徽标），桌面侧栏、移动端底部栏与「更多」抽屉共用同一份数据——**新增后台页面要同时登记 `MENU`、`navigate()` 与 `MOBILE_TAB_IDS`（不放底栏的会自动进抽屉）**，别再往模板里手写 `<a>`
 - 插件 manifest（public/plugins/manifest.json）是对象格式 `{ id, file, title, description, version, author }`（editor.js 兼容旧字符串格式）；停用名单存 settings `pluginsDisabled`（`utils.ts cleanDisabledPlugins` 校验，id 只允许 `[A-Za-z0-9_-]`），皮肤/插件市场目录在 `public/market/catalog.json`
 - 编辑器 `save()` 是串行队列（勿改回早退模式——会丢发布意图造成假成功）；新弹窗一律用现成的 `modal()`（自带 Esc 关闭与焦点管理）
+- 动态创建 `<input type="file">` 必须走 `pickFiles` 助手（editor.js 导出、app.js 导入；site.js 有同款 ES5 版本，改动两端任一侧记得同步语义）：**游离节点在 iOS Safari 上选图器能打开、照片能选，但 change 不回填**——上传从未开始且全程无提示，手机上表现为「选了图发布出来只有文字」（2026-10 修复，headless 浏览器测不出）；先隐藏挂到 body 再 click，读完文件 / 用户取消即摘除；前台发布器还有在途上传计数守卫，发布 / 保存前必须归零
 - 输入框回车提交必须判 `e.isComposing || e.keyCode === 229`（中文输入法组词回车）
 
 **前台 site.js 兼容（全文件是一个 IIFE，一处解析错误全站交互瘫痪）**

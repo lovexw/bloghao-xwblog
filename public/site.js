@@ -148,6 +148,27 @@
     return compressImage(file).then(uploadImage)
   }
 
+  // 动态 file input 必须先挂到 DOM 再 click：iOS Safari 对游离节点的选图器能打开、
+  // 能选照片，但 change 不回填（文件永远回不到页面），上传静默失败且无任何提示——
+  // 手机上「选了图却没动静」即此。挂 body 隐藏，读完文件 / 用户取消即摘除。
+  function pickFiles(opts, onFiles) {
+    var input = document.createElement('input')
+    input.type = 'file'
+    if (opts.accept) input.accept = opts.accept
+    if (opts.multiple) input.multiple = true
+    input.hidden = true
+    input.addEventListener('cancel', function () {
+      input.remove()
+    })
+    input.addEventListener('change', function () {
+      var files = input.files
+      input.remove()
+      onFiles(files)
+    })
+    document.body.appendChild(input)
+    input.click()
+  }
+
   /* ---------------- 顶部导航「分类话题」折叠菜单：点外部 / Esc 收起 ---------------- */
   function closeNavMenus(except) {
     var open = document.querySelectorAll('details.snav-dd[open]')
@@ -567,6 +588,7 @@
     var cpTip = composerForm.querySelector('.wb-composer-tip')
     var cpButtons = composerForm.querySelectorAll('.wb-composer-add, .wb-composer-draft, .wb-composer-publish')
     var cpImages = []
+    var cpUploading = 0 // 在途上传计数：发布前必须归零，否则发布会把没传完的图静默丢掉
     var cpTipTimer = null
 
     function cpMsg(msg) {
@@ -613,11 +635,16 @@
       var chain = Promise.resolve()
       imgs.slice(0, room).forEach(function (f) {
         chain = chain.then(function () {
+          cpUploading++
           if (cpAdd) cpAdd.textContent = '上传中 ' + f.name.slice(0, 12) + '…'
-          return uploadCompressed(f).then(function (url) {
-            cpImages.push(url)
-            cpRender()
-          })
+          return uploadCompressed(f)
+            .then(function (url) {
+              cpImages.push(url)
+              cpRender()
+            })
+            .finally(function () {
+              cpUploading--
+            })
         })
       })
       chain
@@ -635,12 +662,9 @@
 
     if (cpAdd) {
       cpAdd.addEventListener('click', function () {
-        var input = document.createElement('input')
-        input.type = 'file'
-        input.accept = 'image/jpeg,image/png,image/webp,image/gif'
-        input.multiple = true
-        input.onchange = function () { cpAddFiles(input.files) }
-        input.click()
+        pickFiles({ accept: 'image/jpeg,image/png,image/webp,image/gif', multiple: true }, function (files) {
+          cpAddFiles(files)
+        })
       })
     }
 
@@ -670,6 +694,7 @@
     })
 
     function cpPublish(status) {
+      if (cpUploading > 0) return cpMsg('还有图片在上传中，等一下再发')
       var content = cpText ? cpText.value.trim() : ''
       if (!content && !cpImages.length) {
         cpMsg('写点什么，或者配张图吧')
@@ -863,6 +888,7 @@
       var saveBtn = form.querySelector('[data-wb-edit-save]')
       var cancelBtn = form.querySelector('[data-wb-edit-cancel]')
       var images = []
+      var uploading = 0 // 与顶部发布框同口径：保存前必须等在途上传归零
       var tipTimer = null
 
       function tip(msg) {
@@ -896,11 +922,16 @@
         var chain = Promise.resolve()
         imgs.slice(0, room).forEach(function (f) {
           chain = chain.then(function () {
+            uploading++
             addBtn.textContent = '上传中 ' + f.name.slice(0, 12) + '…'
-            return uploadCompressed(f).then(function (url) {
-              images.push(url)
-              renderTiles()
-            })
+            return uploadCompressed(f)
+              .then(function (url) {
+                images.push(url)
+                renderTiles()
+              })
+              .finally(function () {
+                uploading--
+              })
           })
         })
         chain
@@ -912,12 +943,9 @@
           })
       }
       addBtn.addEventListener('click', function () {
-        var input = document.createElement('input')
-        input.type = 'file'
-        input.accept = 'image/jpeg,image/png,image/webp,image/gif'
-        input.multiple = true
-        input.onchange = function () { addFiles(input.files) }
-        input.click()
+        pickFiles({ accept: 'image/jpeg,image/png,image/webp,image/gif', multiple: true }, function (files) {
+          addFiles(files)
+        })
       })
       // 粘贴 / 拖拽加图，与顶部发布框同款
       form.addEventListener('paste', function (e) {
@@ -947,6 +975,7 @@
       cancelBtn.addEventListener('click', leaveEdit)
 
       saveBtn.addEventListener('click', function () {
+        if (uploading > 0) return tip('还有图片在上传中，等一下再保存')
         var content = ta.value.trim()
         if (!content && !images.length) return tip('写点什么，或者配张图吧')
         saveBtn.textContent = '保存中…'

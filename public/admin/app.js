@@ -1,5 +1,5 @@
 /* 博客号后台 SPA（原生 ES Module，无构建依赖） */
-import { flushEditorSave, mountEditor, disposeEditor } from './editor.js'
+import { flushEditorSave, mountEditor, disposeEditor, pickFiles } from './editor.js'
 
 const $app = document.getElementById('app')
 const $toastSlot = document.getElementById('toast-slot')
@@ -775,12 +775,7 @@ async function viewWeibo() {
   }
 
   function pickImages() {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = 'image/jpeg,image/png,image/webp,image/gif'
-    input.multiple = true
-    input.onchange = () => addImageFiles(input.files)
-    input.click()
+    pickFiles('image/jpeg,image/png,image/webp,image/gif', true, (files) => addImageFiles(files))
   }
 
   // 粘贴图片：光标在发布器内 ⌘/Ctrl+V 即上传（纯文本粘贴不受影响）
@@ -1788,20 +1783,16 @@ async function viewMedia() {
 
   document.getElementById('media-audit').addEventListener('click', openMediaAudit)
   document.getElementById('media-upload').addEventListener('click', () => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = 'image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm'
-    input.onchange = async () => {
-      if (!input.files[0]) return
+    pickFiles('image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm', false, async (files) => {
+      if (!files[0]) return
       try {
-        await uploadFile(await compressImage(input.files[0]), null)
+        await uploadFile(await compressImage(files[0]), null)
         toast('上传成功')
         navigate()
       } catch (e) {
         toast(e.message, true)
       }
-    }
-    input.click()
+    })
   })
   $app.querySelectorAll('.media-item').forEach((item) => {
     item.addEventListener('click', async () => {
@@ -2539,21 +2530,17 @@ async function viewSettings() {
   }
 
   document.getElementById('btn-avatar-upload').addEventListener('click', () => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = 'image/jpeg,image/png,image/webp,image/gif'
-    input.onchange = async () => {
-      if (!input.files[0]) return
+    pickFiles('image/jpeg,image/png,image/webp,image/gif', false, async (files) => {
+      if (!files[0]) return
       try {
-        const d = await uploadFile(await compressImage(input.files[0]))
+        const d = await uploadFile(await compressImage(files[0]))
         document.getElementById('st-avatarUrl').value = d.url
         renderAvatarSlot(d.url)
         toast('头像已上传，记得点「保存全部」生效')
       } catch (e) {
         toast(e.message, true)
       }
-    }
-    input.click()
+    })
   })
   document.getElementById('btn-avatar-clear').addEventListener('click', () => {
     document.getElementById('st-avatarUrl').value = ''
@@ -2562,21 +2549,17 @@ async function viewSettings() {
   })
 
   document.getElementById('btn-fav-upload').addEventListener('click', () => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = 'image/png,image/jpeg,image/webp,image/x-icon,image/vnd.microsoft.icon,.ico,.png'
-    input.onchange = async () => {
-      if (!input.files[0]) return
+    pickFiles('image/png,image/jpeg,image/webp,image/x-icon,image/vnd.microsoft.icon,.ico,.png', false, async (files) => {
+      if (!files[0]) return
       try {
-        const d = await uploadFile(await compressImage(input.files[0]))
+        const d = await uploadFile(await compressImage(files[0]))
         document.getElementById('st-faviconUrl').value = d.url
         renderFavSlot(d.url)
         toast('图标已上传，记得点「保存全部」生效')
       } catch (e) {
         toast(e.message, true)
       }
-    }
-    input.click()
+    })
   })
   document.getElementById('btn-fav-clear').addEventListener('click', () => {
     document.getElementById('st-faviconUrl').value = ''
@@ -2590,21 +2573,17 @@ async function viewSettings() {
       : '<span class="fav-empty">未设置，使用内置卡图</span>'
   }
   document.getElementById('btn-og-upload').addEventListener('click', () => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = 'image/png,image/jpeg,image/webp'
-    input.onchange = async () => {
-      if (!input.files[0]) return
+    pickFiles('image/png,image/jpeg,image/webp', false, async (files) => {
+      if (!files[0]) return
       try {
-        const d = await uploadFile(await compressImage(input.files[0]))
+        const d = await uploadFile(await compressImage(files[0]))
         document.getElementById('st-ogImageDefault').value = d.url
         renderOgSlot(d.url)
         toast('卡图已上传，记得点「保存全部」生效')
       } catch (e) {
         toast(e.message, true)
       }
-    }
-    input.click()
+    })
   })
   document.getElementById('btn-og-clear').addEventListener('click', () => {
     document.getElementById('st-ogImageDefault').value = ''

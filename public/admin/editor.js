@@ -31,6 +31,26 @@ async function api(path, opts = {}) {
   return data
 }
 
+/* 动态 file input 必须先挂到 DOM 再 click：iOS Safari 对游离节点的选图器能打开、
+ * 能选照片，但 change 不回填（文件永远回不到页面），上传静默失败且无任何提示——
+ * 手机上「选了图却没动静」即此。挂 body 隐藏，读完文件 / 用户取消即摘除。
+ * app.js 的媒体库 / 头像 /favicon / OG 卡图与编辑器图片、视频、封面共用此入口。 */
+export function pickFiles(accept, multiple, onFiles) {
+  const input = document.createElement('input')
+  input.type = 'file'
+  if (accept) input.accept = accept
+  if (multiple) input.multiple = true
+  input.hidden = true
+  input.addEventListener('cancel', () => input.remove())
+  input.addEventListener('change', () => {
+    const files = input.files
+    input.remove()
+    onFiles(files)
+  })
+  document.body.appendChild(input)
+  input.click()
+}
+
 /* ---------- 上传前图片压缩与 WebP 转换（编辑器/封面/OG 与前台发布器共用逻辑，两端各自落地） ----------
  * JPEG/PNG/WebP 且大于阈值时：最长边压到 MAX_DIM，优先转 WebP（质量 0.82，比 JPEG 约再省 1/4 体积，
  * 透明也不丢——透明 PNG / 带 alpha 的 WebP 都能转）；旧浏览器 canvas 编码不了 WebP（toBlob 静默回退
@@ -1090,14 +1110,9 @@ export async function mountEditor(root, postId, opts = {}) {
       progress.classList.remove('on')
       bar.style.width = '0%'
     }
-    drop.addEventListener('click', () => {
-      const input = document.createElement('input')
-      input.type = 'file'
-      input.accept = 'image/jpeg,image/png,image/webp,image/gif'
-      input.multiple = true
-      input.onchange = () => handleFiles(input.files)
-      input.click()
-    })
+    drop.addEventListener('click', () =>
+      pickFiles('image/jpeg,image/png,image/webp,image/gif', true, (files) => handleFiles(files))
+    )
     drop.addEventListener('dragover', (e) => {
       e.preventDefault()
       drop.classList.add('is-over')
@@ -1125,13 +1140,9 @@ export async function mountEditor(root, postId, opts = {}) {
 
   function pickVideoFile() {
     saveSelection()
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = 'video/mp4,video/webm'
-    input.onchange = async () => {
-      if (input.files[0]) await uploadAndInsert(input.files[0])
-    }
-    input.click()
+    pickFiles('video/mp4,video/webm', false, (files) => {
+      if (files[0]) uploadAndInsert(files[0])
+    })
   }
 
   function modal(html) {
@@ -1535,13 +1546,10 @@ export async function mountEditor(root, postId, opts = {}) {
       markDirty()
       return
     }
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = 'image/jpeg,image/png,image/webp,image/gif'
-    input.onchange = async () => {
-      if (!input.files[0]) return
+    pickFiles('image/jpeg,image/png,image/webp,image/gif', false, async (files) => {
+      if (!files[0]) return
       try {
-        const out = await compressImage(input.files[0])
+        const out = await compressImage(files[0])
         const d = await uploadFile(out, null)
         post.cover = d.url
         coverBox.innerHTML = `<img src="${esc(post.cover)}"><button class="cover-remove" id="ed-cover-remove" title="移除封面">×</button>`
@@ -1555,8 +1563,7 @@ export async function mountEditor(root, postId, opts = {}) {
       } catch (err) {
         toast(err.message, true)
       }
-    }
-    input.click()
+    })
   })
 
   /* ---------- 标签 ---------- */
