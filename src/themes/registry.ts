@@ -107,8 +107,8 @@ export interface PostData {
     views: number
     likes: number
     readingMinutes: number
-    /** 谁能看档位（编辑器「谁能看」选择，缺省 'all' 全员可见） */
-    minTier?: 'all' | 'coffee' | 'top'
+    /** 谁能看档位（编辑器「谁能看」选择，缺省 'all' 全员可见；'member' = 登录会员可见） */
+    minTier?: 'all' | 'member' | 'coffee' | 'top'
     /** true = 当前访客不可读全文：contentHtml 已被服务端截断为试读段，主题在正文后渲染付费墙遮挡卡（paywallHtml），不得自行补全内容 */
     locked?: boolean
   }

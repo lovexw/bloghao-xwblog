@@ -198,6 +198,8 @@ for (const [themeId, theme] of Object.entries(THEMES as Record<string, ThemeModu
     assert.ok(html.includes('<p>正文</p>'), '试读段照常渲染')
     const top = theme.post({ ...d, post: { ...d.post, minTier: 'top' } })
     assert.ok(top.includes('顶级会员专属内容'), 'top 档位切换文案')
+    const mem = theme.post({ ...d, post: { ...d.post, minTier: 'member' } })
+    assert.ok(mem.includes('会员专属内容'), 'member 档位文案（契约 A0 四档）')
     assert.ok(!theme.post(postData()).includes('class="paywall"'), '未锁定不出遮挡卡')
   })
 

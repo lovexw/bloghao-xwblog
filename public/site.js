@@ -377,7 +377,7 @@
       var html =
         '<li class="wb-cmt-item' + (nested ? ' wb-cmt-nested' : '') + '" id="wbc-' + c.id + '">' +
         '<div class="wb-cmt-head"><span class="wb-cmt-name">' + esc(c.nickname) +
-        (Number(c.is_admin) ? '<span class="wb-cmt-badge">作者</span>' : '') +
+        (Number(c.is_admin) ? '<span class="wb-cmt-badge">作者</span>' : c.member_name ? '<span class="wb-cmt-badge">会员</span>' : '') +
         '</span><span class="wb-cmt-time">' + fmtTime(c.created_at) + '</span>' +
         (isAdmin
           ? '<button type="button" class="wb-cmt-reply-btn" data-reply="' + c.id + '" data-name="' + esc(c.nickname) + '">回复</button>'
