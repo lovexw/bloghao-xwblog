@@ -55,7 +55,7 @@ import {
   WEIBO_MAX_CHARS,
 } from './db'
 import { mdToHtml } from './markdown'
-import { awardCommentPoints, awardPoints } from './points'
+import { awardCommentPoints, awardPoints, normalizeMinTier } from './points'
 import { collectRoutes } from './collect'
 import { exportRoutes } from './export'
 import { adminExternalRoutes, externalRoutes, notifyAdminComment, telegramRoutes } from './external'
@@ -384,6 +384,7 @@ async function readPostPayload(c: { req: { json: () => Promise<unknown> } }) {
     status: 'status' in b,
     pinned: 'pinned' in b,
     categoryId: 'categoryId' in b,
+    minTier: 'minTier' in b,
   }
   const tags = Array.isArray(b.tags)
     ? b.tags
@@ -408,6 +409,8 @@ async function readPostPayload(c: { req: { json: () => Promise<unknown> } }) {
     slug: cleanSlug(String(b.slug ?? '')),
     categoryId,
     publishAt,
+    // 可见档位（契约 DEVPLAN 附录 A A7）：脏值归一为 all
+    minTier: normalizeMinTier(typeof b.minTier === 'string' ? b.minTier : null),
     has,
   }
 }
@@ -447,8 +450,8 @@ api.post('/admin/posts', async (c) => {
   const slug = await uniqueSlug(c.env.DB, base)
   const now = Date.now()
   const res = await c.env.DB.prepare(
-    `INSERT INTO posts (slug, title, content, summary, cover, tags, status, pinned, author_id, published_at, publish_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO posts (slug, title, content, summary, cover, tags, status, pinned, author_id, published_at, publish_at, min_tier, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       slug,
@@ -462,6 +465,7 @@ api.post('/admin/posts', async (c) => {
       c.get('user').id,
       p.status === 'published' ? now : null,
       p.status === 'scheduled' ? (p.publishAt ?? null) : null,
+      p.minTier,
       now,
       now
     )
@@ -507,6 +511,7 @@ api.put('/admin/posts/:id', async (c) => {
   const tags = p.has.tags ? JSON.stringify(p.tags) : existing.tags
   const status = p.has.status ? p.status : existing.status
   const pinned = p.has.pinned ? p.pinned : existing.pinned
+  const minTier = p.has.minTier ? p.minTier : normalizeMinTier(existing.min_tier)
   // 草稿也保留已有 published_at：采集插件会把原文发布时间写入草稿，
   // 自动保存不能把它抹掉；发布时若草稿已有时间则沿用。
   // publish_at 只在 scheduled 状态下有意义：定时保存写入目标时间，
@@ -514,7 +519,7 @@ api.put('/admin/posts/:id', async (c) => {
   const publishedAt = status === 'published' ? (existing.published_at ?? Date.now()) : existing.published_at
   const publishAt = status === 'scheduled' ? (p.publishAt ?? existing.publish_at ?? null) : null
   await c.env.DB.prepare(
-    `UPDATE posts SET slug = ?, title = ?, content = ?, summary = ?, cover = ?, tags = ?, status = ?, pinned = ?, published_at = ?, publish_at = ?, updated_at = ? WHERE id = ?`
+    `UPDATE posts SET slug = ?, title = ?, content = ?, summary = ?, cover = ?, tags = ?, status = ?, pinned = ?, published_at = ?, publish_at = ?, min_tier = ?, updated_at = ? WHERE id = ?`
   )
     .bind(
       slug,
@@ -527,6 +532,7 @@ api.put('/admin/posts/:id', async (c) => {
       pinned,
       publishedAt,
       publishAt,
+      minTier,
       Date.now(),
       id
     )

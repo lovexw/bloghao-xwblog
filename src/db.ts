@@ -882,7 +882,7 @@ export async function createMember(
   const now = Date.now()
   const res = await db
     .prepare(
-      "INSERT INTO members (username, password_hash, salt, email, display_name, avatar, tier, points, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, '', 'normal', 0, 'active', ?, ?)"
+      "INSERT INTO members (username, password_hash, salt, email, display_name, avatar, tier, points, status, created_at, updated_at) VALUES (?, ?, ?, ?, '', '', 'normal', 0, 'active', ?, ?)"
     )
     .bind(v.username, v.hash, v.salt, v.email, now, now)
     .run()

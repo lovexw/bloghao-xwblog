@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { awardPoints, awardCommentPoints, cstDayStart, POINTS_RULES } from '../src/points.ts'
+import { awardPoints, awardCommentPoints, canRead, cstDayStart, normalizeMinTier, POINTS_RULES } from '../src/points.ts'
 import { listMembersAdmin, listRankTop, updateMemberAdmin } from '../src/db.ts'
+import { teaserHtml } from '../src/utils.ts'
 
 // ── 会员体系（契约见 docs/DEVPLAN-2026-10-07.md 附录 A）：积分引擎 / 会员查询 SQL 形状 ──
 
@@ -31,8 +32,11 @@ function fakePointsDb(initial = 0) {
   const db = {
     prepare(sql: string) {
       let args: unknown[] = []
+      // 占位符数 = 绑定数严格校验（AGENTS 教训：占位符错位真 bug 曾靠桩数差拦住，桩不校验就漏）
+      const need = (sql.replace(/'(?:[^']|'')*'/g, '').match(/\?/g) ?? []).length
       const stmt = {
         bind: (...a: unknown[]) => {
+          assert.equal(a.length, need, `SQL 占位符数不匹配：${sql}`)
           args = a
           return stmt
         },
@@ -148,8 +152,11 @@ function fakeCaptureDb(firstResult: Record<string, unknown> = { n: 0 }) {
     prepare(sql: string) {
       sqls.push(sql)
       let args: unknown[] = []
+      // 占位符数 = 绑定数严格校验（防 createMember 类占位符错位 bug 复发）
+      const need = (sql.replace(/'(?:[^']|'')*'/g, '').match(/\?/g) ?? []).length
       const stmt = {
         bind: (...a: unknown[]) => {
+          assert.equal(a.length, need, `SQL 占位符数不匹配：${sql}`)
           args = a
           allBinds.push(a)
           return stmt
@@ -201,4 +208,44 @@ test('updateMemberAdmin：缺键即保留（只更新传入列），命中行看
   const empty = fakeCaptureDb()
   assert.ok(await updateMemberAdmin(empty.db, 1, {}), '空 patch 视为无操作成功')
   assert.equal(empty.sqls.length, 0, '空 patch 不得发 UPDATE')
+})
+
+// ── 可见档位（契约 A0/A2）与付费墙试读段 ──
+
+test('canRead：档位判定矩阵（游客/normal/coffee/top × all/member/coffee/top）', () => {
+  // 游客只看得懂 all
+  for (const tier of ['all', 'member', 'coffee', 'top']) {
+    assert.equal(canRead(tier, null), tier === 'all', `游客看 ${tier}`)
+  }
+  // normal 登录即可看 all 与 member 档，够不着 coffee/top
+  assert.deepEqual(
+    ['all', 'member', 'coffee', 'top'].map((t) => canRead(t, 'normal')),
+    [true, true, false, false]
+  )
+  assert.equal(canRead('coffee', 'coffee'), true)
+  assert.equal(canRead('coffee', 'top'), true)
+  assert.equal(canRead('top', 'coffee'), false)
+  assert.equal(canRead('top', 'top'), true)
+})
+
+test('normalizeMinTier：脏值一律归 all（不锁死站长自有内容）', () => {
+  for (const dirty of [null, undefined, '', 'ALL', 'vip', 'constructor']) {
+    assert.equal(normalizeMinTier(dirty), 'all', String(dirty))
+  }
+  assert.equal(normalizeMinTier('member'), 'member')
+})
+
+test('teaserHtml：按可见文本截断、闭合未关标签、标签本身不计数', () => {
+  const html = '<p>' + '一'.repeat(150) + '</p><p>' + '二'.repeat(150) + '</p><p>结尾绝密内容</p>'
+  const t = teaserHtml(html, 200)
+  assert.ok(!t.includes('绝密'), '正文必须截在试读段内')
+  assert.ok(t.endsWith('</p>'), '截断后要闭合未关标签')
+  assert.ok(t.startsWith('<p>'), '标签原样保留')
+  // 标签不占可见文本额度：200 字预算全部给正文
+  const noTags = 'x'.repeat(300)
+  assert.equal(teaserHtml(noTags, 200).length, 200)
+  // 短于预算原样返回
+  assert.equal(teaserHtml('<p>短文</p>', 200), '<p>短文</p>')
+  // void 标签不进栈，不会产出多余的闭合
+  assert.equal(teaserHtml('<p>a<br>b<img src="/images/x.jpg">c</p>', 200), '<p>a<br>b<img src="/images/x.jpg">c</p>')
 })

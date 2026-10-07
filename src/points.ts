@@ -88,3 +88,26 @@ export async function awardCommentPoints(db: D1Database, memberId: number, comme
   if (dup) return
   await awardPoints(db, memberId, 'comment', { refId: commentId })
 }
+
+/* ---------------- 可见档位（契约 A0/A2：posts.min_tier，TEXT 'all'|'member'|'coffee'|'top'） ---------------- */
+
+export type MinTier = 'all' | 'member' | 'coffee' | 'top'
+
+export const MIN_TIER_VALUES: MinTier[] = ['all', 'member', 'coffee', 'top']
+
+/** 文章档位 → 所需等级：游客 0，登录会员 1，咖啡 2，顶级 3 */
+export const MIN_TIER_RANK: Record<string, number> = { all: 0, member: 1, coffee: 2, top: 3 }
+/** 会员档位 → 等级（normal 与文章档 'member' 同级：登录即可看） */
+export const MEMBER_TIER_RANK: Record<string, number> = { normal: 1, coffee: 2, top: 3 }
+
+/** 脏值归一：min_tier 落库前/读取时统一过这里，未知值按公开兜底（宁可漏展示、不锁死站长自有内容） */
+export function normalizeMinTier(v: string | null | undefined): MinTier {
+  return MIN_TIER_VALUES.includes(v as MinTier) ? (v as MinTier) : 'all'
+}
+
+/** 可见判定：会员等级 ≥ 文章档位即可读。游客按 0 */
+export function canRead(minTier: string | null | undefined, tier: string | null | undefined): boolean {
+  const need = MIN_TIER_RANK[normalizeMinTier(minTier)] ?? 0
+  if (need <= 0) return true
+  return (tier ? MEMBER_TIER_RANK[tier] ?? 0 : 0) >= need
+}
