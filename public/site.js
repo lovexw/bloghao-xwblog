@@ -1230,6 +1230,76 @@
     })
   })()
 
+  /* ---------------- 会员（/member：登录 / 注册 / 退出，API 见 DEVPLAN 附录 A5） ----------------
+   * 表单为服务端渲染（memberAuthHtml），这里只接管提交与双表单切换；
+   * 无 JS 时两个表单都可见可直接提交，有 JS 时只显当前一个 */
+  var memAuth = document.querySelector('.mem-auth')
+  if (memAuth) {
+    var memForms = memAuth.querySelectorAll('[data-member-form]')
+    if (memForms.length > 1) {
+      var memShow = function (name) {
+        memForms.forEach(function (f) {
+          f.hidden = f.getAttribute('data-member-form') !== name
+        })
+      }
+      memAuth.addEventListener('click', function (e) {
+        var btn = e.target && e.target.closest ? e.target.closest('[data-member-swap]') : null
+        if (btn) memShow(btn.getAttribute('data-member-swap') || 'login')
+      })
+      memShow('login')
+    }
+    memForms.forEach(function (form) {
+      var kind = form.getAttribute('data-member-form')
+      var tip = form.querySelector('[data-member-tip]')
+      form.addEventListener('submit', function (e) {
+        e.preventDefault()
+        var btn = form.querySelector('.mem-btn')
+        if (!btn || btn.disabled) return
+        var username = form.querySelector('[name=username]')
+        var password = form.querySelector('[name=password]')
+        var email = form.querySelector('[name=email]')
+        var link = form.querySelector('[name=link]')
+        if (!username || !username.value.trim() || !password || !password.value) return
+        var label = btn.textContent
+        btn.textContent = kind === 'register' ? '注册中…' : '登录中…'
+        btn.disabled = true
+        var body = { username: username.value.trim(), password: password.value, link: link ? link.value : '' }
+        if (kind === 'register' && email && email.value.trim()) body.email = email.value.trim()
+        postJSON('/api/member/' + kind, body)
+          .then(function () {
+            if (tip) tip.textContent = kind === 'register' ? '注册成功，正在进入…' : '登录成功，正在进入…'
+            setTimeout(function () {
+              location.reload()
+            }, 500)
+          })
+          .catch(function (err) {
+            if (tip) tip.textContent = err.message || '操作失败，请重试'
+            btn.textContent = label
+            btn.disabled = false
+          })
+      })
+    })
+  }
+
+  var memLogout = document.querySelector('[data-member-logout]')
+  if (memLogout)
+    memLogout.addEventListener('click', function () {
+      if (memLogout.disabled) return
+      var label = memLogout.textContent
+      memLogout.disabled = true
+      postJSON('/api/member/logout', {})
+        .then(function () {
+          location.reload()
+        })
+        .catch(function (err) {
+          memLogout.disabled = false
+          memLogout.textContent = err.message || '退出失败，请重试'
+          setTimeout(function () {
+            memLogout.textContent = label
+          }, 2000)
+        })
+    })
+
   /* ---------------- 访客统计打点（后台「统计」页，服务端见 src/stats.ts） ----------------
    * 只上报匿名访客 id / 路径 / 标题 / 来源域名，不碰 Cookie 不存 IP；
    * 页面带 <meta name="xw-stats" content="off">（后台关闭采集）时完全不发请求 */
