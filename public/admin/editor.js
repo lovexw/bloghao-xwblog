@@ -51,25 +51,32 @@ export function pickFiles(accept, multiple, onFiles) {
   input.click()
 }
 
-/* ---------- 上传前图片压缩与 WebP 转换（编辑器/封面/OG 与前台发布器共用逻辑，两端各自落地） ----------
- * JPEG/PNG/WebP 且大于阈值时：最长边压到 MAX_DIM，优先转 WebP（质量 0.82，比 JPEG 约再省 1/4 体积，
- * 透明也不丢——透明 PNG / 带 alpha 的 WebP 都能转）；旧浏览器 canvas 编码不了 WebP（toBlob 静默回退
- * 成 PNG），按产物 type 识别后走原 JPEG/PNG 口径：非 PNG 一律 JPEG，透明 PNG 只在超尺寸时缩 PNG。
- * GIF（动图会压丢帧）与小于阈值的图原样返回；产物不比原图小也用原图。失败时返回原文件，不阻塞上传。 */
-const IMG_COMPRESS = { MAX_DIM: 2000, MIN_BYTES: 300 * 1024, QUALITY: 0.82 }
+/* ---------- 上传前图片压缩与 WebP 转换（编辑器/封面/OG/后台发布器共用，app.js 直接 import；
+ * 前台 site.js 是同参数同行为的 ES5 手工镜像，改任一侧记得同步另一侧） ----------
+ * JPEG/PNG/WebP 且「超阈值或最长边超 MAX_DIM」时：先降尺寸再编码，优先转 WebP（质量 0.75——
+ * WebP 压缩率高，0.75 已是业内通行的视觉无损甜点，比同画质 JPEG 约再省三成，透明也不丢——
+ * 透明 PNG / 带 alpha 的 WebP 都能转）；旧浏览器 canvas 编码不了 WebP（toBlob 静默回退
+ * 成 PNG），按产物 type 识别后走 JPEG/PNG 口径（质量 0.82）：非 PNG 一律 JPEG，透明 PNG 只缩尺寸不转格式。
+ * GIF（动图会压丢帧）与小且尺寸合规的图原样返回；产物不比原图小也用原图。失败时返回原文件，不阻塞上传。 */
+const IMG_COMPRESS = { MAX_DIM: 2000, MIN_BYTES: 150 * 1024, WEBP_QUALITY: 0.75, FALLBACK_QUALITY: 0.82 }
 
-async function compressImage(file) {
+export async function compressImage(file) {
   try {
-    if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size <= IMG_COMPRESS.MIN_BYTES) return file
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return file
     const bmp = await createImageBitmap(file)
     const scale = Math.min(1, IMG_COMPRESS.MAX_DIM / Math.max(bmp.width, bmp.height))
+    // 体积与尺寸都合规的直通：重编码不会更小，白耗 CPU 还平白叠一代有损
+    if (file.size <= IMG_COMPRESS.MIN_BYTES && scale >= 1) {
+      bmp.close?.()
+      return file
+    }
     const w = Math.max(1, Math.round(bmp.width * scale))
     const h = Math.max(1, Math.round(bmp.height * scale))
     const cv = document.createElement('canvas')
     cv.width = w
     cv.height = h
     cv.getContext('2d').drawImage(bmp, 0, 0, w, h)
-    const webp = await new Promise((r) => cv.toBlob(r, 'image/webp', IMG_COMPRESS.QUALITY))
+    const webp = await new Promise((r) => cv.toBlob(r, 'image/webp', IMG_COMPRESS.WEBP_QUALITY))
     if (webp?.type === 'image/webp') {
       bmp.close?.()
       if (webp.size >= file.size) return file
@@ -79,7 +86,7 @@ async function compressImage(file) {
     const toJpeg = file.type !== 'image/png' || !hasAlpha(bmp)
     bmp.close?.()
     if (scale >= 1 && !toJpeg) return file
-    const blob = await new Promise((r) => cv.toBlob(r, toJpeg ? 'image/jpeg' : 'image/png', IMG_COMPRESS.QUALITY))
+    const blob = await new Promise((r) => cv.toBlob(r, toJpeg ? 'image/jpeg' : 'image/png', IMG_COMPRESS.FALLBACK_QUALITY))
     if (!blob || blob.size >= file.size) return file
     const name = (file.name || 'image').replace(/\.[^.]+$/, '') + (toJpeg ? '.jpg' : '.png')
     return new File([blob], name, { type: toJpeg ? 'image/jpeg' : 'image/png' })

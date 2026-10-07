@@ -54,11 +54,12 @@
     }
   }
 
-  /* ---------------- 上传前图片压缩与 WebP 转换（前台发布器，与后台同参数） ----------------
-   * JPEG/PNG/WebP 超 300KB：最长边压到 2000px，优先转 WebP（质量 0.82，比 JPEG 约再省 1/4，
-   * 透明不丢）；旧浏览器编码不了 WebP 时回退原 JPEG/PNG 口径（透明 PNG 只缩尺寸不转格式）；
-   * GIF 动图会压丢帧原样直传；产物不比原图小则用原图；失败回退原文件。 */
-  var IMG_COMPRESS = { MAX_DIM: 2000, MIN_BYTES: 300 * 1024, QUALITY: 0.82 }
+  /* ---------------- 上传前图片压缩与 WebP 转换（前台发布器；后台 editor.js 是同参数同逻辑的 ES Module 原版，改任一侧记得同步另一侧） ----------------
+   * JPEG/PNG/WebP 且「超阈值或最长边超 2000px」：先降尺寸再编码，优先转 WebP（质量 0.75——
+   * WebP 压缩率高，0.75 已是业内通行的视觉无损甜点，比同画质 JPEG 约再省三成，透明不丢）；
+   * 旧浏览器编码不了 WebP 时回退 JPEG/PNG 口径（质量 0.82，透明 PNG 只缩尺寸不转格式）；
+   * GIF 动图会压丢帧原样直传；小且尺寸合规的图直通；产物不比原图小则用原图；失败回退原文件。 */
+  var IMG_COMPRESS = { MAX_DIM: 2000, MIN_BYTES: 150 * 1024, WEBP_QUALITY: 0.75, FALLBACK_QUALITY: 0.82 }
 
   function hasAlphaSampled(bmp) {
     var cv = document.createElement('canvas')
@@ -71,10 +72,15 @@
 
   function compressImage(file) {
     return new Promise(function (resolve) {
-      if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size <= IMG_COMPRESS.MIN_BYTES) return resolve(file)
+      if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return resolve(file)
       createImageBitmap(file)
         .then(function (bmp) {
           var scale = Math.min(1, IMG_COMPRESS.MAX_DIM / Math.max(bmp.width, bmp.height))
+          // 体积与尺寸都合规的直通：重编码不会更小，白耗 CPU 还平白叠一代有损
+          if (file.size <= IMG_COMPRESS.MIN_BYTES && scale >= 1) {
+            bmp.close && bmp.close()
+            return resolve(file)
+          }
           var w = Math.max(1, Math.round(bmp.width * scale))
           var h = Math.max(1, Math.round(bmp.height * scale))
           var cv = document.createElement('canvas')
@@ -95,8 +101,8 @@
               if (!blob || blob.size >= file.size) return resolve(file)
               var name = (file.name || 'image').replace(/\.[^.]+$/, '') + (toJpeg ? '.jpg' : '.png')
               resolve(new File([blob], name, { type: toJpeg ? 'image/jpeg' : 'image/png' }))
-            }, toJpeg ? 'image/jpeg' : 'image/png', IMG_COMPRESS.QUALITY)
-          }, 'image/webp', IMG_COMPRESS.QUALITY)
+            }, toJpeg ? 'image/jpeg' : 'image/png', IMG_COMPRESS.FALLBACK_QUALITY)
+          }, 'image/webp', IMG_COMPRESS.WEBP_QUALITY)
         })
         .catch(function () {
           resolve(file)

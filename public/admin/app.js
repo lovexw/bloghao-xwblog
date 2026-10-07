@@ -1,5 +1,5 @@
 /* 博客号后台 SPA（原生 ES Module，无构建依赖） */
-import { flushEditorSave, mountEditor, disposeEditor, pickFiles } from './editor.js'
+import { flushEditorSave, mountEditor, disposeEditor, pickFiles, compressImage } from './editor.js'
 
 const $app = document.getElementById('app')
 const $toastSlot = document.getElementById('toast-slot')
@@ -2733,41 +2733,10 @@ async function viewSettings() {
 }
 
 /* ---------------- 上传（带进度） ----------------
- * 上传前自动压缩（与编辑器同参数）：JPEG/PNG/WebP 超 300KB 或超 2000px 时压成 JPEG（PNG 透明保 PNG）；
- * GIF 动图会压丢帧，原样直传。失败回退原文件。 */
-const IMG_COMPRESS = { MAX_DIM: 2000, MIN_BYTES: 300 * 1024, QUALITY: 0.82 }
-
-function hasAlphaSampled(bmp) {
-  const cv = document.createElement('canvas')
-  cv.width = cv.height = 1
-  const ctx = cv.getContext('2d')
-  ctx.drawImage(bmp, 0, 0, 1, 1)
-  const d = ctx.getImageData(0, 0, 1, 1).data
-  return d[3] < 250
-}
-
-async function compressImage(file) {
-  try {
-    if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size <= IMG_COMPRESS.MIN_BYTES) return file
-    const bmp = await createImageBitmap(file)
-    const scale = Math.min(1, IMG_COMPRESS.MAX_DIM / Math.max(bmp.width, bmp.height))
-    const toJpeg = file.type !== 'image/png' || !hasAlphaSampled(bmp)
-    if (scale >= 1 && !toJpeg) return file
-    const w = Math.max(1, Math.round(bmp.width * scale))
-    const h = Math.max(1, Math.round(bmp.height * scale))
-    const cv = document.createElement('canvas')
-    cv.width = w
-    cv.height = h
-    cv.getContext('2d').drawImage(bmp, 0, 0, w, h)
-    const blob = await new Promise((r) => cv.toBlob(r, toJpeg ? 'image/jpeg' : 'image/png', IMG_COMPRESS.QUALITY))
-    bmp.close?.()
-    if (!blob || blob.size >= file.size) return file
-    const name = (file.name || 'image').replace(/\.[^.]+$/, '') + (toJpeg ? '.jpg' : '.png')
-    return new File([blob], name, { type: toJpeg ? 'image/jpeg' : 'image/png' })
-  } catch {
-    return file
-  }
-}
+ * 上传前压缩统一走 editor.js 导出的 compressImage（曾在本文件各抄一份，只压 JPEG/PNG 不转 WebP，
+ * 已与编辑器策略漂移——现共用一份实现）：JPEG/PNG/WebP 超 150KB 或最长边超 2000px 时先降尺寸再编码，
+ * 优先转 WebP（质量 0.75，透明不丢），旧浏览器回退 JPEG/PNG（0.82）；GIF 动图会压丢帧，原样直传；
+ * 产物不比原图小用原图；失败回退原文件。 */
 
 function uploadFile(file, onProgress) {
   return new Promise((resolve, reject) => {
