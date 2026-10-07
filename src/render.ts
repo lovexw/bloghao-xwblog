@@ -786,9 +786,9 @@ export function memberAuthHtml(): string {
 }
 
 /** 付费墙遮挡卡：locked 文章在试读段之后的升级提示（正文已被服务端截断，浏览器拿不到全文）。
- *  CTA 统一指向 /member；minTier 'top' 提示顶级会员，其余（coffee/缺省）按咖啡会员文案 */
+ *  CTA 统一指向 /member；文案随档位：'top' 顶级会员、'member' 会员、其余（coffee/缺省）按咖啡会员 */
 export function paywallHtml(minTier: string | undefined | null): string {
-  const tierName = minTier === 'top' ? TIER_LABELS.top : TIER_LABELS.coffee
+  const tierName = minTier === 'top' ? TIER_LABELS.top : minTier === 'member' ? '会员' : TIER_LABELS.coffee
   return `<section class="paywall" aria-label="会员专属内容">
   <svg class="paywall-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/><circle cx="12" cy="15.5" r="1.3"/></svg>
   <h2 class="paywall-title">${esc(tierName)}专属内容</h2>
@@ -946,7 +946,8 @@ export function commentsHtml(o: {
   for (const c of orphans) tops.push({ ...c, parent_id: 0 })
 
   const renderItem = (c: CommentRow): string => {
-    const badge = c.is_admin ? '<span class="cmt-badge">作者</span>' : ''
+    // 徽标：作者优先；会员评论（member_id > 0 时列表查询带出 member_tier，契约 DEVPLAN 附录 A）带「会员」徽标
+    const badge = c.is_admin ? '<span class="cmt-badge">作者</span>' : c.member_tier ? '<span class="cmt-badge">会员</span>' : ''
     const replyBtn = o.isAdmin
       ? `<button class="cmt-reply-btn" type="button" data-reply="${c.id}" data-name="${esc(c.nickname)}">回复</button>`
       : ''

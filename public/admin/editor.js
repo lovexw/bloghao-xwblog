@@ -579,7 +579,8 @@ export async function mountEditor(root, postId, opts = {}) {
 
       <div class="drawer-title">谁能看</div>
       <select class="input" id="ed-min-tier">
-        <option value="all"${post.minTier === 'coffee' || post.minTier === 'top' ? '' : ' selected'}>所有人可见</option>
+        <option value="all"${post.minTier === 'member' || post.minTier === 'coffee' || post.minTier === 'top' ? '' : ' selected'}>所有人可见</option>
+        <option value="member"${post.minTier === 'member' ? ' selected' : ''}>仅登录会员</option>
         <option value="coffee"${post.minTier === 'coffee' ? ' selected' : ''}>咖啡会员及以上</option>
         <option value="top"${post.minTier === 'top' ? ' selected' : ''}>仅顶级会员</option>
       </select>
