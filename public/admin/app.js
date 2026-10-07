@@ -16,6 +16,8 @@ let wbEditing = null
 
 /* 文章列表搜索防抖：模块级，路由切换时清掉，防遗留回调把用户「拽回」文章页 */
 let postsSearchTimer = null
+/* 会员列表搜索防抖：同上 */
+let membersSearchTimer = null
 /* 搜索框是否处于焦点中：重渲染后据此恢复焦点与光标 */
 let searchFocused = false
 /* 当前路由名（'editor' 等）：判断「离开编辑器」用 */
@@ -125,6 +127,7 @@ const I = {
   link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7.1-7.1l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7.1 7.1l1.7-1.7"/></svg>',
   edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l11-11-4-4L4 16v4z"/><path d="M13 7l4 4"/></svg>',
   comment: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M21 11.5c0 4.1-4 7.5-9 7.5-1 0-2-.1-2.9-.4L4 20l1.2-3.2C3.8 15.4 3 13.5 3 11.5 3 7.4 7 4 12 4s9 3.4 9 7.5z"/></svg>',
+  member: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 20c1.4-3.4 4.3-5 7.5-5s6.1 1.6 7.5 5"/></svg>',
   image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m5 19 5.5-5.5L14 17l3-3 4 4"/></svg>',
   page: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M7 13h10M7 16.5h6"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/><path d="M10 11v6M14 11v6"/></svg>',
@@ -154,6 +157,7 @@ const MENU = [
   { id: 'links', href: '#/links', label: '友链', icon: 'link', badge: () => state.pendingLinks || 0 },
   { id: 'pages', href: '#/pages', label: '页面', icon: 'page' },
   { id: 'trash', href: '#/trash', label: '回收站', icon: 'trash' },
+  { id: 'members', href: '#/members', label: '会员', icon: 'member' },
   { type: 'group', label: '系统' },
   { id: 'appearance', href: '#/appearance', label: '皮肤', icon: 'palette' },
   { id: 'plugins', href: '#/plugins', label: '插件', icon: 'plug' },
@@ -1448,6 +1452,117 @@ async function viewTrash() {
   })
 }
 
+/** 会员管理页：列表 / 搜用户名邮箱 / 改档位 / 封禁解封（API 形状见 DEVPLAN-2026-10-07 附录 A5） */
+const MEMBER_TIER_LABEL = { normal: '普通会员', coffee: '咖啡会员', top: '顶级会员' }
+
+async function viewMembers() {
+  const q = new URLSearchParams(location.hash.split('?')[1] || '')
+  const page = parseInt(q.get('page') || '1', 10)
+  const kw = (q.get('q') || '').trim()
+
+  let d
+  try {
+    d = await api(`/admin/members?page=${page}${kw ? `&q=${encodeURIComponent(kw)}` : ''}`)
+  } catch (e) {
+    return handleApiErr(e)
+  }
+
+  const tierChip = (t) =>
+    t === 'top'
+      ? '<span class="chip chip-warn">顶级会员</span>'
+      : t === 'coffee'
+        ? '<span class="chip chip-green">咖啡会员</span>'
+        : '<span class="chip chip-gray">普通会员</span>'
+  const rows = d.items
+    .map(
+      (m) => `<div class="post-row" data-id="${m.id}">
+      <div class="post-main">
+        <div class="post-title">${esc(m.username)}${tierChip(m.tier)}${m.status === 'banned' ? '<span class="chip chip-gray">已封禁</span>' : ''}</div>
+        <div class="post-meta"><span>积分 ${m.points}</span>${m.email ? `<span>·</span><span>${esc(m.email)}</span>` : ''}<span>·</span><span>注册于 ${fmtDateTime(m.created_at)}</span></div>
+      </div>
+      <div class="post-ops">
+        <button class="btn btn-ghost btn-sm" data-act="tier">改档位</button>
+        <button class="btn btn-ghost btn-sm${m.status === 'banned' ? '' : ' btn-danger'}" data-act="ban">${m.status === 'banned' ? '解除封禁' : '封禁'}</button>
+      </div>
+    </div>`
+    )
+    .join('')
+
+  await shellView(
+    'members',
+    `<div class="page-head">
+      <div><div class="page-title">会员</div><div class="page-sub">站内注册的会员 · 评论与每日登录攒积分${d.total ? ` · 共 ${d.total} 位` : ''}</div></div>
+    </div>
+    <div class="toolbar">
+      <input class="input" id="mb-search" placeholder="搜索用户名 / 邮箱…" value="${esc(kw)}">
+    </div>
+    <div class="panel">${rows || '<div class="empty-box">还没有会员</div>'}</div>
+    ${d.totalPages > 1 ? `<div class="pager-admin"><button class="btn btn-sm" id="pg-prev" ${page <= 1 ? 'disabled' : ''}>上一页</button><span>${d.page} / ${d.totalPages}</span><button class="btn btn-sm" id="pg-next" ${page >= d.totalPages ? 'disabled' : ''}>下一页</button></div>` : ''}`
+  )
+
+  const nav = (patch) => {
+    const p = new URLSearchParams({ page: String(page), ...(kw ? { q: kw } : {}), ...patch })
+    location.hash = '#/members?' + p.toString()
+  }
+  const searchEl = document.getElementById('mb-search')
+  searchEl.addEventListener('input', () => {
+    clearTimeout(membersSearchTimer)
+    membersSearchTimer = setTimeout(() => nav({ q: searchEl.value.trim(), page: 1 }), 400)
+  })
+  const prev = document.getElementById('pg-prev')
+  const next = document.getElementById('pg-next')
+  if (prev) prev.addEventListener('click', () => nav({ page: page - 1 }))
+  if (next) next.addEventListener('click', () => nav({ page: page + 1 }))
+
+  $app.querySelectorAll('.post-row').forEach((row) => {
+    const id = Number(row.dataset.id)
+    const member = d.items.find((x) => x.id === id)
+    row.querySelector('[data-act=tier]').addEventListener('click', () => memberTierModal(member))
+    row.querySelector('[data-act=ban]').addEventListener('click', async (e) => {
+      const btn = e.currentTarget
+      if (btn.disabled) return
+      const banned = member.status === 'banned'
+      if (!banned && !(await confirmBox(`封禁会员「${member.username}」？封禁后其将无法登录与评论，积分与档案保留，可随时解封。`))) return
+      btn.disabled = true
+      try {
+        await api(`/admin/members/${id}`, { method: 'PUT', body: { status: banned ? 'active' : 'banned' } })
+        toast(banned ? '已解除封禁' : '已封禁')
+        navigate() // 操作后重渲染当前路由（经 navigate 守卫，用户已切页时不拽回）
+      } catch (e2) {
+        btn.disabled = false
+        toast(e2.message, true)
+      }
+    })
+  })
+}
+
+/** 会员档位调整弹窗：PUT /admin/members/:id 缺键即保留，这里只发 tier */
+function memberTierModal(member) {
+  const m = modal(`<div class="modal-head"><span>调整档位 — ${esc(member.username)}</span><button class="modal-close" data-close>×</button></div>
+    <div class="modal-body">
+      <label class="auth-field"><label>会员档位</label>
+        <select class="input" id="mb-tier">
+          ${['normal', 'coffee', 'top'].map((t) => `<option value="${t}"${member.tier === t ? ' selected' : ''}>${MEMBER_TIER_LABEL[t]}</option>`).join('')}
+        </select>
+      </label>
+      <div style="font-size:12px;color:var(--sub);margin-top:8px;">咖啡会员可读「咖啡会员及以上」的专属文章，顶级会员可读全部会员内容；档位不影响积分累计。</div>
+    </div>
+    <div class="modal-foot"><button class="btn" data-close>取消</button><button class="btn btn-primary" id="mb-tier-save">保存</button></div>`)
+  m.mask.querySelector('#mb-tier-save').addEventListener('click', async () => {
+    const btn = m.mask.querySelector('#mb-tier-save')
+    btn.disabled = true
+    try {
+      await api(`/admin/members/${member.id}`, { method: 'PUT', body: { tier: m.mask.querySelector('#mb-tier').value } })
+      toast('档位已更新')
+      m.close()
+      navigate() // 操作后重渲染当前路由（经 navigate 守卫，用户已切页时不拽回）
+    } catch (e) {
+      toast(e.message, true)
+      btn.disabled = false
+    }
+  })
+}
+
 /** 页面编辑弹窗：v1 沿用「关于我」的 HTML 源码编辑方式，后续可接入完整编辑器 */
 function pageModal(page) {
   const isNew = !page
@@ -2699,6 +2814,7 @@ async function navigate() {
   const parts = path.split('/')
   const name = parts[0] || 'home'
   clearTimeout(postsSearchTimer)
+  clearTimeout(membersSearchTimer)
   // 离开编辑器：有未保存修改先自动保存再切页（此时编辑器 DOM 还在，能取到最新内容）；
   // 保存失败只提示不阻塞导航，避免把用户困在编辑器里。随后摘除编辑器的全局监听与挂起定时器
   if (currentRoute === 'editor' && name !== 'editor') {
@@ -2723,6 +2839,7 @@ async function navigate() {
     else if (name === 'categories') await viewCategories()
     else if (name === 'pages') await viewPages()
     else if (name === 'trash') await viewTrash()
+    else if (name === 'members') await viewMembers()
     else if (name === 'comments') await viewComments()
     else if (name === 'media') await viewMedia()
     else if (name === 'appearance') await viewAppearance()
