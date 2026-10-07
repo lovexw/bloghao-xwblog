@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import { clientIp, getMemberUser, getSessionUser } from './auth'
+import { clientIp, getCookie, getMemberUser, getSessionUser } from './auth'
 import {
   getCategoryBySlug,
   getMemberById,
@@ -47,6 +47,7 @@ import {
   type WeiboItemView,
 } from './render'
 import { extractOgImage, sanitizeHtml } from './sanitize'
+import { hasValidUnlock, isProtected, PP_COOKIE, PP_CSS, passwordFormHtml, protectedDescription } from './protect'
 import { canRead, normalizeMinTier } from './points'
 import { getTheme, THEMES } from './themes/registry'
 import type { MemberData, RankData } from './themes/registry'
@@ -387,11 +388,18 @@ export async function renderPost(c: C): Promise<Response> {
     )
   }
 
+  // 访问密码墙（src/protect.ts，与会员付费墙的组合语义已对齐契约）：密码墙优先——
+  // 未解锁时一切止步于表单（正文连服务端都不处理）；解锁 Cookie 通过或管理员登录后，再走会员档判定。
+  // 评论区对密码文照常开放（与会员锁文同口径）；?pwerr=1 / ?pwerr=slow 是解锁失败 303 回跳的错误态
+  const pwerr = url.searchParams.get('pwerr')
+  const lockedError = pwerr === 'slow' ? 'slow' : pwerr ? 'wrong' : undefined
+  const pwLocked = !user && isProtected(row) && !(await hasValidUnlock(getCookie(c.req.raw, PP_COOKIE), row.id, row.password_hash || '', Date.now()))
   // 付费墙（契约 A2）：locked 时服务端把正文截成试读段再下发——浏览器拿不到的才真正拿不到。
   // 管理员（作者本人预览）不受限；membersEnabled 关闭时无会员会话，锁文对所有人只出试读段
   const minTier = normalizeMinTier(row.min_tier)
-  const locked = !user && !canRead(minTier, member?.tier)
-  const fullHtml = stripCoverDuplicate(sanitizeHtml(row.content), row.cover)
+  const locked = !pwLocked && !user && !canRead(minTier, member?.tier)
+  // 密码墙时正文一个字节都不出：连 sanitize 都不做，fullHtml 留空（teaser 分支不会被走到）
+  const fullHtml = pwLocked ? '' : stripCoverDuplicate(sanitizeHtml(row.content), row.cover)
   const commentsBlock = commentsHtml({
     comments,
     slug: row.slug,
@@ -408,8 +416,8 @@ export async function renderPost(c: C): Promise<Response> {
     post: {
       slug: row.slug,
       title: row.title,
-      // 封面图与正文首图重复时渲染正文去掉首图，避免一图两现；locked 时只下发试读段
-      contentHtml: locked ? teaserHtml(fullHtml) : fullHtml,
+      // 封面图与正文首图重复时渲染正文去掉首图，避免一图两现；密码墙出解锁表单，locked 只下发试读段
+      contentHtml: pwLocked ? passwordFormHtml(row.slug, { error: lockedError }) : locked ? teaserHtml(fullHtml) : fullHtml,
       summary: row.summary,
       cover: row.cover,
       tags: parseTags(row),
@@ -429,8 +437,10 @@ export async function renderPost(c: C): Promise<Response> {
     share,
   })
   c.header('Cache-Control', 'no-cache')
-  // 分享卡图优先：编辑器生成的 OG 卡图 > 封面图
-  const ogImage = extractOgImage(sanitizeHtml(row.content)) || row.cover || undefined
+  // 分享卡图优先：编辑器生成的 OG 卡图 > 封面图；密码墙时不从正文提取（正文零参与）
+  const ogImage = pwLocked ? row.cover || undefined : extractOgImage(sanitizeHtml(row.content)) || row.cover || undefined
+  // 密码墙的描述走 protectedDescription：作者自填摘要照常公开，绝不把 excerpt(row.content) 泄进 meta / JSON-LD
+  const metaDescription = pwLocked ? protectedDescription(row.summary) : row.summary || excerpt(row.content, 120)
   const base = siteBase(settings, url.origin)
   // 结构化数据（roadmap A3）：schema.org BlogPosting，与 og:image / canonical 同口径；草稿预览（noindex）不出
   const jsonLd = isPreview
@@ -438,7 +448,7 @@ export async function renderPost(c: C): Promise<Response> {
     : articleJsonLd({
         settings,
         title: row.title,
-        description: row.summary || excerpt(row.content, 120),
+        description: metaDescription,
         image: ogImage,
         url: `${base}/post/${row.slug}`,
         base,
@@ -450,9 +460,9 @@ export async function renderPost(c: C): Promise<Response> {
   return c.html(
     page(pageOpts(c, {
       settings,
-      css: theme.css,
+      css: theme.css + (pwLocked ? PP_CSS : ''),
       title: row.title,
-      description: row.summary || excerpt(row.content, 120),
+      description: metaDescription,
       ogImage,
       path: `/post/${row.slug}`,
       origin: url.origin,

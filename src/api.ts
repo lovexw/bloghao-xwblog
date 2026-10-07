@@ -64,6 +64,7 @@ import { SITE_MODE_VALUES, siteBase, toHomePost, type SiteMode } from './render'
 import { sanitizeHtml } from './sanitize'
 import { cleanupUnreferenced, backfillHashes, mergeDuplicate, runAudit } from './audit'
 import { imageExtOf, MAX_REMOTE_IMAGES, MAX_UPLOAD_BYTES, saveUpload, transferImage } from './store'
+import { hashPostPassword } from './protect'
 import { listTrash, restorePostStatus, trashTable, type TrashTable } from './trash'
 import { classifyBrowser, classifyDevice, cleanPath, cleanRef, cleanTitle, cleanVid, getVisitStats, recordVisit } from './stats'
 import { THEMES } from './themes/registry'
@@ -385,6 +386,7 @@ async function readPostPayload(c: { req: { json: () => Promise<unknown> } }) {
     pinned: 'pinned' in b,
     categoryId: 'categoryId' in b,
     minTier: 'minTier' in b,
+    password: 'password' in b,
   }
   const tags = Array.isArray(b.tags)
     ? b.tags
@@ -411,12 +413,20 @@ async function readPostPayload(c: { req: { json: () => Promise<unknown> } }) {
     publishAt,
     // 可见档位（契约 DEVPLAN 附录 A A7）：脏值归一为 all
     minTier: normalizeMinTier(typeof b.minTier === 'string' ? b.minTier : null),
+    // 访问密码（src/protect.ts）：仅在键存在时参与写入；空串 = 解除加密，缺键 = 保持现状。
+    // 明文只在本次请求内存在，落库前即转 PBKDF2，响应里永远只有 hasPassword 布尔
+    password: String(b.password ?? '').slice(0, 64),
     has,
   }
 }
 
 // 服务端插件列表（后台「插件」页展示与启停，见 src/hooks.ts）
 api.get('/admin/server-plugins', (c) => c.json({ plugins: listServerPlugins() }))
+
+/** 后台文章出参：password_hash 永不出接口（明文不可逆，哈希也不该喂给前端），只给 hasPassword 布尔 */
+function postAdminView(row: PostRow & { tagList?: string[]; categoryId?: number | null }) {
+  return { ...row, password_hash: undefined, hasPassword: !!row.password_hash }
+}
 
 api.get('/admin/posts', async (c) => {
   const statusParam = c.req.query('status')
@@ -430,7 +440,7 @@ api.get('/admin/posts', async (c) => {
   const catNames = await categoryNameMap(c.env.DB, r.items.map((p) => p.id))
   return c.json({
     items: r.items.map((p) => ({
-      ...p,
+      ...postAdminView(p),
       content: undefined,
       tagList: parseTags(p),
       categoryName: catNames.get(p.id) || '',
@@ -449,9 +459,11 @@ api.post('/admin/posts', async (c) => {
   const base = p.slug || slugify(title)
   const slug = await uniqueSlug(c.env.DB, base)
   const now = Date.now()
+  // 访问密码：随创建一并写入（空 = 不加密）
+  const passwordHash = p.password ? await hashPostPassword(p.password) : ''
   const res = await c.env.DB.prepare(
-    `INSERT INTO posts (slug, title, content, summary, cover, tags, status, pinned, author_id, published_at, publish_at, min_tier, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO posts (slug, title, content, summary, cover, tags, status, pinned, author_id, published_at, publish_at, min_tier, password_hash, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       slug,
@@ -466,6 +478,7 @@ api.post('/admin/posts', async (c) => {
       p.status === 'published' ? now : null,
       p.status === 'scheduled' ? (p.publishAt ?? null) : null,
       p.minTier,
+      passwordHash,
       now,
       now
     )
@@ -482,7 +495,7 @@ api.post('/admin/posts', async (c) => {
     )
   }
   const categoryId = row ? await getPostCategoryId(c.env.DB, row.id) : null
-  return c.json({ ok: true, post: row ? { ...row, tagList: parseTags(row), categoryId } : null })
+  return c.json({ ok: true, post: row ? { ...postAdminView(row), tagList: parseTags(row), categoryId } : null })
 })
 
 api.get('/admin/posts/:id', async (c) => {
@@ -491,7 +504,7 @@ api.get('/admin/posts/:id', async (c) => {
   const row = await getPostById(c.env.DB, id)
   if (!row) return jsonError('文章不存在', 404)
   const categoryId = await getPostCategoryId(c.env.DB, row.id)
-  return c.json({ post: { ...row, tagList: parseTags(row), categoryId } })
+  return c.json({ post: { ...postAdminView(row), tagList: parseTags(row), categoryId } })
 })
 
 api.put('/admin/posts/:id', async (c) => {
@@ -518,8 +531,10 @@ api.put('/admin/posts/:id', async (c) => {
   // 转发布/草稿时清空；scheduled 但没给时间则保留旧值（自动保存场景）
   const publishedAt = status === 'published' ? (existing.published_at ?? Date.now()) : existing.published_at
   const publishAt = status === 'scheduled' ? (p.publishAt ?? existing.publish_at ?? null) : null
+  // 访问密码：键存在才参与（空串解除、非空设置/更换），缺键保持原值——自动安全永远不误清
+  const passwordHash = p.has.password ? (p.password ? await hashPostPassword(p.password) : '') : existing.password_hash || ''
   await c.env.DB.prepare(
-    `UPDATE posts SET slug = ?, title = ?, content = ?, summary = ?, cover = ?, tags = ?, status = ?, pinned = ?, published_at = ?, publish_at = ?, min_tier = ?, updated_at = ? WHERE id = ?`
+    `UPDATE posts SET slug = ?, title = ?, content = ?, summary = ?, cover = ?, tags = ?, status = ?, pinned = ?, published_at = ?, publish_at = ?, min_tier = ?, password_hash = ?, updated_at = ? WHERE id = ?`
   )
     .bind(
       slug,
@@ -533,6 +548,7 @@ api.put('/admin/posts/:id', async (c) => {
       publishedAt,
       publishAt,
       minTier,
+      passwordHash,
       Date.now(),
       id
     )
@@ -552,7 +568,7 @@ api.put('/admin/posts/:id', async (c) => {
       firePostPublished(c.env, { slug: row.slug, title: row.title, summary: row.summary, via: 'admin' })
     )
   }
-  return c.json({ ok: true, post: row ? { ...row, tagList: parseTags(row), categoryId } : null })
+  return c.json({ ok: true, post: row ? { ...postAdminView(row), tagList: parseTags(row), categoryId } : null })
 })
 
 api.post('/admin/posts/:id/pin', async (c) => {

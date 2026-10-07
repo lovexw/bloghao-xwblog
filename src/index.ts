@@ -3,8 +3,10 @@ import { scheduledBackup } from './backup'
 import { runScheduledPublish } from './scheduler'
 import { api } from './api'
 import { siteClosedResponse } from './closed'
-import { ensureSchema, getSettings, listCategories, listPublishedTags, listPosts, listSitemapPages, listSitemapPosts } from './db'
+import { clientIp, getCookie, rateLimit } from './auth'
+import { ensureSchema, getPostBySlug, getSettings, listCategories, listPublishedTags, listPosts, listSitemapPages, listSitemapPosts } from './db'
 import { renderAbout, renderArchive, renderCategory, renderGuestbook, renderHome, renderLinks, renderMember, renderNotFound, renderPage, renderPost, renderRank, renderSearch, renderWeibo } from './pages'
+import { mergeUnlockCookie, PP_COOKIE, PP_TTL_MS, verifyPostPassword } from './protect'
 import { buildRss, buildSitemap } from './rss'
 import { siteBase } from './render'
 import { purgeVisits } from './stats'
@@ -60,13 +62,37 @@ app.get('/member', renderMember)
 app.get('/rank', renderRank)
 app.get('/search', renderSearch)
 
-// 随机来一篇：从已发布文章里随机挑一篇跳过去
+// 随机来一篇：从已发布文章里随机挑一篇跳过去（加密文章不进随机池——落上去就是一堵密码墙）
 app.get('/random', async (c) => {
-  const row = await c.env.DB.prepare("SELECT slug FROM posts WHERE status = 'published' AND deleted_at IS NULL ORDER BY RANDOM() LIMIT 1").first<{
+  const row = await c.env.DB.prepare("SELECT slug FROM posts WHERE status = 'published' AND deleted_at IS NULL AND (password_hash IS NULL OR password_hash = '') ORDER BY RANDOM() LIMIT 1").first<{
     slug: string
   }>()
   if (!row) return renderNotFound(c)
   return c.redirect(`/post/${encodeURIComponent(row.slug)}`)
+})
+
+/* ---------------- 文章解锁（表单 POST + 303 回跳，无 JS 依赖；表单由 src/protect.ts 渲染） ----------------
+ * 组合语义（与 A 序列付费墙对齐）：密码墙优先——解锁 Cookie 通过前不进会员档判定；
+ * 成功：签 HMAC 解锁 Cookie（key = 该文 password_hash，改密即全端失效）后 303 回文章页；
+ * 失败：303 带 ?pwerr= 回文章页由表单展示错误；目标不存在/未加密一律静默回跳，不透露存在性 */
+app.post('/post/:slug/unlock', async (c) => {
+  // 与 api.ts 同源校验同口径：浏览器跨站表单 POST 必带 Origin，不一致直接拒绝（防 CSRF）
+  const origin = c.req.header('Origin')
+  if (origin && origin !== new URL(c.req.url).origin) return c.text('跨站请求被拒绝', 403)
+  const slug = (c.req.param('slug') || '').slice(0, 100)
+  const back = `/post/${encodeURIComponent(slug)}`
+  const row = await getPostBySlug(c.env.DB, slug)
+  if (!row || row.status !== 'published' || !row.password_hash) return c.redirect(back, 303)
+  // 按文章 + IP 限流：PBKDF2 校验是慢操作，防爆破（10 次 / 10 分钟，与登录同量级）
+  if (!rateLimit(`unlock:${clientIp(c.req.raw)}:${row.id}`, 10, 10 * 60_000)) {
+    return c.redirect(`${back}?pwerr=slow`, 303)
+  }
+  const body = await c.req.parseBody().catch(() => null)
+  const password = body && typeof body === 'object' ? String((body as Record<string, unknown>)['password'] ?? '').slice(0, 64) : ''
+  if (!(await verifyPostPassword(row.password_hash, password))) return c.redirect(`${back}?pwerr=1`, 303)
+  const token = await mergeUnlockCookie(getCookie(c.req.raw, PP_COOKIE), row.id, row.password_hash, Date.now())
+  c.header('Set-Cookie', `${PP_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${PP_TTL_MS / 1000}`)
+  return c.redirect(back, 303)
 })
 
 app.get('/rss.xml', async (c) => {

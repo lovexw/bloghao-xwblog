@@ -482,6 +482,7 @@ export async function mountEditor(root, postId, opts = {}) {
     publish_at: null,
     og_image: '',
     minTier: 'all',
+    hasPassword: false,
   }
   if (postId) {
     const d = await api(`/admin/posts/${postId}`)
@@ -585,6 +586,17 @@ export async function mountEditor(root, postId, opts = {}) {
         <option value="top"${post.minTier === 'top' ? ' selected' : ''}>仅顶级会员</option>
       </select>
       <div style="font-size:12px;color:var(--sub);margin-top:6px;">设为会员可见后，游客与低档位会员只能读到试读部分（正文在服务端截断，不整篇下发）</div>
+
+      <div class="drawer-title">访问密码</div>
+      <div class="switch-row">
+        <div><div class="switch-label">加密访问</div><div class="switch-sub">访客需输入密码才能阅读全文</div></div>
+        <label class="switch"><input type="checkbox" id="ed-locked" ${post.hasPassword ? 'checked' : ''}><span class="track"></span></label>
+      </div>
+      <div id="ed-lock-picker" style="display:none;">
+        <input class="input" type="password" id="ed-password" maxlength="64" autocomplete="new-password"
+          placeholder="${post.hasPassword ? '已设置密码：留空保持不变' : '输入这篇文章的访问密码'}">
+        <div style="font-size:12px;color:var(--sub);margin-top:6px;">${post.hasPassword ? '直接输入新密码即更换；取消勾选并保存即解除加密' : '取消勾选并保存即解除加密；密码只在服务端做单向哈希，不回显'}。与「谁能看」并用时密码墙优先，解锁后再按档位判定</div>
+      </div>
 
       <div class="drawer-title">链接 Slug</div>
       <input class="input" id="ed-slug" value="${esc(post.slug)}" placeholder="留空则根据标题自动生成">
@@ -749,6 +761,15 @@ export async function mountEditor(root, postId, opts = {}) {
 
   function collect(extra = {}) {
     const catVal = document.getElementById('ed-category').value
+    // 访问密码只在「有话可说」时才带上 password 键（服务端缺键即保留）：
+    // 勾选且填了 = 设置/更换；取消勾选且原来加密 = 空串解除；
+    // 勾选但没填 = 保持现状（新建文另由 publish() 拦下要求必填），自动保存永远不会误清密码
+    let passwordPatch = {}
+    if (!lockSwitch.checked) {
+      if (post.hasPassword) passwordPatch = { password: '' }
+    } else if (passwordInput.value) {
+      passwordPatch = { password: passwordInput.value }
+    }
     return {
       title: titleEl.value.trim(),
       content: editor.innerHTML,
@@ -761,6 +782,7 @@ export async function mountEditor(root, postId, opts = {}) {
       slug: document.getElementById('ed-slug').value.trim(),
       status: post.status,
       publishAt: post.publish_at,
+      ...passwordPatch,
       ...extra,
     }
   }
@@ -848,6 +870,12 @@ export async function mountEditor(root, postId, opts = {}) {
     if (!titleEl.value.trim()) {
       titleEl.focus()
       return toast('发布前先取个标题吧', true)
+    }
+    // 新文章开了加密但还没填密码：拦下来要求必填（老文章留空 = 保持原密码，不拦）
+    if (lockSwitch.checked && !passwordInput.value && !post.hasPassword) {
+      lockPicker.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      passwordInput.focus()
+      return toast('开了加密访问就要填一个访问密码', true)
     }
     if (mdMode) {
       // Markdown → HTML 转换失败要明确告知（弱网/接口 500 时不能「点了没反应」）
@@ -1144,6 +1172,19 @@ export async function mountEditor(root, postId, opts = {}) {
   ;['ed-summary', 'ed-slug'].forEach((id) => document.getElementById(id).addEventListener('input', markDirty))
   document.getElementById('ed-min-tier').addEventListener('change', markDirty)
   document.getElementById('ed-pinned').addEventListener('change', markDirty)
+
+  /* ---------- 访问密码（src/protect.ts） ---------- */
+  const lockSwitch = document.getElementById('ed-locked')
+  const lockPicker = document.getElementById('ed-lock-picker')
+  const passwordInput = document.getElementById('ed-password')
+  const syncLockPicker = () => { lockPicker.style.display = lockSwitch.checked ? '' : 'none' }
+  lockSwitch.addEventListener('change', () => {
+    syncLockPicker()
+    if (lockSwitch.checked) passwordInput.focus()
+    markDirty()
+  })
+  passwordInput.addEventListener('input', markDirty)
+  syncLockPicker()
 
   /* ---------- 定时发布 ---------- */
   const scheduleSwitch = document.getElementById('ed-scheduled')

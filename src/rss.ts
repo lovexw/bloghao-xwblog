@@ -10,11 +10,13 @@ export function buildRss(settings: SettingsMap, posts: PostRow[], siteUrl: strin
     .map((p) => {
       // 全文走 content:encoded（标准做法：description 保持摘要轻量，订阅器优先读全文）。
       // 会员专属文章（min_tier 非 all）订阅器等同游客视角：只出试读段 + 引导，防付费墙被 RSS 绕过（契约 A2 防泄漏清单）
-      const locked = !!p.min_tier && p.min_tier !== 'all'
+      // 访问密码文章（password_hash 非空）更严：试读段也不出，description 只用作者自填摘要（src/protect.ts 防泄漏清单）
+      const pwProtected = !!p.password_hash
+      const memberLocked = !!p.min_tier && p.min_tier !== 'all'
       const encoded =
-        fullText && p.content
+        fullText && p.content && !pwProtected
           ? `\n      <content:encoded>${cdata(
-              locked
+              memberLocked
                 ? teaserHtml(sanitizeHtml(p.content)) +
                   '<p>—— 本文为会员专属内容，剩余部分请到站点登录会员后阅读。</p>'
                 : sanitizeHtml(p.content)

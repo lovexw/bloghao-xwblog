@@ -64,6 +64,8 @@ export interface PostRow {
   publish_at: number | null
   /** 可见档位（契约 DEVPLAN 附录 A）：all | member | coffee | top，缺省 all；老库 ALTER 补列前可能缺省 */
   min_tier?: string
+  /** 访问密码（src/protect.ts）：salt:hash（PBKDF2），空 = 未加密；不进任何后台响应 */
+  password_hash?: string
   created_at: number
   updated_at: number
   /** 回收站：非 NULL = 已移入回收站（毫秒），NULL = 存活（src/trash.ts） */

@@ -554,6 +554,7 @@ async function viewPosts() {
         <div class="post-title"><a href="#/editor/${p.id}">${esc(p.title)}</a>
           ${chip}
           ${p.pinned ? '<span class="chip chip-warn">置顶</span>' : ''}
+          ${p.hasPassword ? '<span class="chip chip-gray">🔒 加密</span>' : ''}
         </div>
         <div class="post-meta">
           <span>${p.slug}</span><span>·</span><span>${p.views} 阅读</span><span>·</span><span>${p.likes} 赞</span>
