@@ -252,6 +252,8 @@ export function siteNav(o: {
   pages?: NavPage[]
   active?: string
   memberEnabled?: boolean
+  /** compact 布局（主题逐个试点）：主条只留内容区入口 + 会员药丸压轴，留言板/友情链接/排行榜/随机降级到主题页脚 */
+  compact?: boolean
 }): string {
   const m = o.mode || 'blog-weibo'
   const item = (href: string, label: string, active = false) =>
@@ -278,6 +280,21 @@ export function siteNav(o: {
   // 纯微博：'/' 即微博时间线，导航首位「微博」直达 /weibo（首页 item 退出）；纯博客：去掉「微博」
   const weiboItem = m === 'blog' ? '' : item('/weibo', '微博', o.active === 'weibo' || (m === 'weibo' && o.active === 'home'))
   const homeItem = m === 'weibo' ? '' : item('/', '首页', o.active === 'home')
+  if (o.compact) {
+    // 会员走 accent 药丸（主题 CSS 塑形），与普通链接拉开视觉层级；is-active 口径与普通链接一致
+    const memberPill = o.memberEnabled
+      ? `<a class="${o.cls}-member${o.active === 'member' ? ' is-active' : ''}" href="/member">会员</a>`
+      : ''
+    return `<nav class="${o.cls}" aria-label="站点导航">
+  ${homeItem || weiboItem}
+  ${m === 'weibo' ? '' : weiboItem}
+  ${m === 'weibo' ? '' : item('/archives', '归档', o.active === 'archives')}
+  ${m === 'weibo' ? '' : drop}
+  ${(o.pages || []).map((p) => item(p.href, p.title, o.active === p.key)).join('')}
+  ${item('/about', '关于我', o.active === 'about')}
+  ${memberPill}
+</nav>`
+  }
   return `<nav class="${o.cls}" aria-label="站点导航">
   ${homeItem || weiboItem}
   ${m === 'weibo' ? '' : weiboItem}
