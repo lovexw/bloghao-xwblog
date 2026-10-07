@@ -32,7 +32,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - 图片转存（collect.ts）**只认文件魔数**（`sniffImageExt`），不信任源站 Content-Type / URL 参数；`/images/` 路由必须保留 `X-Content-Type-Options: nosniff`
 - sanitizeHtml 的**透传段统一过 `escapeStrayLt`**：未终结的标签前缀（`<img src=x onerror=…` 无 `>`）与未闭合 `<!--` 曾原样透传，浏览器会把后续页面标记当 img 属性（内联事件复活）或把整页吞进注释——改净化器别拆这个防护
 - RSS/WXR 等 XML 输出的 `xmlEsc`/`cdata`/`rfc822` **统一来自 `src/xml.ts`**（rss.ts / sitemap / export.ts 同源），入口**统一剥控制字符**（XML 1.0 禁 U+0000-0008/000B/000C/000E-001F，CDATA 内同样非法）：一条脏数据曾能打挂整份 feed；`<loc>` 对 siteUrl 过 xmlEsc，slug 进 URL 统一 `encodeURIComponent`——别在文件里再写本地副本
-- 上传常量与落库**统一走 `src/store.ts`**（`MAX_UPLOAD_BYTES`/`IMAGE_MIMES`/`imageExtOf`/`saveUpload`，api 上传、collect 采集转存、external 外部发布共用）；mime 白名单查表**必须走 `imageExtOf`**（内部 `hasOwnProperty`，`IMAGE_MIMES['constructor']` 是继承属性可穿透校验）——改体积/类型口径只改 store.ts 一处
+- 上传常量与落库**统一走 `src/store.ts`**（`MAX_UPLOAD_BYTES`/`IMAGE_MIMES`/`imageExtOf`/`saveUpload`，api 上传、collect 采集转存、external 外部发布共用）；mime 白名单查表**必须走 `imageExtOf`**（内部 `hasOwnProperty`，`IMAGE_MIMES['constructor']` 是继承属性可穿透校验）——改体积/类型口径只改 store.ts 一处。落库前 **EXIF/GPS 元数据剥离**（`src/exif.ts`，saveUpload 内一处生效，新增上传链路自动获得保护）：纯字节手术，**解析异常一律原样返回**（剥离绝不阻塞上传），**JPEG orientation≠1 整体跳过**（剥了浏览器显示会颠倒）；哈希与登记 size 取剥离后字节，媒体查重口径才一致
 - 公开留言三路（文章 /api/public/comments、留言板 /api/public/guestbook、微博评论）共用 api.ts 的 **`publicComment` 公共核心**（限流、蜜罐、作者回复、先审后展、TG 通知与插件广播全在里面）；新增留言形态只写细路由 + opts（文案称呼/归属列/是否收 email/website/通知上下文），别再抄整段流程
 - `:id` 路由参数一律 `api.ts parseId()`（非法 404），别 `Number()` 后直传 D1——NaN bind 是 500
 - PUT /admin/posts/:id 是**缺键即保留**语义（readPostPayload 的 `has` 标志）：列表页状态切换只发 `{status}`，新增部分更新字段要同步 has 列表与 PUT 赋值——冒烟「文章状态切换保留正文」守着，别改回全量覆盖
