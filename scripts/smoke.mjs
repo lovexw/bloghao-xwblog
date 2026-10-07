@@ -496,6 +496,138 @@ try {
     await check('GET', '/api/admin/trash?type=weibo', 200, undefined, { notContains: '冒烟回收站临时微博', headers: twCookie.headers })
   }
 
+  // ── 会员链路（docs/DEVPLAN-2026-10-07.md 契约 v1）：开关门控 → 注册即登录 → 会员身份评论计分
+  // → 榜单/首页挂件 → 付费墙防泄漏（游客试读段/会员全文/RSS 无全文）→ 后台会员管理（拉黑即踢）──
+  console.log('\n▸ 会员链路')
+  const MEMBER_NAME = 'smokemember'
+  const MEMBER_PASS = 'smoke-member-12345'
+  const mJson = (res) => res.json().catch(() => null)
+
+  // 开关默认关：/member /rank 与注册全部 404（契约 A6：关闭 = 全套 404，前台无入口）
+  await check('GET', '/member', 404)
+  await check('GET', '/rank', 404)
+  await check('POST', '/api/member/register', 404, undefined, {
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: MEMBER_NAME, password: MEMBER_PASS }),
+  })
+
+  const mOn = await raw('PUT', '/api/admin/settings', {
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({ membersEnabled: '1' }),
+  })
+  results.push(['会员链路：开启 membersEnabled', mOn.status === 200])
+  console.log(`  ${mOn.status === 200 ? '✓' : '✗'} 会员链路：开启 membersEnabled`)
+
+  // 注册即登录（幂等：上一轮冒烟残留同号时改走登录）
+  let mCookie = ''
+  const mReg = await raw('POST', '/api/member/register', {
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: MEMBER_NAME, password: MEMBER_PASS, link: '' }),
+  })
+  mCookie = (mReg.headers.get('set-cookie') || '').split(';')[0]
+  if (mReg.status === 400) {
+    const mLogin = await raw('POST', '/api/member/login', {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: MEMBER_NAME, password: MEMBER_PASS }),
+    })
+    mCookie = (mLogin.headers.get('set-cookie') || '').split(';')[0]
+    const reOk = mLogin.status === 200 && mCookie.startsWith('xw_member_session=')
+    results.push(['会员链路：同号重复冒烟改登录', reOk])
+    console.log(`  ${reOk ? '✓' : '✗'} 会员链路：同号重复冒烟改登录`)
+  } else {
+    const mRegBody = await mJson(mReg)
+    const regOk = mReg.status === 200 && mRegBody?.ok === true && mCookie.startsWith('xw_member_session=')
+    results.push(['会员链路：注册即登录（签发 xw_member_session）', regOk])
+    console.log(`  ${regOk ? '✓' : '✗'} 会员链路：注册即登录（status ${mReg.status}）`)
+  }
+
+  // 会员中心：会话态出会员卡（而非登录表单）
+  await check('GET', '/member', 200, 'data-member-card', { headers: { Cookie: mCookie } })
+
+  // 会员身份发言（身份来自会话，蜜罐空字段）：即时过审 → 评论积分 +2（注册/登录当日已 +1，合计 ≥3）
+  const mCmt = await raw('POST', '/api/public/comments', {
+    headers: { 'Content-Type': 'application/json', Cookie: mCookie },
+    body: JSON.stringify({ slug: 'smoke-multi-tag', content: '冒烟会员评论：身份来自会话，昵称字段被忽略', link: '' }),
+  })
+  const mCmtBody = await mJson(mCmt)
+  const mCmtOk = mCmt.status === 200 && mCmtBody?.ok === true && mCmtBody?.pending === false
+  results.push(['会员链路：会员身份发言即时过审', mCmtOk])
+  console.log(`  ${mCmtOk ? '✓' : '✗'} 会员链路：会员身份发言即时过审`)
+  await new Promise((r) => setTimeout(r, 800)) // 积分 waitUntil 异步落库，稍等一拍再读
+  const mMeAfter = await mJson(await raw('GET', '/api/member/me', { headers: { Cookie: mCookie } }))
+  const ptsOk = (mMeAfter?.member?.points ?? 0) >= 3
+  results.push(['会员链路：评论计分落账（每日登录+1、评论+2）', ptsOk])
+  console.log(`  ${ptsOk ? '✓' : '✗'} 会员链路：评论计分落账（当前 ${mMeAfter?.member?.points ?? '?'} 分）`)
+
+  // 榜单页与首页挂件：上榜会员可见（只出 active 且积分>0）
+  await check('GET', '/rank', 200, MEMBER_NAME)
+  await check('GET', '/', 200, 'rk-card')
+
+  // 付费墙（契约 A2）：会员专属文——游客只见试读段与遮挡卡，会员可读全文，RSS 不出全文。
+  // 密文必须落在 200 字试读预算之外：开头标记 + 200 字垫充，密文在第二个段落（预算外）
+  const PW_SECRET = 'smoke-paywall-secret-tail-99077'
+  const pwCreate = await raw('POST', '/api/admin/posts', {
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({
+      title: '冒烟：会员专属文章',
+      content: '<p>smoke-paywall-head' + '试'.repeat(200) + `</p><p>${PW_SECRET}</p>`,
+      status: 'published',
+      minTier: 'member',
+    }),
+  })
+  const pwCreated = await mJson(pwCreate)
+  const pwId = pwCreated?.post?.id
+  const pwSlug = pwCreated?.post?.slug
+  const pwOk = pwCreate.status === 200 && !!pwSlug
+  results.push(['付费墙：建会员专属文（minTier=member 落库）', pwOk])
+  console.log(`  ${pwOk ? '✓' : '✗'} 付费墙：建会员专属文（slug ${pwSlug}）`)
+  if (pwSlug) {
+    await check('GET', `/post/${pwSlug}`, 200, 'smoke-paywall-head')
+    await check('GET', `/post/${pwSlug}`, 200, 'paywall')
+    await check('GET', `/post/${pwSlug}`, 200, undefined, { notContains: PW_SECRET })
+    await check('GET', `/post/${pwSlug}`, 200, PW_SECRET, { headers: { Cookie: mCookie } })
+    await check('GET', `/post/${pwSlug}`, 200, PW_SECRET, { headers: { Cookie: cookie } }) // 管理员预览不受限
+    await check('GET', '/rss.xml', 200, undefined, { notContains: PW_SECRET })
+    // 清理：软删 + 彻底删除（不碰夹具，可重复运行）
+    await raw('DELETE', `/api/admin/posts/${pwId}`, { headers: { Cookie: cookie } })
+    await raw('DELETE', `/api/admin/trash/post/${pwId}`, { headers: { Cookie: cookie } })
+  }
+
+  // 后台会员管理：搜索 → 拉黑（会话即刻失效 + 登录 403 banned）→ 恢复 active（下轮可复用）
+  const mList = await mJson(await raw('GET', `/api/admin/members?q=${MEMBER_NAME}`, { headers: { Cookie: cookie } }))
+  const mId = mList?.items?.[0]?.id
+  results.push(['会员管理：列表搜索到会员', !!mId])
+  console.log(`  ${mId ? '✓' : '✗'} 会员管理：列表搜索到会员（id ${mId}）`)
+  if (mId) {
+    const mBan = await raw('PUT', `/api/admin/members/${mId}`, {
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ status: 'banned' }),
+    })
+    const mMeBanned = await mJson(await raw('GET', '/api/member/me', { headers: { Cookie: mCookie } }))
+    const bannedOk = mBan.status === 200 && mMeBanned?.member === null
+    results.push(['会员管理：拉黑后会话即失效', bannedOk])
+    console.log(`  ${bannedOk ? '✓' : '✗'} 会员管理：拉黑后会话即失效`)
+    await check('POST', '/api/member/login', 403, 'banned', {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: MEMBER_NAME, password: MEMBER_PASS }),
+    })
+    const mUnban = await raw('PUT', `/api/admin/members/${mId}`, {
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ status: 'active' }),
+    })
+    results.push(['会员管理：恢复 active', mUnban.status === 200])
+    console.log(`  ${mUnban.status === 200 ? '✓' : '✗'} 会员管理：恢复 active`)
+  }
+
+  // 收尾关回开关（默认关口径），下轮冒烟从同一状态开始
+  const mOff = await raw('PUT', '/api/admin/settings', {
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({ membersEnabled: '0' }),
+  })
+  await check('GET', '/member', 404)
+  results.push(['会员链路：关闭开关复原', mOff.status === 200])
+  console.log(`  ${mOff.status === 200 ? '✓' : '✗'} 会员链路：关闭开关复原`)
+
   // ── 文章访问密码（src/protect.ts）：密码墙 → 防泄漏 → 解锁 → 解除 全链路 ──
   console.log('\n▸ 文章访问密码链路')
   const PP_SECRET = '加密正文密语 smoke-secret-body-99031'

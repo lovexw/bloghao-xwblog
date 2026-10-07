@@ -1,7 +1,8 @@
 import type { Context } from 'hono'
-import { clientIp, getSessionUser } from './auth'
+import { clientIp, getMemberUser, getSessionUser } from './auth'
 import {
   getCategoryBySlug,
+  getMemberById,
   getPage,
   getPostBySlug,
   getPostCategoryId,
@@ -15,6 +16,7 @@ import {
   listPages,
   listPosts,
   listPublishedTags,
+  listRankTop,
   listWeibo,
   listWeiboTopics,
   locateWeiboPage,
@@ -24,6 +26,7 @@ import {
   weiboCommentCountMap,
   weiboImageList,
   type PostSort,
+  type RankMemberRow,
 } from './db'
 import {
   articleJsonLd,
@@ -40,14 +43,16 @@ import {
   stripCoverDuplicate,
   type CategoryLink,
   type NavPage,
+  type RankEntryView,
   type WeiboItemView,
 } from './render'
 import { extractOgImage, sanitizeHtml } from './sanitize'
+import { canRead, normalizeMinTier } from './points'
 import { getTheme, THEMES } from './themes/registry'
 import type { MemberData, RankData } from './themes/registry'
 import type { Env, PostRow, SessionUser, SettingsMap } from './types'
 import { packMatrix, qrMatrix } from './qrcode'
-import { clampInt, esc, excerpt, isDemo, readingMinutes } from './utils'
+import { clampInt, esc, excerpt, isDemo, readingMinutes, teaserHtml } from './utils'
 
 type C = Context<{ Bindings: Env; Variables: { user: SessionUser | null } }>
 
@@ -184,7 +189,7 @@ async function renderList(
     sort === 'random' ? clampInt(url.searchParams.get('seed'), 1, 999999999, 0) || 1 + Math.floor(Math.random() * 999999998) : 0
 
   // 搜索模式不分页，直接取前 50 条
-  const [r, tags, categories, pages, category, wb, wbFeedRaw, feedUser, otd] = await Promise.all([    listPosts(c.env.DB, {
+  const [r, tags, categories, pages, category, wb, wbFeedRaw, feedUser, otd, rankSession] = await Promise.all([    listPosts(c.env.DB, {
       status: 'published',
       tag: opts.mode === 'home' ? tag : undefined,
       q: opts.mode === 'search' ? q || undefined : undefined,
@@ -209,6 +214,8 @@ async function renderList(
     opts.mode === 'home' && mode === 'weibo-blog' ? getSessionUser(c.env.DB, c.req.raw) : Promise.resolve(null),
     // 历史上的今天：仅首页第一页且未带筛选时查（有内部按天缓存）
     opts.mode === 'home' && pageNum === 1 && !tag && !q ? listOnThisDay(c.env.DB) : Promise.resolve(null),
+    // 会员会话（首页排行挂件的 isMe 标记用；未开启时省一次查询，无 Cookie 时是纯内存快路径）
+    membersEnabled(settings) ? getMemberUser(c.env.DB, c.req.raw) : Promise.resolve(null),
   ])
   if (opts.mode === 'category' && !category) return renderNotFound(c)
   // 页码跳转可能输入越界，回到最后一页重新取一次
@@ -268,6 +275,12 @@ async function renderList(
     }
   }
 
+  // 首页会员排行挂件（契约 A1/A4）：仅首页第一页且未带筛选时取数，其余页面/翻页不渲染
+  const rank =
+    opts.mode === 'home' && pageNum === 1 && !tag && !q && membersEnabled(settings)
+      ? await rankEntries(c, settings, rankSession?.id ?? null)
+      : null
+
   let notice = ''
   let emptyText = ''
   let title = ''
@@ -316,6 +329,7 @@ async function renderList(
     weiboFeed,
     // 纯博客模式：历史上的今天只保留文章条目（微博模块已隐藏）
     onThisDay: mode === 'blog' && otd ? otd.filter((i) => i.kind === 'post') : otd,
+    rank,
   })
   c.header('Cache-Control', 'no-cache')
   return c.html(
@@ -347,7 +361,7 @@ export async function renderPost(c: C): Promise<Response> {
     if (!isPreview || !user) return renderNotFound(c)
   }
 
-  const [comments, related, categories, categoryId, user, tags, pages, commentTotal] = await Promise.all([
+  const [comments, related, categories, categoryId, user, tags, pages, commentTotal, member] = await Promise.all([
     listApprovedComments(c.env.DB, row.id),
     relatedPosts(c.env.DB, row),
     navCategories(c),
@@ -357,6 +371,8 @@ export async function renderPost(c: C): Promise<Response> {
     navPages(c),
     // 计数独立取（列表 LIMIT 500，超限后 length 会少报，JSON-LD commentCount 同口径）
     commentCount(c, row.id),
+    // 会员会话（付费墙可见判定用；membersEnabled 关闭时不查——关着的时候锁文对所有人生效）
+    membersEnabled(settings) ? getMemberUser(c.env.DB, c.req.raw) : Promise.resolve(null),
   ])
   const categoryRow = categoryId ? await c.env.DB.prepare('SELECT name, slug FROM categories WHERE id = ?').bind(categoryId).first<{ name: string; slug: string }>() : null
 
@@ -371,6 +387,11 @@ export async function renderPost(c: C): Promise<Response> {
     )
   }
 
+  // 付费墙（契约 A2）：locked 时服务端把正文截成试读段再下发——浏览器拿不到的才真正拿不到。
+  // 管理员（作者本人预览）不受限；membersEnabled 关闭时无会员会话，锁文对所有人只出试读段
+  const minTier = normalizeMinTier(row.min_tier)
+  const locked = !user && !canRead(minTier, member?.tier)
+  const fullHtml = stripCoverDuplicate(sanitizeHtml(row.content), row.cover)
   const commentsBlock = commentsHtml({
     comments,
     slug: row.slug,
@@ -387,8 +408,8 @@ export async function renderPost(c: C): Promise<Response> {
     post: {
       slug: row.slug,
       title: row.title,
-      // 封面图与正文首图重复时渲染正文去掉首图，避免一图两现
-      contentHtml: stripCoverDuplicate(sanitizeHtml(row.content), row.cover),
+      // 封面图与正文首图重复时渲染正文去掉首图，避免一图两现；locked 时只下发试读段
+      contentHtml: locked ? teaserHtml(fullHtml) : fullHtml,
       summary: row.summary,
       cover: row.cover,
       tags: parseTags(row),
@@ -396,6 +417,8 @@ export async function renderPost(c: C): Promise<Response> {
       views: row.views,
       likes: row.likes,
       readingMinutes: readingMinutes(row.content),
+      minTier,
+      locked,
     },
     category: categoryRow ? { name: categoryRow.name, slug: categoryRow.slug } : null,
     categories,
@@ -733,16 +756,51 @@ function membersEnabled(settings: { membersEnabled?: string }): boolean {
   return settings.membersEnabled === '1'
 }
 
-/** 会员中心页（/member）：未登录渲染登录/注册双表单，已登录渲染会员中心卡。
- *  TODO(A)：member 会话解析待会员服务端落地——`await getMemberUser(c.env.DB, c.req.raw)` 替换下面的 null；
- *  登录/注册/退出的 JSON API 见 DEVPLAN-2026-10-07 附录 A5 */
+/** 榜单行 → 视图条目：rank 服务端排好（1 起），isMe 标记当前访客本人行（契约 A1） */
+function toRankEntry(m: RankMemberRow, rank: number, sessionId: number | null): RankEntryView {
+  return {
+    rank,
+    nickname: (m.display_name || m.username).slice(0, 24),
+    tier: m.tier,
+    points: m.points,
+    isMe: sessionId !== null && sessionId === m.id,
+  }
+}
+
+/** 排行榜取数口径（/rank 页与首页挂件共用）：rankTopN 兜底 1-50 */
+async function rankEntries(c: C, settings: SettingsMap, sessionId: number | null): Promise<RankEntryView[]> {
+  const limit = clampInt(settings.rankTopN, 1, 50, 10)
+  const rows = await listRankTop(c.env.DB, limit)
+  return rows.map((m, i) => toRankEntry(m, i + 1, sessionId))
+}
+
+/** 会员中心页（/member）：未登录渲染登录/注册双表单，已登录渲染会员中心卡 */
 export async function renderMember(c: C): Promise<Response> {
   baseHeaders(c)
   const settings = await getSettings(c.env.DB)
   if (!membersEnabled(settings)) return renderNotFound(c)
   const theme = getTheme(settings.theme)
-  const [categories, tags, pages] = await Promise.all([navCategories(c), navTags(c), navPages(c)])
-  const member = null
+  const [categories, tags, pages, session] = await Promise.all([
+    navCategories(c),
+    navTags(c),
+    navPages(c),
+    getMemberUser(c.env.DB, c.req.raw),
+  ])
+  let member: MemberData['member'] = null
+  if (session) {
+    // 会话只有昵称/积分口径，email 等自见字段回表补齐（getMemberUser 已挡 banned）
+    const row = await getMemberById(c.env.DB, session.id)
+    if (row) {
+      member = {
+        nickname: (row.display_name || row.username).slice(0, 24),
+        tier: row.tier,
+        points: row.points,
+        email: row.email,
+        avatarUrl: row.avatar || undefined,
+        createdAt: row.created_at,
+      }
+    }
+  }
   const html = themeMemberHtml(theme, { settings, categories, tags, pages, navActive: 'member', member })
   c.header('Cache-Control', 'no-cache')
   return c.html(
@@ -758,16 +816,29 @@ export async function renderMember(c: C): Promise<Response> {
   )
 }
 
-/** 排行榜页（/rank）：会员积分总榜（总榜起步，周榜/天榜待定）。
- *  TODO(A)：榜单查询待会员服务端落地——按 points 倒序、过滤选择隐藏的会员、标记 isMe 替换下面的空数组 */
+/** 排行榜页（/rank）：会员积分总榜（总榜起步，周榜/天榜待定）；登录访客本人行 isMe 高亮 */
 export async function renderRank(c: C): Promise<Response> {
   baseHeaders(c)
   const settings = await getSettings(c.env.DB)
   if (!membersEnabled(settings)) return renderNotFound(c)
   const theme = getTheme(settings.theme)
-  const [categories, tags, pages] = await Promise.all([navCategories(c), navTags(c), navPages(c)])
-  const entries: RankData['entries'] = []
-  const html = themeRankHtml(theme, { settings, categories, tags, pages, navActive: 'rank', entries, total: entries.length, me: null })
+  const [categories, tags, pages, session] = await Promise.all([
+    navCategories(c),
+    navTags(c),
+    navPages(c),
+    getMemberUser(c.env.DB, c.req.raw),
+  ])
+  const entries = await rankEntries(c, settings, session?.id ?? null)
+  const html = themeRankHtml(theme, {
+    settings,
+    categories,
+    tags,
+    pages,
+    navActive: 'rank',
+    entries,
+    total: entries.length,
+    me: entries.find((e) => e.isMe) ?? null,
+  })
   c.header('Cache-Control', 'no-cache')
   return c.html(
     page(pageOpts(c, {

@@ -175,3 +175,36 @@ export async function sha256Hex(buf: ArrayBuffer): Promise<string> {
   const d = await crypto.subtle.digest('SHA-256', buf)
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
+
+/** 付费墙试读段：按可见文本长度截断 HTML——标签原样保留、结尾闭合未关标签。
+ *  截断在服务端完成是付费墙的安全边界：浏览器拿不到的正文才真正拿不到（契约 DEVPLAN-2026-10-07 附录 A A2） */
+export function teaserHtml(html: string, limit = 200): string {
+  let seen = 0
+  let out = ''
+  const stack: string[] = []
+  const VOID = new Set(['br', 'img', 'hr', 'meta', 'link', 'input', 'source', 'wbr'])
+  for (const tok of html.match(/<[^>]+>|[^<]+/g) ?? []) {
+    if (tok[0] === '<') {
+      const close = /^<\/([a-zA-Z0-9-]+)\s*>$/.exec(tok)
+      if (close) {
+        if (stack[stack.length - 1] === close[1].toLowerCase()) stack.pop()
+      } else if (!/\/>$/.test(tok)) {
+        const open = /^<([a-zA-Z0-9-]+)/.exec(tok)
+        const name = open?.[1].toLowerCase()
+        if (name && !VOID.has(name)) stack.push(name)
+      }
+      out += tok
+      continue
+    }
+    const remain = limit - seen
+    if (tok.length > remain) {
+      out += tok.slice(0, remain)
+      break
+    }
+    seen += tok.length
+    out += tok
+    if (seen >= limit) break
+  }
+  while (stack.length) out += `</${stack.pop()}>`
+  return out
+}

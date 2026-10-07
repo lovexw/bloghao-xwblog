@@ -61,6 +61,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - 积分数值与单日上限**只改 `src/points.ts` 常量表一处**（2026-10-07 拍板：评论 +2 每日上限 10 条、每日登录 +1）；记分必须走 `awardPoints`（自带北京时间日上限与 hasOwnProperty reason 校验），评论积分**过审才计**且同一评论只计一次（`awardCommentPoints` 按 ref_id 去重——即时通过在发言当下、先审后展挂到后台「通过」动作，两路共用防重复）
 - `/api/member/*` 受 settings `membersEnabled` 门控（关 = 404）；封禁（status='banned'）后 `getMemberUser` 查询层即视为未登录，后台拉黑时同时清空该会员全部会话；`rankTopN` 由 `clampInt(1,50)` 兜底
 - 评论三路会员发言走 publicComment 公共核心的 member 分支：身份来自会话，**表单昵称/邮箱/网站字段一律忽略**；会员暂不可回复楼中楼（与游客同口径，放开属契约变更）；评论列表（SSR 文章/留言板 + 微博 JSON）经 LEFT JOIN members 带出 `member_name`/`member_tier` 徽标数据，渲染消费在 B 序列（契约 A3）
+- 付费墙的**安全边界是服务端截断**（`utils.ts teaserHtml`，200 可见字符预算、闭合未关标签）：locked 文章浏览器拿到的就是残文，改渲染层永远补不回安全。可见判定统一 `points.ts canRead/normalizeMinTier`（脏 min_tier 归 all，宁漏勿锁死）；**新公开面（新增导出/接口/主题字段）必须过防泄漏清单**——已过滤：RSS content:encoded（locked 只出试读段+引导）、/api/public/posts（只出 summary）、搜索/卡片摘要（≤120 字摘要口径）；搜索 LIKE 可命中标题属既定取舍（契约 A2 会签记录）
 - schema 三张会员表已登记备份（members / member_points_log 进，member_sessions 与 sessions 同理属临时凭证不进）；排行查询只出 active 且积分 > 0；A/B 双机并行期间文件所有权与契约变更纪律照 DEVPLAN 公约，越界改动前先对齐
 
 **后台交互（public/admin/，无自动化测试，靠约定）**
