@@ -59,9 +59,10 @@ import { clampInt, esc, excerpt, isDemo, readingMinutes, teaserHtml } from './ut
 
 type C = Context<{ Bindings: Env; Variables: { user: SessionUser | null } }>
 
-/** 演示站包装：所有公开页强制 noindex（内容是每两小时重置的种子数据，不该进搜索引擎索引）；生产模式原样透传 */
+/** 演示站包装：所有公开页强制 noindex（内容是每两小时重置的种子数据，不该进搜索引擎索引），
+ *  并公示「演示体验版」横幅（render.ts page() 顶部注入）；生产模式原样透传 */
 function pageOpts(c: C, o: Parameters<typeof page>[0]): Parameters<typeof page>[0] {
-  return isDemo(c.env) ? { ...o, noindex: true } : o
+  return isDemo(c.env) ? { ...o, noindex: true, demo: true } : o
 }
 
 const CSP =

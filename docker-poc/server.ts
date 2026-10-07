@@ -19,6 +19,7 @@ import { Readable } from 'node:stream'
 
 import xwblog from '../src/index'
 import { ensureSchema } from '../src/db'
+import { DEMO_RESET_CRON } from '../src/demo-content'
 import { createD1 } from './shims/d1'
 import { createR2Disk } from './shims/r2disk'
 import { createR2S3, signAuthorization } from './shims/r2s3'
@@ -326,11 +327,15 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, tenan
 }
 
 let firedBackupDay = ''
+let firedDemoResetHour = ''
 const CRON_TICK_MS = 60_000
 
 /**
  * cron：与 wrangler triggers.crons 同口径——每分钟扫定时发布；
- * 北京时间 00:30（UTC 16:30）那一分钟换成备份 cron，备份/visit 清理/回收站滚动一起跑。
+ * 北京时间 00:30（UTC 16:30）那一分钟换成备份 cron，备份/visit 清理/回收站滚动一起跑；
+ * 演示租户的重置 cron（DEMO_RESET_CRON，每 2 小时的第 23 分钟）清库重灌种子数据——
+ * wrangler 按 UTC 评估 cron 表达式，这里用 UTC 时钟判断窗口，controller.cron 原样传给
+ * src/index.ts 的 scheduled 分发。
  */
 function startCron(tenants: Map<string, Tenant>) {
   const timer = setInterval(async () => {
@@ -341,7 +346,18 @@ function startCron(tenants: Map<string, Tenant>) {
       if (firedBackupDay === day) return // 同一天只触发一次，防 tick 漂移双发
       firedBackupDay = day
     }
-    const controller = { cron: backupWindow ? '30 16 * * *' : '* * * * *', scheduledTime: now.getTime() }
+    // demo 重置窗口：分钟位 23 + 偶数小时（'23 */2 * * *' 的 UTC 语义）；小时粒度记账防双发
+    const resetWindow =
+      !backupWindow && now.getUTCMinutes() === 23 && now.getUTCHours() % 2 === 0
+    const hourKey = now.toISOString().slice(0, 13)
+    if (resetWindow) {
+      if (firedDemoResetHour === hourKey) return
+      firedDemoResetHour = hourKey
+    }
+    const controller = {
+      cron: backupWindow ? '30 16 * * *' : resetWindow ? DEMO_RESET_CRON : '* * * * *',
+      scheduledTime: now.getTime(),
+    }
     for (const t of tenants.values()) {
       try {
         await xwblog.scheduled(controller as never, t.env as never, execCtx)

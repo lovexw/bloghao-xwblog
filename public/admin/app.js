@@ -180,7 +180,7 @@ function authView(mode) {
   const isSetup = mode === 'setup'
   // 演示站：登录页公示账号密码并自动填充（数据每 2 小时重置，随便玩）
   const demoBox = !isSetup && state.demo
-    ? `<div class="auth-demo">🎓 这是<b>演示站</b>，数据每 2 小时自动重置，随便看、随便改。<br>账号 <code>demo</code> · 密码 <code>demo1234</code>（已自动填好）</div>`
+    ? `<div class="auth-demo">🎓 这是<b>演示体验版</b>（非最新正式版，仅供测试体验），数据每 2 小时自动清空重置，随便看、随便改。<br>账号 <code>demo</code> · 密码 <code>demo1234</code>（已自动填好）</div>`
     : ''
   $app.innerHTML = `<div class="auth-wrap"><div class="auth-card">
     <div class="auth-logo">
@@ -261,7 +261,7 @@ async function shellView(active, contentHTML) {
   const moreDot = MENU.reduce((sum, m) => (m.badge && !MOBILE_TAB_IDS.includes(m.id) ? sum + m.badge() : sum), 0)
   $app.innerHTML = `<div class="shell${sideMini ? ' side-mini' : ''}">
     <aside class="sidebar">
-      <div class="side-logo"><img src="/favicon.svg" alt=""><span>博客号</span>${state.demo ? '<span class="demo-badge" title="演示站：数据每 2 小时重置">演示</span>' : ''}<button class="side-fold" id="btn-side-fold" title="${sideMini ? '展开侧栏' : '收起侧栏'}">${I.fold}</button></div>
+      <div class="side-logo"><img src="/favicon.svg" alt=""><span>博客号</span>${state.demo ? '<span class="demo-badge" title="演示体验版：非最新正式版，数据每 2 小时重置">演示</span>' : ''}<button class="side-fold" id="btn-side-fold" title="${sideMini ? '展开侧栏' : '收起侧栏'}">${I.fold}</button></div>
       <nav class="side-nav">${sideNavHtml(active)}</nav>
       <nav class="tab-bar">
         ${barItems.map((m) => sideItemHtml(m, active)).join('')}

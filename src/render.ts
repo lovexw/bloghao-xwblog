@@ -18,6 +18,8 @@ export interface ThemePageOptions {
   origin?: string
   /** 工具型页面（搜索、草稿预览）：要求搜索引擎不收录 */
   noindex?: boolean
+  /** 演示体验版（DEMO_MODE）：所有公开页顶部公示站点性质横幅，见 demoBannerHtml() */
+  demo?: boolean
   /** 结构化数据（JSON-LD）：对象序列化进 <script type="application/ld+json">，文章页传 articleJsonLd() 的产物 */
   jsonLd?: Record<string, unknown>
 }
@@ -93,11 +95,18 @@ ${base ? `<link rel="alternate" type="application/rss+xml" title="${esc(siteName
 ${grayscaleStyle(o.settings)}
 </head>
 <body${o.preview ? ' data-preview="1"' : ''}>
+${o.demo ? demoBannerHtml() : ''}
 ${o.body}
 <script src="/site.js" defer></script>
 ${renderFooterHtml(o.settings)}
 </body>
 </html>`
+}
+
+/** 演示体验版横幅（DEMO_MODE 专属，所有公开页顶部公示站点性质）：体验版、非最新正式版、
+ *  仅供测试体验、数据定期清空重置。内联样式避免依赖六套主题各自补 CSS。 */
+function demoBannerHtml(): string {
+  return `<div style="background:#b45309;color:#fff;font-size:13px;line-height:1.6;text-align:center;padding:7px 14px;">🎓 演示体验版（非最新正式版）· 仅供测试体验 · 数据每 2 小时自动清空重置</div>`
 }
 
 function absUrl(siteUrl: string, path: string): string {
