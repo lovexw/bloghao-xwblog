@@ -4,6 +4,8 @@
 > 独立资源上，每 2 小时自动重置——与生产站完全隔离，互不影响。
 > 站点性质全站公示（顶部横幅 / 登录页 / 关于页）：**演示体验版 · 非最新正式版 · 仅供测试体验 ·
 > 数据每 2 小时自动清空重置**。
+>
+> 官方演示站地址：**https://demo.bloghao.com**（官网 bloghao.com 的演示入口都指向这里）
 
 ## 它是什么
 
@@ -53,8 +55,9 @@ npm run deploy:demo
 ```
 
 部署完成后命令行会给出 `https://xwblog-demo.<你的子域>.workers.dev` 地址，**打开即自动播种**，
-无需任何初始化命令。想绑独立域名（如 `demo.bloghao.com`）：Cloudflare 后台该 Worker 的
-Settings → Domains & Routes 添加 Custom Domain 即可。
+无需任何初始化命令。`wrangler.demo.jsonc` 里已声明 `routes`（官方站绑 `demo.bloghao.com`），
+部署时自动完成 Custom Domain 绑定与证书签发；自建演示站不需要这个域名的话，删掉 `routes`
+一条再部署即可，或在 Cloudflare 后台该 Worker 的 Settings → Domains & Routes 手动管理。
 
 > 配额说明：演示站与生产站共享账号的免费额度（Workers 10 万请求/天、D1 5M 行读取/天），
 > 演示站流量很小可忽略；若想完全隔离配额，用另一个免费 Cloudflare 账号 `wrangler login` 后

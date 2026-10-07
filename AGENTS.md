@@ -15,6 +15,7 @@
 
 - 正式地址：**https://blog.xiaowuleyi.com**（已绑定到本仓库的 Worker），后台 `/admin/`
 - 官网：**https://bloghao.com**（Cloudflare Pages 项目 `bloghao`，源码在仓库 `website/`——纯静态无构建，与博客系统运行无关；Pages 默认域 bloghao.pages.dev）
+- 演示站：**https://demo.bloghao.com**（Worker `xwblog-demo`，wrangler.demo.jsonc 部署并通过 routes 绑定该域名，DEMO_MODE 门控，机制见 docs/DEMO.md；官网导航 / Hero / 快速开始 / 页脚的演示入口都指向这里）
 - Cloudflare 资源：Worker `xwblog`、D1 `xwblog-db`、R2 `xwblog-images`（binding 均见 wrangler.jsonc）
 - 使用手册 docs/GUIDE.md、部署教程 docs/DEPLOY.md——涉及访问地址、备份命令时写上面的正式域名与资源名
 

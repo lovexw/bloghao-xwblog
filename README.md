@@ -8,6 +8,8 @@
 
 **在线示例：[https://blog.xiaowuleyi.com](https://blog.xiaowuleyi.com)**（作者小吴乐意自己的博客，由本系统驱动）
 
+**演示体验站：[https://demo.bloghao.com](https://demo.bloghao.com)** —— 动手部署前可以先去转一圈：预置全年仿真数据、会员 / 付费墙 / 加密文章全开着，随便折腾，每 2 小时自动重置；后台账号 `demo` / `demo1234`，打开登录页就已自动填好（机制见 [docs/DEMO.md](docs/DEMO.md)）。
+
 [![Version](https://img.shields.io/github/package-json/v/lovexw/bloghao?color=1a73e8)](https://github.com/lovexw/bloghao/blob/main/CHANGELOG.md) [![License](https://img.shields.io/badge/License-MIT-07c160) ![Cloudflare](https://img.shields.io/badge/Cloudflare-Workers%20%C2%B7%20D1%20%C2%B7%20R2-F38020) ![No Framework](https://img.shields.io/badge/%E5%89%8D%E5%90%8E%E7%AB%AF-%E6%97%A0%E6%A1%86%E6%9E%B6%E4%BE%9D%E8%B5%96-1a1a1a)](https://github.com/lovexw/bloghao)
 
 <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/lovexw/bloghao"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare" height="36"></a>
