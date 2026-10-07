@@ -16,6 +16,9 @@ const dbTs = readFileSync(join(ROOT, 'src/db.ts'), 'utf8')
 /** 建表列体 → 列名集合（先剥 -- 注释再按逗号拆，注释里的逗号不能干扰拆分） */
 function parseCols(body: string): Set<string> {
   const clean = body
+    // Windows 检出（core.autocrlf=true）会把 schema.sql 变 CRLF：`.` 不匹配 \r、$ 只认串尾，
+    // 注释剥离会整体失效（列名被解析成 "--"），先归一再按行剥注释
+    .replace(/\r\n/g, '\n')
     .split('\n')
     .map((l) => l.replace(/--.*$/, ''))
     .join('\n')
