@@ -782,6 +782,37 @@ const SCHEMA_TABLES = [
     br      TEXT    NOT NULL DEFAULT '',
     country TEXT    NOT NULL DEFAULT ''
   )`,
+  // FTS5 全文索引（src/fts.ts，ROADMAP B4）：external content 挂原表省一份正文存储，
+  // trigram 分词适配中文。虚表可以进 schema.sql（单条无分号体）；触发器只能在这里挂——
+  // demo.ts 的 ensureTables 按分号朴素切分 SQL，切不开 CREATE TRIGGER 的 BEGIN...END 体，
+  // 而 ensureSchema 是所有部署形态（生产 / 本地 / 演示）每次冷启动都会跑的通用迁移路径。
+  // 虚表是可重建的派生索引：不进 BACKUP_TABLES，恢复备份后靠 ftsSeeded 记账位触发全量重建。
+  `CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(title, summary, content, tokenize='trigram', content='posts', content_rowid='id')`,
+  `CREATE VIRTUAL TABLE IF NOT EXISTS weibo_fts USING fts5(content, tokenize='trigram', content='weibo', content_rowid='id')`,
+]
+// FTS5 增量同步触发器（src/fts.ts）：UPDATE 用 OF 列清单收紧——views/likes 的自增高频写
+// 不得触发重建索引行；posts 的 title/summary/content 与 weibo 的 content 是仅有的索引列
+const SCHEMA_TRIGGERS = [
+  `CREATE TRIGGER IF NOT EXISTS posts_fts_ins AFTER INSERT ON posts BEGIN
+    INSERT INTO posts_fts(rowid, title, summary, content) VALUES (new.id, new.title, new.summary, new.content);
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS posts_fts_del AFTER DELETE ON posts BEGIN
+    INSERT INTO posts_fts(posts_fts, rowid, title, summary, content) VALUES ('delete', old.id, old.title, old.summary, old.content);
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS posts_fts_upd AFTER UPDATE OF title, summary, content ON posts BEGIN
+    INSERT INTO posts_fts(posts_fts, rowid, title, summary, content) VALUES ('delete', old.id, old.title, old.summary, old.content);
+    INSERT INTO posts_fts(rowid, title, summary, content) VALUES (new.id, new.title, new.summary, new.content);
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS weibo_fts_ins AFTER INSERT ON weibo BEGIN
+    INSERT INTO weibo_fts(rowid, content) VALUES (new.id, new.content);
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS weibo_fts_del AFTER DELETE ON weibo BEGIN
+    INSERT INTO weibo_fts(weibo_fts, rowid, content) VALUES ('delete', old.id, old.content);
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS weibo_fts_upd AFTER UPDATE OF content ON weibo BEGIN
+    INSERT INTO weibo_fts(weibo_fts, rowid, content) VALUES ('delete', old.id, old.content);
+    INSERT INTO weibo_fts(rowid, content) VALUES (new.id, new.content);
+  END`,
 ]
 const SCHEMA_INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_comments_weibo ON comments (weibo_id, created_at)',
@@ -824,6 +855,30 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       await db.prepare(ddl).run()
     } catch {
       /* 索引已存在 */
+    }
+  }
+  for (const ddl of SCHEMA_TRIGGERS) {
+    try {
+      await db.prepare(ddl).run()
+    } catch {
+      /* 触发器已存在 */
+    }
+  }
+  // FTS 全量重建记账（src/fts.ts）：external content 虚表建出来时倒排索引是空的，
+  // 存量数据必须 rebuild 一次才可搜。settings 记账位保证只跑一回（幂等：备份恢复、
+  // demo 清库重灌后 key 随 settings 消失，下一次冷启动会自动补重建）。触发器要在场才能
+  // 保证增量，所以这步必须排在 SCHEMA_TRIGGERS 之后。
+  const ftsSeeded = await db.prepare("SELECT value FROM settings WHERE key = 'ftsSeeded'").first<{ value: string }>()
+  if (!ftsSeeded) {
+    try {
+      await db.prepare("INSERT INTO posts_fts(posts_fts) VALUES('rebuild')").run()
+      await db.prepare("INSERT INTO weibo_fts(weibo_fts) VALUES('rebuild')").run()
+      await db
+        .prepare("INSERT INTO settings (key, value) VALUES ('ftsSeeded', '1') ON CONFLICT(key) DO UPDATE SET value = '1'")
+        .bind()
+        .run()
+    } catch {
+      /* 虚表尚未就绪等异常：不记账，下次冷启动重试 */
     }
   }
   // 「关于我」→ 页面系统一次性迁移：settings 记账位防重复播种（页面被删后也不会复活）。

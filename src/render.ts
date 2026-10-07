@@ -662,12 +662,12 @@ export function weiboCards(o: {
     .join('\n')
 }
 
-/** 微博模块头部（入口卡与首页微博流共用）：整条指向 /weibo */
-function weiboHomeHead(total: number): string {
+/** 微博模块头部（入口卡与首页微博流共用）：整条指向 /weibo；countLabel 换计数文案（搜索结果区用「命中 N 条」） */
+function weiboHomeHead(total: number, countLabel?: string): string {
   return `<a class="wb-home-head" href="/weibo">
     <svg class="wb-home-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
     <span class="wb-home-title">微博 · 随手记</span>
-    <span class="wb-home-count">共 ${total} 条</span>
+    <span class="wb-home-count">${countLabel || `共 ${total} 条`}</span>
     <span class="wb-home-more">全部 →</span>
   </a>`
 }
@@ -722,6 +722,30 @@ export function weiboHomeFeed(o: {
   })
   return `<section class="wb-home-feed" aria-label="微博随手记">
   ${weiboHomeHead(o.total)}
+  <div class="wb-list">${cards}</div>
+</section>`
+}
+
+/**
+ * 搜索页微博结果（ROADMAP B4，fts.ts 搜出的微博在这里渲染）：结构整体复用首页微博流的
+ * wb-home-feed / wb-card 系列样式（六主题已有样式，零新增 CSS），头部计数换成「命中 N 条」。
+ * 只读视角：不带管理操作与评论表单（allowComments: false），点赞与评论列表展开照常可用。
+ */
+export function weiboSearchResults(o: {
+  settings: SettingsMap
+  items: WeiboItemView[]
+  total: number
+  avatarHtml: string
+}): string {
+  if (!o.items.length) return ''
+  const cards = weiboCards({
+    settings: o.settings,
+    items: o.items,
+    avatarHtml: o.avatarHtml,
+    allowComments: false,
+  })
+  return `<section class="wb-home-feed" aria-label="微博搜索结果">
+  ${weiboHomeHead(o.total, `命中 ${o.total} 条`)}
   <div class="wb-list">${cards}</div>
 </section>`
 }

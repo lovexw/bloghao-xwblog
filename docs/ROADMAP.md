@@ -29,7 +29,7 @@
 | B1 | 邮件服务落地 | 一个动作解锁三个下游：评论通知（访客侧）、邮箱找回密码（见下文会员体系「注册门槛」，原判定做不了）、未来会员注册验证。免费版 Workers 无法直发（Cloudflare Email Service 发信仅付费版），走第三方 HTTP API 免费档，调研结论见下文小节 |
 | B2 | ✅ 会员体系 P1：登录评论 + 积分 + 排行榜（2026-10-07 完成） | 注册登录 / 评论带会员身份 / 积分 / /rank 榜单 / 付费墙 / 后台会员管理全量落地；拍板口径与契约见 DEVPLAN，用法见 GUIDE §15 |
 | B3 | 通知渠道抽象 | TG 之外加飞书 / 企业微信 / Bark / Server酱——国内用户装 TG 本身就是门槛；新留言 / 定时发布 / 备份告警复用同一渠道配置 |
-| B4 | FTS5 中文搜索 | D1 支持 SQLite FTS5（trigram 分词适配中文），替换 LIKE 扫表；顺带把微博纳入搜索 |
+| B4 | ✅ FTS5 中文搜索（2026-10 完成） | D1 原生 SQLite FTS5（trigram 分词适配中文）替换 /search 页 LIKE 扫表，bm25 相关度排序；微博正文顺势纳入搜索（前 20 条）。机制在 src/fts.ts：短词（<3 字）退回 LIKE 老路、加密文整体退出关键词搜索、MATCH 表达式只由 fts.ts 构造（用户输入引号转义防语法注入）；索引 external content 挂原表 + 触发器增量同步（触发器只在 db.ts SCHEMA_TRIGGERS——demo 的分号切分切不开 BEGIN...END），存量库靠 ftsSeeded 记账位 rebuild 一次；防线条目见 AGENTS.md |
 | B5 | WordPress / emlog / Typecho 导入工具 | 数据导出（A1）的另一面，换博客用户的主要入口；scripts/ 已有 emlog 迁移脚本留档可复活 |
 | B6 | 备份异地化 | D1 与备份 R2 同在一个 Cloudflare 账号，账号被盗一锅端；每晚备份额外推一份到 GitHub 私库或另一账号 |
 | B7 | 友链健康巡检 | 每周 cron 探活（HEAD 请求），失效标灰并后台提醒——友链在线申请开放后失效只会更多 |
@@ -46,7 +46,7 @@
 | # | 事项 | 说明 |
 | --- | --- | --- |
 | C1 | 博客圈文化件 | 随机友链跳转（/random 旁加一个）、页脚运行天数 / 本站信息卡、开往 / 十年之约入口 |
-| C2 | 评论增强 | QQ / Gravatar 头像、表情回应（emoji reactions）、WP 评论导入 |
+| C2 | 评论增强 | QQ / Gravatar 头像（QQ 方案已调研验证，结论见下文小节「评论头像」，可直接开工）、表情回应（emoji reactions）、WP 评论导入 |
 | C3 | 创作增强 | 代码块语法高亮、KaTeX 公式、mermaid 图表（按需加载，注意 CSP 与体积）、文章 TOC 目录——目前均不存在，按需再上 |
 | C4 | 图片增强 | 上传 hash 去重、可选水印、EXIF / GPS 隐私抹除 |
 | C5 | ✅ 单篇访问密码（2026-10-07 完成） | 编辑器按篇加密（PBKDF2），输对后 30 天免重复输入；与会员付费墙可叠加（密码墙优先），机制见 src/protect.ts |
@@ -80,3 +80,15 @@ P1 全量上线：游客注册登录（独立 members 表与会话，不碰 user
 - **可行路线 = 第三方 HTTP API**（Workers 无出站 SMTP，必须选 API 型服务商）：Resend 免费档 **100 封/天、3000 封/月**（2026-09 仍确认）；阿里云邮件推送 **200 封/天**免费、超出约 2 元/千封；腾讯云 SES 仅 1000 封**一次性**免费额度（不限有效期）。发信域名的 SPF/DKIM/DMARC 在 Cloudflare DNS 加记录即可，零成本
 - **用量判断**：评论回复通知 + 会员注册验证 + 找回密码全是低频，100 封/天档绰绰有余；瓶颈不在 Cloudflare 侧（Workers 免费版 10 万请求/天，发信只是一次 fetch 子请求），而在服务商免费额度
 - **架构要求**：provider 抽象成可切换（settings 存 provider + API key），防「免费档说砍就砍」（MailChannels 2024 年砍掉 Workers 免费集成是先例）；发送走 waitUntil fire-and-forget、失败吞掉不影响主流程（同 hooks.ts 模式）；国内邮箱（QQ/网易）进垃圾箱的风险靠 DMARC 全配 + 触达文案提示「查收垃圾箱」兜底
+
+## 评论头像（C2 拆分，2026-10-07 补充调研：QQ 头像方案已验证，可直接开工）
+
+**状态：未启动（已调研）。** 方向已拍板：会员注册 / 资料可绑定 QQ 号，评论区（文章 / 留言板 / 微博评论）显示头像，国内用户可直连。
+
+- **QQ 头像端点零成本、国内直连**：`https://q1.qlogo.cn/g?b=qq&nk={QQ号}&s={40|100|140|640}`（q2.qlogo.cn 备用镜像），腾讯自家 CDN，无需任何 API key；2026-10 实测返回 PNG、`Cache-Control: max-age=2592000`。Gravatar 国内不可达排除；Cravatar（cravatar.cn，邮箱 md5）可作游客补充但属第三方服务，暂不引入
+- **存储侧已预留一半**：`members.avatar` 列已在 schema（「站内 /images/ 或外链，空 = 首字图标」）、`memberView` 已出 `avatarUrl`、render.ts `memberAvatarHtml` 已实现「有图用图 / 无图昵称首字」（会员中心卡在用）。缺口只有两段：**绑定入口**（现在没有资料编辑端点，注册也不收头像）与**评论区消费**（评论 HTML 完全没接头像）
+- **绑定链路**：members 加 `qq` 列（schema.sql + db.ts SCHEMA_COLUMNS 两处同步；members 已在 BACKUP_TABLES 不用动；演示站 ensureTables 自动跟随）；新端点 `PUT /api/member/profile`（受 membersEnabled 门控，路由注册注意在鉴权中间件之后的规矩）——QQ 号校验 `^[1-9][0-9]{4,10}$`，服务端 fetch qlogo → `store.ts saveUpload` 转存 R2（魔数 `sniffImageExt` 认文件头，同 collect.ts 口径）→ 回写 avatar 列；抓取失败容忍只存 qq（渲染退回首字图标，会员中心卡给「重试头像」入口）；注册表单 QQ 选填，登录后可改
+- **评论区消费四处**：db.ts 两处评论列表查询（文章 ~213 / 留言板 ~224）与 api.ts 微博评论 JSON（~1793）的 LEFT JOIN 补 `m.avatar AS member_avatar`；types.ts CommentRow 增 `member_avatar` 并同步 DEVPLAN 附录 A 契约；render.ts `commentsHtml` renderItem 加头像位（复用 memberAvatarHtml 思路，游客首字）；site.js 微博评论渲染（~403 行）同步出头像（保持 ES5）；六主题 `.cmt-item` / `.cmt-avatar` 样式 + themes.test 回归，过 390px 检查
+- **隐私红线**：QQ 号本体不出任何公开出参（评论 / 排行 HTML 一律不携带），头像一律走站内 /images/ 转存后同源输出——直接拼 qlogo 外链虽省一次转存，但公开 HTML 会暴露用户 QQ 号，不取
+- **顺手项**：/rank 榜单头像——db.ts `rankTopN` 查询已 SELECT avatar 但 `RankEntryView` 没接，补 `avatarUrl` 字段 + `rankRow` 出头像位即得；后台会员管理列表要不要带头像另定（MemberAdminRow 显式列名清单需同步）
+- **待拍板**：游客要不要「QQ 选填」（直出外链省事但 QQ 号进公开 HTML，按上面红线应同样转存，每条评论多一次抓取——建议先只做会员侧）；头像档位取 s=140 一档即可（100 略糊、640 浪费流量）；测试落 tests/members.test.ts（qq 校验 / 转存失败容忍）与 tests/themes.test.ts（评论头像渲染）

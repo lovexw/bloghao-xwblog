@@ -28,6 +28,7 @@ import {
   type PostSort,
   type RankMemberRow,
 } from './db'
+import { searchPosts, searchWeibo } from './fts'
 import {
   articleJsonLd,
   archiveGroups,
@@ -189,17 +190,33 @@ async function renderList(
   const seed =
     sort === 'random' ? clampInt(url.searchParams.get('seed'), 1, 999999999, 0) || 1 + Math.floor(Math.random() * 999999998) : 0
 
-  // 搜索模式不分页，直接取前 50 条
-  const [r, tags, categories, pages, category, wb, wbFeedRaw, feedUser, otd, memberSession] = await Promise.all([    listPosts(c.env.DB, {
-      status: 'published',
-      tag: opts.mode === 'home' ? tag : undefined,
-      q: opts.mode === 'search' ? q || undefined : undefined,
-      categorySlug: categorySlug || undefined,
-      page: opts.mode === 'search' ? 1 : pageNum,
-      limit: opts.mode === 'search' ? 50 : perPage,
-      sort,
-      seed,
-    }),
+  // 搜索模式不分页，直接取前 50 条；文章搜索走 FTS5（src/fts.ts，短词自动退回 LIKE 同口径）
+  const [
+    r,
+    tags,
+    categories,
+    pages,
+    category,
+    wb,
+    wbFeedRaw,
+    feedUser,
+    otd,
+    memberSession,
+    // 搜索页微博结果（ROADMAP B4）：微博此前不参与搜索，这里顺带纳入（短词兜底在 fts.ts 内部）
+    wbSearch,
+  ] = await Promise.all([
+    opts.mode === 'search' && q
+      ? searchPosts(c.env.DB, q, 50)
+      : listPosts(c.env.DB, {
+          status: 'published',
+          tag: opts.mode === 'home' ? tag : undefined,
+          q: opts.mode === 'search' ? q || undefined : undefined,
+          categorySlug: categorySlug || undefined,
+          page: opts.mode === 'search' ? 1 : pageNum,
+          limit: opts.mode === 'search' ? 50 : perPage,
+          sort,
+          seed,
+        }),
     navTags(c),
     navCategories(c),
     navPages(c),
@@ -217,6 +234,8 @@ async function renderList(
     opts.mode === 'home' && pageNum === 1 && !tag && !q ? listOnThisDay(c.env.DB) : Promise.resolve(null),
     // 会员会话（首页微博流的 memberName 用；未开启时省一次查询，无 Cookie 时是纯内存快路径）
     membersEnabled(settings) ? getMemberUser(c.env.DB, c.req.raw) : Promise.resolve(null),
+    // 搜索页微博结果（ROADMAP B4）：长词走 weibo_fts、短词 LIKE 扫微博表，都在 fts.ts 内部定
+    opts.mode === 'search' && q ? searchWeibo(c.env.DB, q, 20) : Promise.resolve(null),
   ])
   if (opts.mode === 'category' && !category) return renderNotFound(c)
   // 页码跳转可能输入越界，回到最后一页重新取一次
@@ -284,17 +303,49 @@ async function renderList(
     }
   }
 
+  // 搜索页微博结果（ROADMAP B4）：行→视图同首页微博流口径（图列表/北京时间/评论数），只读卡片
+  let searchWeiboView: { items: WeiboItemView[]; total: number } | null = null
+  if (wbSearch && wbSearch.items.length) {
+    const cmt = await weiboCommentCountMap(
+      c.env.DB,
+      wbSearch.items.map((w) => w.id)
+    )
+    searchWeiboView = {
+      items: wbSearch.items.map((w) => ({
+        id: w.id,
+        content: w.content,
+        images: weiboImageList(w),
+        created_at: w.published_at ?? w.created_at,
+        likes: w.likes,
+        commentCount: cmt.get(w.id) || 0,
+        pinned: !!w.pinned,
+      })),
+      total: wbSearch.total,
+    }
+  }
+
   let notice = ''
   let emptyText = ''
   let title = ''
   if (opts.mode === 'search') {
-    // 搜索框已移到刊头标签上方，这里只展示结果信息；结果封顶 50 条，超限要说清楚
-    notice = q
-      ? r.total > 50
-        ? `<p class="search-meta">找到 ${r.total} 篇与「${esc(q)}」相关的文章，仅显示前 50 条，试试更具体的关键词</p>`
-        : `<p class="search-meta">找到 ${r.total} 篇与「${esc(q)}」相关的文章</p>`
-      : '<p class="search-meta">输入关键词，回车或点「搜索」</p>'
-    emptyText = q ? `没有找到与「${esc(q)}」相关的文章，换个关键词试试。` : ''
+    // 搜索框已移到刊头标签上方，这里只展示结果信息；文章封顶 50 条、微博封顶 20 条，超限要说清楚
+    if (q) {
+      const weiboText = searchWeiboView ? `、${searchWeiboView.total} 条微博` : ''
+      const caps: string[] = []
+      if (r.total > 50) caps.push('文章仅显示前 50 条')
+      if (searchWeiboView && searchWeiboView.total > 20) caps.push('微博仅显示前 20 条')
+      const capText = caps.length ? `，${caps.join('、')}，试试更具体的关键词` : ''
+      notice = `<p class="search-meta">找到 ${r.total} 篇文章${weiboText}与「${esc(q)}」相关${capText}</p>`
+      emptyText =
+        r.total === 0
+          ? searchWeiboView
+            ? `没有找到与「${esc(q)}」相关的文章，换个关键词试试。`
+            : `没有找到与「${esc(q)}」相关的文章或微博，换个关键词试试。`
+          : ''
+    } else {
+      notice = '<p class="search-meta">输入关键词，回车或点「搜索」</p>'
+      emptyText = ''
+    }
     title = q ? `搜索：${q}` : '搜索'
   } else if (opts.mode === 'category' && category) {
     notice = `<p class="search-meta">分类「${esc(category.name)}」下共 ${r.total} 篇文章</p>`
@@ -330,6 +381,8 @@ async function renderList(
     notice,
     emptyText,
     weiboFeed,
+    // 搜索页微博结果（ROADMAP B4）：仅 /search 带关键词且有命中时非空
+    searchWeibo: searchWeiboView,
     // 纯博客模式：历史上的今天只保留文章条目（微博模块已隐藏）
     onThisDay: mode === 'blog' && otd ? otd.filter((i) => i.kind === 'post') : otd,
   })

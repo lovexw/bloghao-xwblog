@@ -137,6 +137,14 @@ CREATE TABLE IF NOT EXISTS weibo (
 );
 CREATE INDEX IF NOT EXISTS idx_weibo_status ON weibo (status, published_at DESC);
 
+-- FTS5 全文索引（src/fts.ts，ROADMAP B4）：trigram 分词适配中文（无空格文本按 3 字滑窗成词），
+-- external content 挂原表省一份正文存储。增量同步触发器在 db.ts 的 SCHEMA_TRIGGERS 挂——
+-- schema.sql 的一条执行路径（demo.ts ensureTables）按分号朴素切分 SQL，切不开触发器的
+-- BEGIN...END 体，而 ensureSchema 是所有部署形态冷启动必经的迁移路径；存量库首次升级的
+-- 全量索引重建由 ensureSchema 的 ftsSeeded 记账位驱动。虚表是可重建的派生索引，不进备份。
+CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(title, summary, content, tokenize='trigram', content='posts', content_rowid='id');
+CREATE VIRTUAL TABLE IF NOT EXISTS weibo_fts USING fts5(content, tokenize='trigram', content='weibo', content_rowid='id');
+
 -- 标签登记表：分类页可预建标签；文章用到的标签读取时自动并入展示
 CREATE TABLE IF NOT EXISTS tags (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

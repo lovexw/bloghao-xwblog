@@ -27,6 +27,7 @@ import {
   weiboComposer,
   weiboHomeEntry,
   weiboHomeFeed,
+  weiboSearchResults,
   weiboPager,
   weiboTopicBar,
 } from '../render'
@@ -120,6 +121,7 @@ export function home(d: HomeData): string {
     totalPages: d.totalPages,
     base: homeListBase({ sort: d.sort, seed: d.seed, tag: d.tag, categorySlug: d.categorySlug, q: d.q }),
   })}
+  ${d.searchWeibo ? weiboSearchResults({ settings: s, items: d.searchWeibo.items, total: d.searchWeibo.total, avatarHtml: avatar(s) }) : ''}
   ${foot(s, footLinksFor(s).home)}
 </div>`
 }

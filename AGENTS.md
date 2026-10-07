@@ -48,6 +48,13 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - 正文长度上限按 **UTF-8 字节**（`new TextEncoder().encode(...)`），不是字符数
 - 自定义 slug 落库前过 `cleanSlug`；主题等枚举值校验用 `Object.prototype.hasOwnProperty.call(THEMES, v)`（防原型链属性穿透）
 
+**全文搜索 FTS5（tests/fts.test.ts、冒烟 /search FTS 命中断言，机制在 src/fts.ts，2026-10-07）**
+
+- FTS5 MATCH 表达式**唯一构造入口是 `fts.ts ftsMatchExpr`**：用户输入按空白切词、逐词双引号包裹（内部 `"` 翻倍），FTS5 查询语法（AND/OR/NOT/NEAR/列过滤）到不了引擎；任一分词短于 3 个码点整体返回 null → 调用方退回 `listPosts` 的 LIKE 老路（trigram 成不了窗，2 字中文词是最常见查询），两条路结果口径必须一致
+- FTS 命中必须回连原表带全业务过滤：`deleted_at IS NULL` + `status='published'` + `password_hash` 为空（加密文整体退出关键词搜索——命中本身会泄露「正文含此词」，与 listPosts q 分支同口径）；新增公开搜索面照此过防泄漏清单
+- 索引增量同步触发器**只在 db.ts 的 `SCHEMA_TRIGGERS`**（ensureSchema 挂，所有部署形态冷启动必经）——schema.sql 只放 FTS 虚表（无分号体），因为 demo.ts ensureTables 按分号朴素切分 SQL、切不开 `BEGIN...END`（tests/fts.test.ts 守着「schema.sql 不含 CREATE TRIGGER」）；UPDATE 触发器带 `OF title, summary, content` 列清单，views/likes 高频自增不得触发索引重建，**新加索引列时只准扩这个 OF 清单**，别改成全表 UPDATE 触发
+- 虚表是可重建的派生索引：**不进 BACKUP_TABLES**（备份恢复后靠 ensureSchema 的 settings 记账位 `ftsSeeded` 自动 rebuild 一次，demo 清库重灌同理自动补）；DELETE posts/weibo 后 `meta.changes` 会把触发器内的 FTS 删除命令计入（D1 实测单行删除 = 2）——**判「确有删除」用 `< 1` 口径别用 `!== 1`**（api.ts 单条彻底删除守着），恢复 / 置顶等 UPDATE 依赖 `OF` 清单不被触发、changes 仍为 1 不受影响
+
 **回收站 / 软删除（tests/trash.test.ts、冒烟「回收站链路」，机制在 src/trash.ts）**
 
 - posts / weibo / pages 三表统一软删：`deleted_at` 毫秒时间戳，NULL = 存活；**任何新增的涉及三表的业务查询必须带 `deleted_at IS NULL`**（后台概览统计、likeDelta、置顶名额、scheduler 定时发布、/random、export 全部有过滤），改完跑 `grep -n "FROM posts\|FROM weibo\|FROM pages" src/` 逐个核对——漏一处就是把回收站内容泄漏到那个公开面；已知的**故意不过滤**例外：backup.ts（全表备份兜底）、trash 自身查询（listTrash/purgeTrash 只认 deleted_at IS NOT NULL）、db.ts 的 getPostById/getPageById（后台按 id 直取与恢复）、uniqueSlugIn（回收站行继续占用 slug，恢复后链接照旧）、api.ts 标签清理扫描（恢复时标签完整）
@@ -142,7 +149,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 
 - `src/themes/`：六套主题（wechat 默认 / paper / midnight / minimal / journal / bitcoin）+ `registry.ts` 注册表（十类页面参数是导出的命名类型 `HomeData`/`PostData`/…，新增主题或字段只改 registry 一处；六主题 × 十页面渲染回归在 tests/themes.test.ts，改主题先跑）；`siteNav` 支持可选 `compact` 布局（主条收窄五项 + 会员药丸右置，仅 wechat 传），页脚链接组走 `footLinksFor(s)` 动态生成（排行榜随 membersEnabled 门控）
 - 站点模式（settings `siteMode`：`blog-weibo` / `weibo-blog` / `blog` / `weibo`，解析统一走 `render.ts siteMode()`）决定微博/博客模块的前台显隐与首页优先级：导航在 `siteNav` 的 mode 参数、首页微博流在 `weiboHomeFeed`、页脚链接组在 `footLinks`（纯博客模式剥掉各主题 FOOT_LINKS 里的 /weibo 链接，六主题的 foot() 都要过它）、`/weibo` 与 `/` 的分流在 pages.ts——**新增前台模块或导航项时要四种模式都过一遍**（tests/site-mode.test.ts + tests/themes.test.ts 微博流回归守着）；后台设置页是「三选一 + 双方模式下的顺序」联动控件
-- `src/pages.ts` 渲染公开页（含独立页面 `/page/:slug`，pages 表承载，`about` 页渲染在 `/about`）；`src/api.ts` 全部 JSON API；`src/collect.ts` 是公众号采集插件的服务端（编辑器插件在 `public/plugins/`，开发文档 docs/PLUGINS.md）；`src/export.ts` + `src/zip.ts` + `src/html-md.ts` 是数据导出（Markdown 包流式打 zip、WXR）；`src/closed.ts` 是一键闭站 / 灰度（settings `siteClosed` / `siteGrayscale`，独立成模块是为了 Node 测试能导入——index.ts 会级联加载主题 CSS）；`src/trash.ts` 是回收站 / 三表软删除（posts/weibo/pages 的 `deleted_at` 标记、恢复与 30 天到期清理，同样可被 Node 测试导入，详见「回收站 / 软删除」防线节）；`src/hooks.ts` 是服务端插件钩子（总线 + 注册表 + 官方示例三合一，发布/评论事件与页脚注入，插件失败必须吞掉不影响主流程，启停存 settings `serverPluginsDisabled`）
+- `src/pages.ts` 渲染公开页（含独立页面 `/page/:slug`，pages 表承载，`about` 页渲染在 `/about`）；`src/api.ts` 全部 JSON API；`src/collect.ts` 是公众号采集插件的服务端（编辑器插件在 `public/plugins/`，开发文档 docs/PLUGINS.md）；`src/export.ts` + `src/zip.ts` + `src/html-md.ts` 是数据导出（Markdown 包流式打 zip、WXR）；`src/closed.ts` 是一键闭站 / 灰度（settings `siteClosed` / `siteGrayscale`，独立成模块是为了 Node 测试能导入——index.ts 会级联加载主题 CSS）；`src/trash.ts` 是回收站 / 三表软删除（posts/weibo/pages 的 `deleted_at` 标记、恢复与 30 天到期清理，同样可被 Node 测试导入，详见「回收站 / 软删除」防线节）；`src/fts.ts` 是 FTS5 全文搜索（/search 页文章 + 微博检索、MATCH 构造与 LIKE 兜底，详见「全文搜索 FTS5」防线节）；`src/hooks.ts` 是服务端插件钩子（总线 + 注册表 + 官方示例三合一，发布/评论事件与页脚注入，插件失败必须吞掉不影响主流程，启停存 settings `serverPluginsDisabled`）
 - `src/demo.ts` + `demo-content.ts` / `demo-posts.ts` / `demo-images.ts`：官方演示站引擎（独立 wrangler.demo.jsonc，DEMO_MODE 门控）——空库自播种、每 2 小时 cron 清库重灌、演示守卫（登录页公示 demo 账号、禁改密码、禁闭站、禁外发通知、全站 noindex）；种子内容确定性生成，文档 docs/DEMO.md
 - `public/admin/`：后台（app.js 路由与页面——侧栏菜单看顶部 `MENU` 配置数组，editor.js 写作编辑器，admin.css 样式）；「皮肤 / 插件」是独立页面（`#/appearance`、`#/plugins`），市场目录在 `public/market/catalog.json`
 - `website/`：「博客号」官网静态页（朱砂红新版设计），部署走 Cloudflare Pages 项目 `bloghao`，**勿用 Workers assets 另起部署通道**；「博客号目录」数据在 `website/public/data/showcase.json`，上榜入口指向 bloghao 的 issues；官网 UI 改动同样过 390px 移动端检查

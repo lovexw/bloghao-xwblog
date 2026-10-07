@@ -155,6 +155,19 @@ for (const [themeId, theme] of Object.entries(THEMES as Record<string, ThemeModu
     assert.ok(!blogOnly.includes('wb-home'))
   })
 
+  test(`${themeId}: home 渲染（搜索页微博结果区，ROADMAP B4）`, () => {
+    const d = homeData()
+    d.searchWeibo = { items: [weiboView], total: 3 }
+    const html = theme.home(d)
+    checkPage(themeId, 'home(searchWeibo)', html)
+    assert.ok(html.includes('wb-home-feed'), `${themeId} search 应渲染微博结果区容器`)
+    assert.ok(html.includes('wb-card'), `${themeId} search 应渲染微博卡片`)
+    assert.ok(html.includes('命中 3 条'), `${themeId} 应渲染命中计数（与首页微博流的「共 N 条」区分）`)
+    // 未命中：结果区（aria-label 微博搜索结果）不出现
+    const none = theme.home({ ...homeData(), searchWeibo: null })
+    assert.ok(!none.includes('微博搜索结果'))
+  })
+
   test(`${themeId}: post 渲染（正文/点赞/评论区）`, () => {
     const html = theme.post(postData())
     checkPage(themeId, 'post', html)

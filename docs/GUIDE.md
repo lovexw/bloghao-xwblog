@@ -42,7 +42,7 @@
 | [/post/:slug](https://blog.xiaowuleyi.com/) | **文章页**：正文、点赞、留言、分享、楼中楼评论、相关文章；自动输出 OG 分享标签与 schema.org JSON-LD 结构化数据（搜索引擎收录基本盘，无需配置）；草稿只有本人登录后加 `?preview=1` 才能看到 |
 | [/category/:slug](https://blog.xiaowuleyi.com/) | **分类归档页**（顶部「分类话题」菜单里点分类进入） |
 | [/tag/:tag](https://blog.xiaowuleyi.com/) | **标签归档页**（菜单里点话题进入，带文章计数） |
-| [/search?q=](https://blog.xiaowuleyi.com/search) | **搜索页**：标题与正文关键词搜索，展示前 50 条 |
+| [/search?q=](https://blog.xiaowuleyi.com/search) | **搜索页**：全文关键词搜索（FTS5 索引，结果按相关度排序），文章展示前 50 条、站内微博一并纳入（前 20 条）；不足 3 个字的短词自动退回普通匹配 |
 | [/about](https://blog.xiaowuleyi.com/about) | **关于我**：独立的作者介绍页，内容在后台「页面」维护（页面系统承载） |
 | [/random](https://blog.xiaowuleyi.com/random) | **随机阅读**：随机跳到一篇已发布文章 |
 | [/rss.xml](https://blog.xiaowuleyi.com/rss.xml) · [/sitemap.xml](https://blog.xiaowuleyi.com/sitemap.xml) | RSS 全文订阅与站点地图（自动生成） |

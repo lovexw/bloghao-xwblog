@@ -1158,7 +1158,10 @@ api.delete('/admin/trash/:type/:id', async (c) => {
       c.env.DB.prepare(`DELETE FROM post_categories WHERE post_id = ? ${cascade}`).bind(id),
       c.env.DB.prepare('DELETE FROM posts WHERE id = ? AND deleted_at IS NOT NULL').bind(id),
     ])
-    if ((res[2].meta.changes ?? 0) !== 1) return jsonError('回收站里没有这条内容', 404)
+    // 用 < 1 而非 !== 1：DELETE 触发器（FTS 索引同步，db.ts SCHEMA_TRIGGERS）会让 meta.changes
+    // 把触发器内的 FTS 删除命令也计进去，单行删除的 changes 可能是 1 也可能是 2+（D1 实测为 2）；
+    // 0 行匹配时触发器不运行、changes 恒为 0，所以「< 1 = 什么都没删」在两种计数口径下都成立
+    if ((res[2].meta.changes ?? 0) < 1) return jsonError('回收站里没有这条内容', 404)
   } else if (table === 'weibo') {
     const res = await c.env.DB.batch([
       c.env.DB.prepare(
@@ -1166,7 +1169,8 @@ api.delete('/admin/trash/:type/:id', async (c) => {
       ).bind(id),
       c.env.DB.prepare('DELETE FROM weibo WHERE id = ? AND deleted_at IS NOT NULL').bind(id),
     ])
-    if ((res[1].meta.changes ?? 0) !== 1) return jsonError('回收站里没有这条内容', 404)
+    // 同 posts：< 1 口径（weibo_fts 删除触发器会把 changes 计成 2）
+    if ((res[1].meta.changes ?? 0) < 1) return jsonError('回收站里没有这条内容', 404)
   } else {
     const res = await c.env.DB.prepare('DELETE FROM pages WHERE id = ? AND deleted_at IS NOT NULL').bind(id).run()
     if ((res.meta.changes ?? 0) !== 1) return jsonError('回收站里没有这条内容', 404)

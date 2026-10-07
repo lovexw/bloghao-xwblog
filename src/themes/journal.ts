@@ -27,6 +27,7 @@ import {
   weiboComposer,
   weiboHomeEntry,
   weiboHomeFeed,
+  weiboSearchResults,
   weiboPager,
   weiboTopicBar,
   type CategoryLink,
@@ -117,6 +118,7 @@ export function home(d: HomeData): string {
     base: homeListBase({ sort: d.sort, seed: d.seed, tag: d.tag, categorySlug: d.categorySlug, q: d.q }),
   })}
   </main>
+  ${d.searchWeibo ? weiboSearchResults({ settings: s, items: d.searchWeibo.items, total: d.searchWeibo.total, avatarHtml: avatar(s) }) : ''}
   ${foot(s, FOOT_LINKS.home)}
 </div>`
 }

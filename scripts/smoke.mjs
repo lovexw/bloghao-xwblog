@@ -140,6 +140,12 @@ try {
   await check('GET', '/guestbook', 200)
   await check('GET', '/about', 200)
   await check('GET', '/search?q=smoke', 200)
+  // FTS5 全文搜索（roadmap B4）：「多标签」≥3 字走 posts_fts（workerd 的 SQLite 必须真支持
+  // FTS5 trigram，这条守着 D1 兼容性）；「定位目标」走 weibo_fts 且渲染微博结果区
+  await check('GET', `/search?q=${encodeURIComponent('多标签')}`, 200, 'smoke-multi-tag')
+  await check('GET', `/search?q=${encodeURIComponent('定位目标')}`, 200, 'wb-home-feed')
+  // 2 字短词退回 LIKE 老路：新旧两条路都必须能搜到
+  await check('GET', `/search?q=${encodeURIComponent('冒烟')}`, 200, 'smoke-multi-tag')
   await check('GET', '/rss.xml', 200)
   await check('GET', '/sitemap.xml', 200)
   // 分享卡图：内置默认卡必须能被社交平台抓到，页面必须输出 og:image / twitter:card（og:image 绝不缺位）

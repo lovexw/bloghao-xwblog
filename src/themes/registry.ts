@@ -64,6 +64,11 @@ export interface HomeData {
     adminName?: string
     memberName?: string
   } | null
+  /**
+   * 搜索页微博结果（ROADMAP B4，仅 /search 带关键词时传入）：主题侧用
+   * weiboSearchResults({ settings, ...searchWeibo, avatarHtml }) 渲染；没有命中时为 null
+   */
+  searchWeibo?: { items: WeiboItemView[]; total: number } | null
   /** 历史上的今天（仅首页第一页且未筛选时传入）：往年今日的文章与微博，空数组/缺省不渲染 */
   onThisDay?: OnThisDayItemView[] | null
 }
