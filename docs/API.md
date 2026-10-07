@@ -65,6 +65,26 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 - 同 IP 10 分钟限 120 次；设置 `statsEnabled=0` 时接口返回 `{ok:true}` 但不入库
 - 始终返回 `{"ok":true}`（失败静默，不打扰页面）
 
+### POST /api/member/register
+会员注册（站点「会员功能」关闭时整组 `/api/member/*` 返回 404）。Body：
+
+```json
+{ "username": "xiaoke", "password": "至少8位", "email": "可选", "link": "" }
+```
+
+- `link` 是蜜罐字段，正常客户端永远传空字符串/不传；限流同 IP 10 分钟 5 次
+- 用户名 2-24 位字母/数字/`_`/`-`，密码 8-64 位；用户名占用或校验失败 400
+- 成功即登录：`{ok:true, member:{nickname,tier,points,...}}` 并签发 `xw_member_session` Cookie（HttpOnly，30 天，与管理员会话完全独立）
+
+### POST /api/member/login
+`{username, password}` → `{ok:true, member:{...}}`；口令错误 401（响应耗时恒定防用户名枚举），账号被封禁 403 `{"error":"banned"}`。
+
+### POST /api/member/logout
+清除会员会话 → `{ok:true}`。
+
+### GET /api/member/me
+`{member: {...} | null}`，恒 200（未登录为 `null`，前端据此渲染登录表单或会员卡）；本人视角额外含 `username` / `email` / `createdAt`。会员发言走上方评论三路接口即可：带会员 Cookie 时服务端自动挂身份，`nickname`/`email`/`website` 字段被忽略。
+
 ## 认证
 
 ### GET /api/auth/state
@@ -268,6 +288,12 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 
 ### GET /api/meta/themes
 已注册主题列表 `{themes:[{id,name,description,colors}]}`，`colors` 为后台皮肤卡预览色板（`[背景, 强调条, 卡面, 卡面2, 卡面3]`，未设置时为 `null`）。
+
+### GET /api/admin/members?page=1&q=
+会员列表（后台「会员」页数据源）：`{items:[{id, username, email, tier, points, status, created_at, last_login_at}], total, page, totalPages}`；`q` 模糊匹配用户名 / 邮箱，20 条/页。
+
+### PUT /api/admin/members/:id
+改档位 / 封禁，**缺键即保留**（只传要改的键）：`{ "tier": "normal|coffee|top" }` 或 `{ "status": "active|banned" }` → `{ok:true}`；`status:"banned"` 同时清空该会员全部会话（即刻踢下线），历史评论保留。会员不存在 404。
 
 ## 外部接口（Token 鉴权，供 Telegram 机器人 / 第三方工具调用）
 
