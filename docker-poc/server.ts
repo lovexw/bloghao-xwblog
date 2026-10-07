@@ -29,6 +29,8 @@ import SCHEMA_SQL from '../schema.sql'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = Number(process.env.PORT || 8787)
+/** '1'（默认）= 信任反代注入的访客 IP 头；'0' = Node 直接暴露公网，只认 socket 远端 */
+const TRUST_PROXY = (process.env.TRUST_PROXY ?? '1') !== '0'
 // 默认值按「打包产物在 docker-poc/dist/server.js」的层级推导：dist/../.. = 仓库根、
 // dist/.. = docker-poc/；Docker 里保持同样层级，仅 TENANTS_DIR 用环境变量指到挂载卷
 const PUBLIC_ROOT = path.resolve(process.env.PUBLIC_ROOT || path.resolve(__dirname, '../../public'))
@@ -299,6 +301,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, tenan
     if (HOP_BY_HOP.has(key) || value === undefined) continue
     if (Array.isArray(value)) value.forEach((v) => headers.append(key, v))
     else headers.set(key, value)
+  }
+  // 访客 IP 可信来源：默认 TRUST_PROXY=1 信任反代注入的头（CF-Connecting-IP / X-Forwarded-For）；
+  // Node 直接暴露公网时设 TRUST_PROXY=0——客户端可随意伪造上述头轮换 IP 绕过限流，
+  // 此时剥掉入站头、以 socket 远端地址注入 CF-Connecting-IP（auth.ts clientIp 优先读它，业务零改动）
+  if (!TRUST_PROXY) {
+    headers.delete('cf-connecting-ip')
+    headers.delete('x-forwarded-for')
+    headers.delete('x-real-ip')
+    const remote = (req.socket.remoteAddress || '').replace(/^::ffff:/, '')
+    if (remote) headers.set('cf-connecting-ip', remote)
   }
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD'
   const proto = resolveScheme(headers, url.host)

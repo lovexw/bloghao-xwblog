@@ -304,7 +304,9 @@
 
     document.addEventListener('click', function (e) {
       var btn = e.target && e.target.closest ? e.target.closest('.cmt-reply-btn') : null
-      if (!btn || !document.getElementById('guestbook').contains(btn)) return
+      // 本监听是 document 级（文章页也注册），文章页没有 guestbook 容器——必须先判空
+      var gb = document.getElementById('guestbook')
+      if (!btn || !gb || !gb.contains(btn)) return
       e.preventDefault()
       gbSetReply(Number(btn.getAttribute('data-reply')), btn.getAttribute('data-name') || '')
     })
@@ -771,14 +773,14 @@
       while ((m = WB_TEXT_RE.exec(text))) {
         out += esc(text.slice(last, m.index))
         last = m.index + m[0].length
-        if (m[4]) {
-          var url = trimUrlTailJs(m[4])
+        if (m[1]) {
+          var url = trimUrlTailJs(m[1])
           out +=
             '<a class="wb-link" href="' + esc(outHrefJs(url)) + '" target="_blank" rel="noopener noreferrer">' +
             esc(url) + '</a>' + esc(m[0].slice(url.length))
         } else {
-          var lead = m[2] || ''
-          var tag = m[3]
+          var lead = m[3] || ''
+          var tag = m[4]
           var name = tag.replace(/^#/, '').replace(/#$/, '')
           out += esc(lead)
           if (!name) out += esc(tag)

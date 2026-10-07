@@ -629,7 +629,12 @@ try {
     await raw('DELETE', `/api/admin/trash/post/${pwId}`, { headers: { Cookie: cookie } })
   }
 
-  // 后台会员管理：搜索 → 拉黑（会话即刻失效 + 登录 403 banned）→ 恢复 active（下轮可复用）
+  // 后台会员管理：未登录一律 401（路由必须注册在 /admin/* 鉴权中间件之后）→ 搜索 → 拉黑（会话即刻失效 + 登录 403 banned）→ 恢复 active（下轮可复用）
+  await check('GET', '/api/admin/members', 401, '请先登录')
+  await check('PUT', '/api/admin/members/1', 401, '请先登录', {
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'banned' }),
+  })
   const mList = await mJson(await raw('GET', `/api/admin/members?q=${MEMBER_NAME}`, { headers: { Cookie: cookie } }))
   const mId = mList?.items?.[0]?.id
   results.push(['会员管理：列表搜索到会员', !!mId])

@@ -863,7 +863,7 @@ const OTD_VISIBLE = 4
 
 function otdRow(it: OnThisDayItemView): string {
   return `<a class="otd-item" href="${esc(it.href)}">
-  <span class="otd-year">${new Date(it.ts).getUTCFullYear()}<i>${otdYearLabel(it.yearsAgo)}</i></span>
+  <span class="otd-year">${cstDate(it.ts).getUTCFullYear()}<i>${otdYearLabel(it.yearsAgo)}</i></span>
   <span class="otd-text">${esc(it.text)}</span>
   <span class="otd-kind">${it.kind === 'post' ? '文章' : '微博'}</span>
 </a>`

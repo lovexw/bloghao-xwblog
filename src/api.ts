@@ -265,15 +265,24 @@ api.get('/member/me', async (c) => {
   return c.json({ member: row ? memberView(row, true) : null })
 })
 
-/* 后台会员管理（走上方 /admin/* 鉴权中间件；PUT 缺键即保留，同 posts PUT 语义） */
+/* ---------------- 需要登录的 /admin/* ---------------- */
+/* 注意：本中间件必须注册在所有 /admin/* 路由之前（hono 按注册顺序执行，路由先命中即终止链条） */
+api.use('/admin/*', async (c, next) => {
+  const user = await getSessionUser(c.env.DB, c.req.raw)
+  if (!user) return jsonError('请先登录', 401)
+  c.set('user', user)
+  await next()
+})
+
+/* 后台会员管理（PUT 缺键即保留，同 posts PUT 语义） */
+
+const MEMBER_TIERS: MemberTier[] = ['normal', 'coffee', 'top']
 
 api.get('/admin/members', async (c) => {
   const page = clampInt(c.req.query('page'), 1, 1_000_000, 1)
   const q = (c.req.query('q') || '').trim().slice(0, 50)
   return c.json(await listMembersAdmin(c.env.DB, q, page))
 })
-
-const MEMBER_TIERS: MemberTier[] = ['normal', 'coffee', 'top']
 
 api.put('/admin/members/:id', async (c) => {
   const id = parseId(c.req.param('id'))
@@ -293,14 +302,6 @@ api.put('/admin/members/:id', async (c) => {
   // 拉黑即踢下线（getMemberUser 查询层已挡 banned，这里把会话 token 一并清掉）
   if (patch.status === 'banned') await destroyMemberSessionsByMember(c.env.DB, id)
   return c.json({ ok: true })
-})
-
-/* ---------------- 需要登录的 /admin/* ---------------- */
-api.use('/admin/*', async (c, next) => {
-  const user = await getSessionUser(c.env.DB, c.req.raw)
-  if (!user) return jsonError('请先登录', 401)
-  c.set('user', user)
-  await next()
 })
 
 /* 采集插件（公众号文章 → 草稿），见 src/collect.ts */
@@ -455,6 +456,9 @@ api.post('/admin/posts', async (c) => {
   const p = await readPostPayload(c)
   if (!p) return jsonError('请求格式错误')
   if ('tooBig' in p) return jsonError('正文过长（上限约 1MB）')
+  // 定时发布必须带时间（编辑器有校验，这里拦 API 直调）——否则 publish_at 落 NULL，
+  // scheduler 只扫有时间的行，该文会无提示地永远卡在 scheduled
+  if (p.status === 'scheduled' && p.publishAt == null) return jsonError('定时发布必须填写发布时间')
   const title = p.title || '无标题'
   const base = p.slug || slugify(title)
   const slug = await uniqueSlug(c.env.DB, base)
@@ -531,6 +535,8 @@ api.put('/admin/posts/:id', async (c) => {
   // 转发布/草稿时清空；scheduled 但没给时间则保留旧值（自动保存场景）
   const publishedAt = status === 'published' ? (existing.published_at ?? Date.now()) : existing.published_at
   const publishAt = status === 'scheduled' ? (p.publishAt ?? existing.publish_at ?? null) : null
+  // scheduled 但新旧都没有时间：拒绝而不是落 NULL 卡死在定时态（编辑器有校验，这里拦 API 直调）
+  if (status === 'scheduled' && publishAt == null) return jsonError('定时发布必须填写发布时间')
   // 访问密码：键存在才参与（空串解除、非空设置/更换），缺键保持原值——自动安全永远不误清
   const passwordHash = p.has.password ? (p.password ? await hashPostPassword(p.password) : '') : existing.password_hash || ''
   await c.env.DB.prepare(
@@ -1379,6 +1385,18 @@ api.delete('/admin/comments/:id', async (c) => {
 // PUT 收到打码占位符视为「保持原值」，这样前端整表提交不会把占位符写进库
 const SECRET_SETTINGS = ['externalToken', 'telegramBotToken', 'telegramWebhookSecret']
 const SECRET_MASK = '••••••••'
+// 布尔开关统一收口：'1'/'true' → '1'，其余一律 '0'（新增布尔键加进表即可，别再抄判断分支）
+const BOOL_SETTINGS = [
+  'allowComments',
+  'moderateComments',
+  'notifyNewComment',
+  'rssFullText',
+  'backupEnabled',
+  'statsEnabled',
+  'siteGrayscale',
+  'siteClosed',
+  'membersEnabled',
+]
 
 api.get('/admin/settings', async (c) => {
   const settings = await getSettings(c.env.DB)
@@ -1418,10 +1436,6 @@ api.put('/admin/settings', async (c) => {
       patch[key] = u.startsWith('/images/') || /^https?:\/\//i.test(u) ? u : ''
       continue
     }
-    if (key === 'allowComments' || key === 'moderateComments') {
-      patch[key] = v === '1' || v === 'true' ? '1' : '0'
-      continue
-    }
     if (key === 'pluginsDisabled') {
       const cleaned = cleanDisabledPlugins(v)
       if (cleaned === null) return jsonError('插件 ID 只能包含字母、数字、_ 或 -')
@@ -1449,19 +1463,11 @@ api.put('/admin/settings', async (c) => {
       patch[key] = v.slice(0, 5000)
       continue
     }
-    if (key === 'notifyNewComment' || key === 'rssFullText' || key === 'backupEnabled' || key === 'statsEnabled') {
-      patch[key] = v === '1' || v === 'true' ? '1' : '0'
-      continue
-    }
-    if (key === 'siteGrayscale' || key === 'siteClosed') {
-      patch[key] = v === '1' || v === 'true' ? '1' : '0'
-      continue
-    }
     if (key === 'siteClosedMessage') {
       patch[key] = v.slice(0, 1000)
       continue
     }
-    if (key === 'membersEnabled') {
+    if (BOOL_SETTINGS.includes(key)) {
       patch[key] = v === '1' || v === 'true' ? '1' : '0'
       continue
     }

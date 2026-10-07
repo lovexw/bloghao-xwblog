@@ -1,8 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { attrHrefToUrl, goPageHtml, isTrustedOutHost, outHref, wrapAnchorHref } from '../src/outlink.ts'
 import { weiboTextHtml } from '../src/render.ts'
 import { sanitizeHtml } from '../src/sanitize.ts'
+import { esc } from '../src/utils.ts'
 
 // ── 白名单命中：主域名 + 子域名跟随，大小写/尾部点归一化，前缀伪装不误命中 ──
 test('isTrustedOutHost：主域与子域命中，伪装域不命中', () => {
@@ -147,4 +149,41 @@ test('sanitizeHtml：不传 origin 保持既有行为（存库/RSS/导出路径�
   // 相对路径与 mailto 不受影响
   assert.ok(sanitizeHtml('<a href="/post/1">站内</a><a href="mailto:a@b.c">邮</a>', { origin: 'https://s.test' }).includes('href="/post/1"'))
   assert.ok(sanitizeHtml('<a href="mailto:a@b.c">邮</a>', { origin: 'https://s.test' }).includes('href="mailto:a@b.c"'))
+})
+
+// ── site.js 客户端镜像守卫：wbTextHtml 是服务端 weiboTextHtml 的手工 ES5 镜像，
+// 历史上分支捕获组错位曾让前台编辑微博保存后假报错——这里把 site.js 源码原样切片
+// 在 Node 里执行，双端同输入逐例对比输出，镜像漂移当场见红 ──
+test('site.js wbTextHtml 镜像：与服务端 weiboTextHtml 同输入同输出', () => {
+  const src = readFileSync(new URL('../public/site.js', import.meta.url), 'utf8')
+  const seg = src.slice(src.indexOf('var WB_TEXT_RE'), src.indexOf('// 图片网格 class'))
+  assert.ok(seg.includes('var WB_TEXT_RE') && seg.includes('function wbTextHtml'), 'site.js 切片失败：镜像段不在预期位置')
+  // site.js 无构建链，切片是 IIFE 内的 var/function 声明序列，包装成工厂在 Node 执行；
+  // esc 注入服务端实现（两端语义一致），location 注入假 origin（同源直出属客户端独有行为，
+  // 对比用例不含同源 URL，不影响双端一致性）
+  const factory = new Function(
+    'esc',
+    'location',
+    seg + '\n;return { wbTextHtml: wbTextHtml, outHrefJs: outHrefJs, trimUrlTailJs: trimUrlTailJs }'
+  )
+  const client = factory(esc, { origin: 'https://s.test' })
+  const samples = [
+    '',
+    '纯文本，没有链接。',
+    '看这个 https://example.com/a 很不错',
+    '官网 https://www.apple.com/iphone',
+    '#随笔# 看 https://example.com/#section #生活#',
+    'https://example.com的官网',
+    '链接 https://example.com/x。',
+    '链接 https://example.com/x，很好',
+    '见 https://example.com/wiki/a_(b) 正文',
+    '见 https://example.com/a_(b）中',
+    '写 C# 的日常 #话题一#',
+    '"https://example.com/x"',
+    'https://example.com/?a=1&b=2',
+    '开头 #开工# 结尾 https://v2ex.com/t/1 完',
+  ]
+  for (const s of samples) {
+    assert.equal(client.wbTextHtml(s), weiboTextHtml(s), `双端输出不一致，输入：${JSON.stringify(s)}`)
+  }
 })

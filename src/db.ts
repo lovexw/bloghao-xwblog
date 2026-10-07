@@ -895,11 +895,15 @@ export async function createMember(
 
 /** 后台会员列表：q 模糊匹配用户名/邮箱（likePattern 同口径转义），20 条/页，新会员在前 */
 const MEMBER_PAGE_SIZE = 20
+/** 后台会员行（剥口令字段——后台出参永不携带 password_hash/salt，同 postAdminView 口径） */
+export type MemberAdminRow = Omit<MemberRow, 'password_hash' | 'salt'>
+const MEMBER_ADMIN_COLS =
+  'id, username, email, display_name, avatar, tier, points, status, created_at, updated_at, last_login_at'
 export async function listMembersAdmin(
   db: D1Database,
   q: string,
   page: number
-): Promise<{ items: MemberRow[]; total: number; page: number; totalPages: number }> {
+): Promise<{ items: MemberAdminRow[]; total: number; page: number; totalPages: number }> {
   const pattern = q ? likePattern(q) : ''
   const where = q ? "WHERE username LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\'" : ''
   const binds = q ? [pattern, pattern] : []
@@ -908,9 +912,9 @@ export async function listMembersAdmin(
   const totalPages = Math.max(1, Math.ceil(total / MEMBER_PAGE_SIZE))
   const p = Math.min(Math.max(1, page), totalPages)
   const { results } = await db
-    .prepare(`SELECT * FROM members ${where} ORDER BY id DESC LIMIT ${MEMBER_PAGE_SIZE} OFFSET ?`)
+    .prepare(`SELECT ${MEMBER_ADMIN_COLS} FROM members ${where} ORDER BY id DESC LIMIT ${MEMBER_PAGE_SIZE} OFFSET ?`)
     .bind(...binds, (p - 1) * MEMBER_PAGE_SIZE)
-    .all<MemberRow>()
+    .all<MemberAdminRow>()
   return { items: results ?? [], total, page: p, totalPages }
 }
 

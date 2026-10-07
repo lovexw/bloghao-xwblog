@@ -283,18 +283,6 @@ img { max-width: 100%; height: auto; }
 .md-snav-chip:hover { color: var(--md-accent); border-color: var(--md-accent); }
 .md-snav-chip.is-active { color: #0f1115; background: var(--md-accent); border-color: var(--md-accent); }
 .md-notice { margin: 18px 0 0; }
-.search-form { display: flex; gap: 8px; }
-.search-input {
-  flex: 1; min-width: 0; font-size: 16px; padding: 9px 14px;
-  border: 1px solid var(--md-line); border-radius: 6px;
-  background: var(--md-card); color: var(--md-ink); outline: none; font-family: var(--md-mono);
-}
-.search-input:focus { border-color: var(--md-accent); }
-.search-btn {
-  font-size: 13px; padding: 0 18px; border: 1px solid var(--md-line); border-radius: 6px;
-  background: var(--md-card); color: var(--md-ink); cursor: pointer; font-family: var(--md-mono);
-}
-.search-btn:hover { border-color: var(--md-accent); color: var(--md-accent); }
 .search-meta { font-size: 13px; color: var(--md-sub); padding: 8px 2px 0; font-family: var(--md-mono); }
 .pager-jump { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 14px 0 0; font-size: 13px; color: var(--md-sub); font-family: var(--md-mono); flex-wrap: wrap; }
 .pager-input {

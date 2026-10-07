@@ -68,10 +68,6 @@ img { max-width: 100%; height: auto; }
 .pp-empty { text-align: center; color: var(--pp-sub); padding: 64px 0; font-size: 15px; letter-spacing: 0.1em; }
 
 /* ---------- 文章 ---------- */
-.pp-crumbs { padding: 28px 0 0; font-size: 13px; }
-.pp-crumbs a { color: var(--pp-sub); transition: color 0.2s ease; }
-.pp-crumbs a:hover { color: var(--pp-accent); }
-
 .pp-article { padding: 32px 0 0; }
 .pp-title { font-size: 30px; font-weight: 700; line-height: 1.4; letter-spacing: 0.03em; }
 .pp-meta { display: flex; gap: 8px; color: var(--pp-sub); font-size: 13px; margin: 14px 0 30px; letter-spacing: 0.06em; }

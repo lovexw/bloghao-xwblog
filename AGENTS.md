@@ -1,6 +1,6 @@
 # xwblog（基于博客号 BlogHao 二次开发）—— 开发约定
 
-完全跑在 Cloudflare（Workers + D1 + R2）上的轻写作博客系统。后端约 10 个 TS 文件（hono），后台为原生 JS SPA，**无构建链**：改完即生效。
+完全跑在 Cloudflare（Workers + D1 + R2）上的轻写作博客系统。后端约 20 个 TS 文件（hono，不含主题），后台为原生 JS SPA，**无构建链**：改完即生效。
 
 ## 线上站点（文档里以此为准）
 
@@ -15,7 +15,7 @@
 npm run dev            # 本地开发（端口被占用时自动 +1）
 npm run dev:demo       # 演示站本地预览（自动建表+播种，见 docs/DEMO.md）
 npm run typecheck      # TypeScript 类型检查，提交前必须通过
-npm test               # 回归测试（tests/，30+ 用例），提交前必须通过；CI（.github/workflows/ci.yml）每次推送强制执行
+npm test               # 回归测试（tests/，300+ 用例），提交前必须通过；CI（.github/workflows/ci.yml）每次推送强制执行
 npm run smoke          # 本地冒烟：起 wrangler dev 逐路由断言 200（含多标签文章页回归守卫），改 SQL 拼接/渲染后必跑
 npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 ```
@@ -55,14 +55,15 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - 恢复文章时过期定时文自动转草稿并**清掉 publish_at**（`trash.ts restorePostStatus` + api.ts 恢复端点，防「恢复即撞发」，也防草稿被切回 scheduled 时按旧定时点撞发，冒烟守着）；purgeTrash 挂在 index.ts scheduled() 的 00:30 备份 cron 分支（与 purgeVisits 并排），保留期常量 `TRASH_RETENTION_DAYS = 30`
 - 后台「回收站」页（viewTrash）已登记 MENU 与 navigate；不进 `MOBILE_TAB_IDS`（自动落移动端「更多」抽屉）；前台 site.js 的微博删除确认文案是「移入回收站」口径，与删除端点的软删语义必须一致
 
-**会员体系（tests/members.test.ts、tests/member-schema.test.ts，契约与 A/B 分工见 docs/DEVPLAN-2026-10-07.md 附录 A）**
+**会员体系（tests/members.test.ts、tests/member-schema.test.ts，拍板口径与契约速查见 docs/DEVPLAN-2026-10-07.md）**
 
 - 会员数据只在 members / member_sessions / member_points_log 三表：**严禁写 users / sessions**（users 只承载管理员，`/api/auth/setup` 靠 `countUsers() === 0` 判断首装）；会员会话 Cookie 独立（`xw_member_session`），勿与管理员 `bloghao_session` 混用
 - 积分数值与单日上限**只改 `src/points.ts` 常量表一处**（2026-10-07 拍板：评论 +2 每日上限 10 条、每日登录 +1）；记分必须走 `awardPoints`（自带北京时间日上限与 hasOwnProperty reason 校验），评论积分**过审才计**且同一评论只计一次（`awardCommentPoints` 按 ref_id 去重——即时通过在发言当下、先审后展挂到后台「通过」动作，两路共用防重复）
 - `/api/member/*` 受 settings `membersEnabled` 门控（关 = 404）；封禁（status='banned'）后 `getMemberUser` 查询层即视为未登录，后台拉黑时同时清空该会员全部会话；`rankTopN` 由 `clampInt(1,50)` 兜底
-- 评论三路会员发言走 publicComment 公共核心的 member 分支：身份来自会话，**表单昵称/邮箱/网站字段一律忽略**；会员暂不可回复楼中楼（与游客同口径，放开属契约变更）；评论列表（SSR 文章/留言板 + 微博 JSON）经 LEFT JOIN members 带出 `member_name`/`member_tier` 徽标数据；SSR 三处评论表单的 `memberName`（「以会员 xxx 的身份发言」免填昵称）由 pages.ts 统一传（renderPost / renderGuestbook / renderWeibo / 首页 weiboFeed，管理员优先会员次之），会员查询一律 `membersEnabled ? getMemberUser(...) : null` 门控——新增带评论表单的页面要照此接线，别让会员看到游客昵称框
+- **后台会员接口必须注册在 `api.use('/admin/*')` 鉴权中间件之后**（hono 按注册顺序执行，路由先命中即终止链条——members 两端点曾注册在前导致未登录可整表读、改档位，出参还带 password_hash/salt）；`listMembersAdmin` 用显式列名（MemberAdminRow），任何新增的会员出参都不准带口令字段；冒烟「会员管理：未登录 401」守着
+- 评论三路会员发言走 publicComment 公共核心的 member 分支：身份来自会话，**表单昵称/邮箱/网站字段一律忽略**；会员暂不可回复楼中楼（与游客同口径，放开属契约变更）；评论列表（SSR 文章/留言板 + 微博 JSON）经 LEFT JOIN members 带出 `member_name`/`member_tier` 徽标数据；SSR 四处评论表单的 `memberName`（「以会员 xxx 的身份发言」免填昵称）由 pages.ts 统一传（renderPost / renderGuestbook / renderWeibo / 首页 weiboFeed，管理员优先会员次之），会员查询一律 `membersEnabled ? getMemberUser(...) : null` 门控——新增带评论表单的页面要照此接线，别让会员看到游客昵称框
 - 付费墙的**安全边界是服务端截断**（`utils.ts teaserHtml`，200 可见字符预算、闭合未关标签）：locked 文章浏览器拿到的就是残文，改渲染层永远补不回安全。可见判定统一 `points.ts canRead/normalizeMinTier`（脏 min_tier 归 all，宁漏勿锁死）；**新公开面（新增导出/接口/主题字段）必须过防泄漏清单**——已过滤：RSS content:encoded（locked 只出试读段+引导）、/api/public/posts（只出 summary）、搜索/卡片摘要（≤120 字摘要口径）；搜索 LIKE 可命中标题属既定取舍（契约 A2 会签记录）
-- schema 三张会员表已登记备份（members / member_points_log 进，member_sessions 与 sessions 同理属临时凭证不进）；排行查询只出 active 且积分 > 0；A/B 双机并行期间文件所有权与契约变更纪律照 DEVPLAN 公约，越界改动前先对齐
+- schema 三张会员表已登记备份（members / member_points_log 进，member_sessions 与 sessions 同理属临时凭证不进）；排行查询只出 active 且积分 > 0；契约变更纪律见 DEVPLAN——registry 类型 / 端点出参 / settings 键 / schema 列的形状变更先改文档再动代码
 
 **文章访问密码（tests/protect.test.ts、冒烟「文章访问密码链路」，机制在 src/protect.ts，C 序列）**
 
@@ -71,14 +72,14 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - 解锁 Cookie `bloghao_pp` 的签名 key 就是该文**当前的 password_hash**：无需站点级密钥，改密即全端失效；令牌 `postId.exp.hmac`（HMAC-SHA256），校验必须对当前 password_hash 重算比对（safeEqual），有效期 PP_TTL_MS = 30 天
 - **与会员付费墙的组合语义（与 A 序列对齐的契约）**：密码墙优先——未解锁时直接止步于表单，不进 canRead 档位判定；解锁后再按 min_tier 走付费墙；**评论区对密码文照常开放**（与会员锁文同口径）。主题出参里 `locked` 恒指会员付费墙（paywallHtml 由它驱动），密码墙不走 paywallHtml 遮挡卡，避免双墙
 - **防泄漏清单**（新增公开面必须过一遍）：文章页密码锁定时正文 / 自动摘要（`excerpt(row.content)`）/ JSON-LD 描述 / OG 从正文提取卡图，全部不出——meta 描述走 `protectedDescription`（作者自填摘要优先，否则固定话术）；RSS 不出该文 `content:encoded`（比会员锁文的试读段更严）；关键词搜索整体不命中加密文章（content LIKE 命中本身即泄露，listPosts 的 q 分支有过滤）；`/random` 不进加密文章；标题、作者自填摘要、封面、标签照常公开（作者主动公开的导读面）
-- 解锁端点是**表单 POST `/post/:slug/unlock`（index.ts，303 回跳，无 JS 依赖）**：必须保留同源 Origin 校验、按「IP+文章」限流（PBKDF2 是慢操作，防爆破 10 次/10 分钟）、目标不存在/未加密静默 303 回跳不透露存在性；错误态走 `?pwerr=1` / `?pwerr=slow` 回显在表单里。表单与样式都在 protect.ts（`passwordFormHtml` / `PP_CSS` 随主题 CSS 注入 head），不要往 themes 五主题里各抄一份
+- 解锁端点是**表单 POST `/post/:slug/unlock`（index.ts，303 回跳，无 JS 依赖）**：必须保留同源 Origin 校验、按「IP+文章」限流（PBKDF2 是慢操作，防爆破 10 次/10 分钟）、目标不存在/未加密静默 303 回跳不透露存在性；错误态走 `?pwerr=1` / `?pwerr=slow` 回显在表单里。表单与样式都在 protect.ts（`passwordFormHtml` / `PP_CSS` 随主题 CSS 注入 head），不要往 themes 六主题里各抄一份
 - 备份/导出含 password_hash 属预期（备份要可还原，导出是管理员工具）
 
 **外链中间页（tests/outlink.test.ts、冒烟「外链中间页」，机制在 src/outlink.ts）**
 
 - 第三方链接一律走 `outHref` 判定：白名单（`TRUSTED_OUT_DOMAINS`，主域名 + 子域跟随）与本站同源直出，其余包成 `/go?u=<encodeURIComponent>` 确认页（免责声明、noindex、无 JS 不自动跳转——`/go` 路由只对白名单/同源 302 直跳，非白名单**永不**服务端跳转，不构成开放重定向；目标必须 http(s) 且 ≤2048 字符，非法一律回首页）。新增「想给外链加中间页」的公开面只准调 `outHref` / `wrapAnchorHref`，别手搓白名单判断
 - **包装只发生在渲染层**：文章/页面/关于我走 `sanitizeHtml(html, { origin })`（不传 origin 的存库/RSS/导出路径保持原始 URL，`/go?u=` 是相对地址所以重复净化天然幂等），微博文本走 render.ts `weiboTextHtml`；weiboTextHtml 用 URL 与 #话题# **单次扫描**的分词正则（先转链接再扫话题会把 href 的 #fragment 误判成话题），URL 字符集排除 CJK 与全角标点（`https://x.com的官网` 链接停在汉字前）
-- **site.js 的 `wbTextHtml` / `TRUSTED_OUT` / `outHrefJs` / `trimUrlTailJs` 是服务端的手工镜像**（白名单表、分词正则、尾标点修剪四处同步），改任一侧必须两边同改并跑 tests/outlink.test.ts；客户端仍守 ES5 与禁 lookbehind 老规矩
+- **site.js 的 `wbTextHtml` / `TRUSTED_OUT` / `outHrefJs` / `trimUrlTailJs` 是服务端的手工镜像**（白名单表、分词正则、尾标点修剪四处同步），改任一侧必须两边同改并跑 tests/outlink.test.ts（其中的镜像守卫用例把 site.js 源码切片执行、与服务端同输入比对输出）；**改正则先数捕获组**——wbTextHtml 分支曾用错捕获组序号（m[4] 当 URL），前台编辑微博保存后假报错，tests 拦不住客户端代码直到镜像守卫补上；客户端仍守 ES5 与禁 lookbehind 老规矩
 - 白名单前四项是站长自有域名（bloghao.com / xiaowuleyi.com / habfut.com / btchao.com），官方版挑洗时按 RELEASING 个人定制台账处理；友链页是站长逐条审核的收录结果，属「把握的域名」，不走中间页
 
 **后台交互（public/admin/，无自动化测试，靠约定）**
@@ -118,7 +119,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 
 - 本工作区服务**双仓库、两角色**：origin = `github.com/lovexw/bloghao-xwblog`（滚动开发测试仓库，日常提交只推这里），upstream = `github.com/lovexw/bloghao`（官方稳定版仓库，对外开放部署入口，main 永远保持可部署）。不做这两个仓库之外的操作
 - 发布流程（2026-10-06 起废止旧「双推、两仓库同一提交」约定；同日收紧为 **upstream 默认冻结**）：日常提交**只推 origin**；**未经用户明确指示，任何改动都不同步到 upstream**——迭代稳定、攒了成批 feat、修了安全 / 数据问题，都不构成自行发布的理由，只有用户明确说「发布」才走流程：`git fetch upstream`，从 `upstream/main` 切发布分支，`git merge --squash` 本地 main（此时按需挑选/清洗，个人实例定制与实验内容不进官方版），确认 diff 后以单个版本提交推 upstream。两仓库历史自此允许分叉，**不要** `git push upstream origin/main:main` 直灌开发历史。**发布操作照 docs/RELEASING.md 清单执行**（版本号规则、挑洗依据「个人定制台账」、CHANGELOG 回填与镜像回开发线）；个人定制**合入 main 当天登记进台账**
-- 开发线定位（2026-10-07 起）：xwblog 进入「互动与创收」阶段，规划会员系统、积分系统、排行榜等增强互动 / 粘性 / 创收的功能（调研见 docs/ROADMAP.md「会员体系」小节）；本站专属的运营属性（收费配置、站点人设内容）落地时按规则登记个人定制台账，官方版挑洗时剔除
+- 开发线定位：xwblog 已完成「互动与创收」第一批功能（会员 / 积分 / 排行榜 / 访问密码，用法见 GUIDE §15）；后续方向见 docs/ROADMAP.md。本站专属的运营属性（收费配置、站点人设内容）落地时按规则登记个人定制台账，官方版挑洗时剔除
 - README / docs / 官网以「博客号 BlogHao」官方项目口吻书写，对两个仓库都自洽；线上地址 blog.xiaowuleyi.com 在文档中一律表述为「在线示例」
 - 同步方向永远 dev→stable 单向：**不要**从 upstream pull 覆盖本地（upstream 只接收发布，永不反向流入开发线）
 - 2026-10-05 仓库整理：官方发布仓库由 bloghao-blog **改名**为 `lovexw/bloghao`（旧地址 GitHub 自动重定向）；更早的独立官网仓库已删除、内容并入 `website/`——遇到提这两个旧名字的链接/文档一律以现名为准
@@ -137,8 +138,8 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 
 ## 结构速查
 
-- `src/themes/`：五套主题 + `registry.ts` 注册表（八类页面参数是导出的命名类型 `HomeData`/`PostData`/…，新增主题或字段只改 registry 一处；五主题 × 八页面渲染回归在 tests/themes.test.ts，改主题先跑）；`wechat` 为默认主题
-- 站点模式（settings `siteMode`：`blog-weibo` / `weibo-blog` / `blog` / `weibo`，解析统一走 `render.ts siteMode()`）决定微博/博客模块的前台显隐与首页优先级：导航在 `siteNav` 的 mode 参数、首页微博流在 `weiboHomeFeed`、页脚链接组在 `footLinks`（纯博客模式剥掉各主题 FOOT_LINKS 里的 /weibo 链接，五主题的 foot() 都要过它）、`/weibo` 与 `/` 的分流在 pages.ts——**新增前台模块或导航项时要四种模式都过一遍**（tests/site-mode.test.ts + tests/themes.test.ts 微博流回归守着）；后台设置页是「三选一 + 双方模式下的顺序」联动控件
+- `src/themes/`：六套主题（wechat 默认 / paper / midnight / minimal / journal / bitcoin）+ `registry.ts` 注册表（十类页面参数是导出的命名类型 `HomeData`/`PostData`/…，新增主题或字段只改 registry 一处；六主题 × 十页面渲染回归在 tests/themes.test.ts，改主题先跑）；`siteNav` 支持可选 `compact` 布局（主条收窄五项 + 会员药丸右置，仅 wechat 传），页脚链接组走 `footLinksFor(s)` 动态生成（排行榜随 membersEnabled 门控）
+- 站点模式（settings `siteMode`：`blog-weibo` / `weibo-blog` / `blog` / `weibo`，解析统一走 `render.ts siteMode()`）决定微博/博客模块的前台显隐与首页优先级：导航在 `siteNav` 的 mode 参数、首页微博流在 `weiboHomeFeed`、页脚链接组在 `footLinks`（纯博客模式剥掉各主题 FOOT_LINKS 里的 /weibo 链接，六主题的 foot() 都要过它）、`/weibo` 与 `/` 的分流在 pages.ts——**新增前台模块或导航项时要四种模式都过一遍**（tests/site-mode.test.ts + tests/themes.test.ts 微博流回归守着）；后台设置页是「三选一 + 双方模式下的顺序」联动控件
 - `src/pages.ts` 渲染公开页（含独立页面 `/page/:slug`，pages 表承载，`about` 页渲染在 `/about`）；`src/api.ts` 全部 JSON API；`src/collect.ts` 是公众号采集插件的服务端（编辑器插件在 `public/plugins/`，开发文档 docs/PLUGINS.md）；`src/export.ts` + `src/zip.ts` + `src/html-md.ts` 是数据导出（Markdown 包流式打 zip、WXR）；`src/closed.ts` 是一键闭站 / 灰度（settings `siteClosed` / `siteGrayscale`，独立成模块是为了 Node 测试能导入——index.ts 会级联加载主题 CSS）；`src/trash.ts` 是回收站 / 三表软删除（posts/weibo/pages 的 `deleted_at` 标记、恢复与 30 天到期清理，同样可被 Node 测试导入，详见「回收站 / 软删除」防线节）；`src/hooks.ts` 是服务端插件钩子（总线 + 注册表 + 官方示例三合一，发布/评论事件与页脚注入，插件失败必须吞掉不影响主流程，启停存 settings `serverPluginsDisabled`）
 - `src/demo.ts` + `demo-content.ts` / `demo-posts.ts` / `demo-images.ts`：官方演示站引擎（独立 wrangler.demo.jsonc，DEMO_MODE 门控）——空库自播种、每 2 小时 cron 清库重灌、演示守卫（登录页公示 demo 账号、禁改密码、禁闭站、禁外发通知、全站 noindex）；种子内容确定性生成，文档 docs/DEMO.md
 - `public/admin/`：后台（app.js 路由与页面——侧栏菜单看顶部 `MENU` 配置数组，editor.js 写作编辑器，admin.css 样式）；「皮肤 / 插件」是独立页面（`#/appearance`、`#/plugins`），市场目录在 `public/market/catalog.json`

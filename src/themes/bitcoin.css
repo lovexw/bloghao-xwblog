@@ -348,7 +348,6 @@ img { max-width: 100%; height: auto; }
 .wb-imgs-2 img { aspect-ratio: 1/1; }
 .wb-imgs-3 { grid-template-columns: repeat(3, 1fr); }
 .wb-imgs-3 img { aspect-ratio: 1/1; }
-.wb-empty { padding: 56px 24px; text-align: center; color: var(--bt-muted); font-size: 14px; border: 1px dashed var(--bt-border); border-radius: 16px; }
 .wb-pager { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 28px 0 0; }
 .wb-pager-btn { font-size: 13px; color: var(--bt-muted); padding: 2px 6px; transition: color 0.15s ease; }
 .wb-pager-btn:hover { color: var(--bt-ink); }
