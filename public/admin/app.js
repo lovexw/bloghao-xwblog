@@ -2422,6 +2422,16 @@ async function viewSettings() {
     </div>
 
     <div class="panel" style="padding:20px;">
+      <div class="form-section"><h3>会员</h3><div class="sec-desc">游客注册成站内会员：登录评论带身份、攒积分上排行榜；文章可按档位控制「谁能看」</div>
+        <div class="switch-row">
+          <div><div class="switch-label">开启会员体系</div><div class="switch-sub">开启后前台出现「会员」「排行榜」导航入口与 /member /rank 页；编辑器可设文章档位。关闭时这两个页面 404，已设档位的文章仍按档位生效</div></div>
+          <label class="switch"><input type="checkbox" id="st-membersEnabled" ${s.membersEnabled === '1' ? 'checked' : ''}><span class="track"></span></label>
+        </div>
+        <div class="form-item" style="max-width:180px;"><label>排行榜展示条数</label><input class="input" id="st-rankTopN" type="number" min="1" max="50" value="${esc(s.rankTopN || '10')}"></div>
+      </div>
+    </div>
+
+    <div class="panel" style="padding:20px;">
       <div class="form-section"><h3>访客统计</h3><div class="sec-desc">在后台「统计」页展示浏览量、访客数、来源与设备分布；只记匿名访客号与来源域名，不存 IP 和原始 UA，日志保留 180 天</div>
         <div class="switch-row">
           <div><div class="switch-label">开启访客统计采集</div><div class="switch-sub">关闭后前台页面不再上报访问数据（已有数据保留不再新增，统计页仍可看历史）</div></div>
@@ -2633,6 +2643,8 @@ async function viewSettings() {
       allowComments: g('st-allowComments').checked ? '1' : '0',
       moderateComments: g('st-moderateComments').checked ? '1' : '0',
       postsPerPage: g('st-postsPerPage').value || '10',
+      membersEnabled: g('st-membersEnabled').checked ? '1' : '0',
+      rankTopN: g('st-rankTopN').value || '10',
       siteGrayscale: g('st-siteGrayscale').checked ? '1' : '0',
       siteClosed: g('st-siteClosed').checked ? '1' : '0',
       siteClosedMessage: g('st-siteClosedMessage').value.trim(),
