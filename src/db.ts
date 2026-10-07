@@ -138,6 +138,8 @@ export async function listPosts(db: D1Database, opts: ListPostsOptions = {}): Pr
     // \% \_ 是字面转义，\ 本身必须先转义成 \\：声明了 ESCAPE '\' 后，搜「a\b」「尾随\」才不跑偏
     where.push("(title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')")
     binds.push(likePattern(opts.q), likePattern(opts.q), likePattern(opts.q))
+    // 加密文章整体退出关键词搜索：content LIKE 命中本身就会泄露「正文含此词」，可被用来探测加密内容
+    where.push("(password_hash IS NULL OR password_hash = '')")
   }
   if (opts.tag) {
     where.push("tags LIKE ? ESCAPE '\\'")
@@ -688,6 +690,8 @@ const SCHEMA_COLUMNS: { table: string; column: string; ddl: string }[] = [
   // 会员体系（docs/DEVPLAN-2026-10-07.md）：评论挂会员身份（0 = 游客）+ 文章可见档位（all | member | coffee | top）
   { table: 'comments', column: 'member_id', ddl: 'ALTER TABLE comments ADD COLUMN member_id INTEGER NOT NULL DEFAULT 0' },
   { table: 'posts', column: 'min_tier', ddl: "ALTER TABLE posts ADD COLUMN min_tier TEXT NOT NULL DEFAULT 'all'" },
+  // 文章访问密码（src/protect.ts）：salt:hash（PBKDF2），空 = 未加密；解锁 Cookie 的 HMAC key 就用它
+  { table: 'posts', column: 'password_hash', ddl: "ALTER TABLE posts ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''" },
 ]
 const SCHEMA_TABLES = [
   // 会员体系（2026-10-07 起，见 docs/DEVPLAN-2026-10-07.md 附录 A 契约）：

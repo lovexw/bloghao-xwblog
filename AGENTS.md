@@ -64,6 +64,16 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - 付费墙的**安全边界是服务端截断**（`utils.ts teaserHtml`，200 可见字符预算、闭合未关标签）：locked 文章浏览器拿到的就是残文，改渲染层永远补不回安全。可见判定统一 `points.ts canRead/normalizeMinTier`（脏 min_tier 归 all，宁漏勿锁死）；**新公开面（新增导出/接口/主题字段）必须过防泄漏清单**——已过滤：RSS content:encoded（locked 只出试读段+引导）、/api/public/posts（只出 summary）、搜索/卡片摘要（≤120 字摘要口径）；搜索 LIKE 可命中标题属既定取舍（契约 A2 会签记录）
 - schema 三张会员表已登记备份（members / member_points_log 进，member_sessions 与 sessions 同理属临时凭证不进）；排行查询只出 active 且积分 > 0；A/B 双机并行期间文件所有权与契约变更纪律照 DEVPLAN 公约，越界改动前先对齐
 
+**文章访问密码（tests/protect.test.ts、冒烟「文章访问密码链路」，机制在 src/protect.ts，C 序列）**
+
+- `posts.password_hash` 单列存 `salt:hash`（PBKDF2 复用 auth.ts，与登录口令同强度），空 = 未加密；schema.sql 与 db.ts SCHEMA_COLUMNS 两处同步的老规矩照旧
+- **password_hash 不出任何后台响应**：后台四个文章出参（列表 / 详情 / 新建 / 更新）统一过 api.ts `postAdminView` 剥哈希、只给 `hasPassword` 布尔；PUT 的 `password` 字段是**缺键即保留**语义（空串 = 解除、非空 = 设置/更换、缺键 = 不动）——编辑器自动保存只在「有话可说」时才带 password 键，别改成全量覆盖
+- 解锁 Cookie `bloghao_pp` 的签名 key 就是该文**当前的 password_hash**：无需站点级密钥，改密即全端失效；令牌 `postId.exp.hmac`（HMAC-SHA256），校验必须对当前 password_hash 重算比对（safeEqual），有效期 PP_TTL_MS = 30 天
+- **与会员付费墙的组合语义（与 A 序列对齐的契约）**：密码墙优先——未解锁时直接止步于表单，不进 canRead 档位判定；解锁后再按 min_tier 走付费墙；**评论区对密码文照常开放**（与会员锁文同口径）。主题出参里 `locked` 恒指会员付费墙（paywallHtml 由它驱动），密码墙不走 paywallHtml 遮挡卡，避免双墙
+- **防泄漏清单**（新增公开面必须过一遍）：文章页密码锁定时正文 / 自动摘要（`excerpt(row.content)`）/ JSON-LD 描述 / OG 从正文提取卡图，全部不出——meta 描述走 `protectedDescription`（作者自填摘要优先，否则固定话术）；RSS 不出该文 `content:encoded`（比会员锁文的试读段更严）；关键词搜索整体不命中加密文章（content LIKE 命中本身即泄露，listPosts 的 q 分支有过滤）；`/random` 不进加密文章；标题、作者自填摘要、封面、标签照常公开（作者主动公开的导读面）
+- 解锁端点是**表单 POST `/post/:slug/unlock`（index.ts，303 回跳，无 JS 依赖）**：必须保留同源 Origin 校验、按「IP+文章」限流（PBKDF2 是慢操作，防爆破 10 次/10 分钟）、目标不存在/未加密静默 303 回跳不透露存在性；错误态走 `?pwerr=1` / `?pwerr=slow` 回显在表单里。表单与样式都在 protect.ts（`passwordFormHtml` / `PP_CSS` 随主题 CSS 注入 head），不要往 themes 五主题里各抄一份
+- 备份/导出含 password_hash 属预期（备份要可还原，导出是管理员工具）
+
 **后台交互（public/admin/，无自动化测试，靠约定）**
 
 - 后台所有请求走 `api()`：401 会话过期已统一拦截回登录页（勿在别处重复处理，也别动 `state.user` 的判断顺序——登录表单的密码错误提示依赖它）；每个写操作按钮必须 try/catch + toast，请求期间 disabled 防连击
