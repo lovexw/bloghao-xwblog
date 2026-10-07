@@ -985,7 +985,7 @@ api.post('/admin/pages', async (c) => {
     .catch(() => null)
   const title = String(body?.title ?? '').trim().slice(0, 60)
   if (!title) return jsonError('页面标题不能为空')
-  // slug 留空由标题生成（posts 同款 slugify），中文标题回退随机 slug
+  // slug 留空由标题生成（posts 同款 slugify），中文标题回退 dateSlug（北京日期 + 随机位）
   const base = cleanSlug(String(body?.slug ?? '')) || slugify(title)
   const slug = await uniquePageSlug(c.env.DB, base.slice(0, 80))
   const content = sanitizeHtml(String(body?.content ?? '').slice(0, 100_000))

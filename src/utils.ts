@@ -69,7 +69,7 @@ export function readingMinutes(html: string): number {
   return Math.max(1, Math.ceil(n / 400))
 }
 
-/** 生成 slug：中文标题回退到随机短 ID，纯 ASCII 标题转 kebab-case */
+/** 生成 slug：纯 ASCII 标题转 kebab-case；中文等非 ASCII 标题回退 dateSlug（北京日期 + 随机位） */
 export function slugify(title: string): string {
   const ascii = title
     .toLowerCase()
@@ -82,7 +82,17 @@ export function slugify(title: string): string {
     const parts = ascii.split('-').slice(0, 6).join('-')
     if (parts.length >= 2) return parts
   }
-  return 'p-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5)
+  return dateSlug()
+}
+
+/** 中文标题的自动 slug（曾落成 p-时间戳+随机串，链接无标准可言）：发布日北京日期 + 4 位随机位
+ *  （如 20261007-k3fx），可读、可按日排序；随机位把同日撞名压到 1/36^4，重名仍由 db.ts
+ *  uniqueSlug 兜底加序号（-2、-3…），两道防线保证不会因重复发布失败。日期口径与 fmtDate
+ *  同源走 cstDate（+8h 后取 UTC 分量），0-8 点发布不得错到前一天 */
+export function dateSlug(now: number = Date.now()): string {
+  const d = cstDate(now)
+  const ymd = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`
+  return `${ymd}-${Math.floor(Math.random() * 36 ** 4).toString(36).padStart(4, '0')}`
 }
 
 /** 用户自定义 slug 的字符集清洗：空白折叠成 -，只留字母/数字/中文/_/-。
