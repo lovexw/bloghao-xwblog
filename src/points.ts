@@ -54,6 +54,9 @@ export async function awardPoints(
   const rule = POINTS_RULES[reason as PointsReason]
   const delta = reason === 'adminAdjust' ? Math.trunc(opts.delta ?? 0) : rule.delta
   if (delta === 0) return { ok: false, delta: 0, balance: await memberBalance(db, memberId) }
+  // refId 承担幂等键：评论 = 评论 id（awardCommentPoints 去重）；每日登录 = 北京日序号（并发双击由
+  // member_points_log 的 (member_id, reason, ref_id) 部分唯一索引兜底，见 db.ts SCHEMA_INDEXES / schema.sql）
+  const refId = reason === 'dailyLogin' ? Math.floor(cstDayStart() / 86400000) : opts.refId ?? 0
   if (reason !== 'adminAdjust' && rule.dailyCap > 0) {
     const row = await db
       .prepare(
@@ -66,12 +69,20 @@ export async function awardPoints(
     }
   }
   const now = Date.now()
-  await db.batch([
-    db
-      .prepare('INSERT INTO member_points_log (member_id, delta, reason, ref_id, note, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .bind(memberId, delta, reason, opts.refId ?? 0, opts.note ?? '', now),
-    db.prepare('UPDATE members SET points = points + ?, updated_at = ? WHERE id = ?').bind(delta, now, memberId),
-  ])
+  try {
+    await db.batch([
+      db
+        .prepare('INSERT INTO member_points_log (member_id, delta, reason, ref_id, note, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(memberId, delta, reason, refId, opts.note ?? '', now),
+      db.prepare('UPDATE members SET points = points + ?, updated_at = ? WHERE id = ?').bind(delta, now, memberId),
+    ])
+  } catch (e) {
+    // 并发重复记账撞部分唯一索引（同一评论两路同时过审 / 双击登录）：视为已记过，静默不落
+    if (e instanceof Error && /UNIQUE/i.test(e.message)) {
+      return { ok: false, delta: 0, balance: await memberBalance(db, memberId) }
+    }
+    throw e
+  }
   return { ok: true, delta, balance: await memberBalance(db, memberId) }
 }
 

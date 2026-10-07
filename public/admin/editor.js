@@ -767,8 +767,17 @@ export async function mountEditor(root, postId, opts = {}) {
       xhr.upload.onprogress = (e) => e.lengthComputable && onProgress && onProgress(Math.round((e.loaded / e.total) * 100))
       xhr.onload = () => {
         const d = xhr.response || {}
-        if (xhr.status >= 200 && xhr.status < 300) resolve(d)
-        else reject(new Error(d.error || '上传失败'))
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(d)
+          return
+        }
+        // 会话过期：本模块不持后台路由状态，回 /admin/ 让 SPA 重新校验会话（无会话即落登录页）
+        if (xhr.status === 401) {
+          location.href = '/admin/'
+          reject(new Error('登录已过期，请重新登录'))
+          return
+        }
+        reject(new Error(d.error || '上传失败'))
       }
       xhr.onerror = () => reject(new Error('网络错误，上传失败'))
       const fd = new FormData()
@@ -1212,6 +1221,7 @@ export async function mountEditor(root, postId, opts = {}) {
   })
   titleEl.addEventListener('input', markDirty)
   titleEl.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return
     if (e.key === 'Enter') {
       e.preventDefault()
       editor.focus()
@@ -1563,14 +1573,16 @@ export async function mountEditor(root, postId, opts = {}) {
     })
   })
   // 元信息抽屉：默认收起给写作让位，开关状态记住用户的选择；小屏是覆盖层，始终默认收起
+  // 隐私加固浏览器访问 localStorage 即抛 SecurityError：偏好存取吞异常，降级默认收起
   const drawer = document.getElementById('ed-drawer')
   const drawerBtn = document.getElementById('ed-drawer-toggle')
+  const drawerPref = () => { try { return localStorage.getItem('ed-drawer') } catch { return null } }
   const applyDrawer = (hidden, remember) => {
     drawer.classList.toggle('is-hidden', hidden)
     drawerBtn.classList.toggle('is-active', !hidden)
-    if (remember) localStorage.setItem('ed-drawer', hidden ? 'hidden' : 'open')
+    if (remember) { try { localStorage.setItem('ed-drawer', hidden ? 'hidden' : 'open') } catch { /* 不记住偏好 */ } }
   }
-  applyDrawer(window.matchMedia('(max-width: 860px)').matches || localStorage.getItem('ed-drawer') !== 'open', false)
+  applyDrawer(window.matchMedia('(max-width: 860px)').matches || drawerPref() !== 'open', false)
   drawerBtn.addEventListener('click', () => applyDrawer(!drawer.classList.contains('is-hidden'), true))
   document.getElementById('ed-drawer-close').addEventListener('click', () => applyDrawer(true, true))
 

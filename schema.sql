@@ -61,6 +61,8 @@ CREATE TABLE IF NOT EXISTS member_points_log (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_points_log_member ON member_points_log (member_id, created_at);
+-- 记分幂等（评论 ref_id=评论 id、每日登录 ref_id=北京日序号）；db.ts SCHEMA_INDEXES 有同款，两处同步
+CREATE UNIQUE INDEX IF NOT EXISTS idx_points_log_dedup ON member_points_log (member_id, reason, ref_id) WHERE ref_id > 0;
 
 CREATE TABLE IF NOT EXISTS posts (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,6 +164,8 @@ CREATE TABLE IF NOT EXISTS uploads (
   created_at INTEGER NOT NULL,
   hash       TEXT    NOT NULL DEFAULT ''    -- 内容 SHA-256 指纹（媒体体检查重用，src/audit.ts）；missing = R2 里已丢失
 );
+-- 媒体库按 created_at 倒序分页；db.ts SCHEMA_INDEXES 有同款，两处同步
+CREATE INDEX IF NOT EXISTS idx_uploads_created ON uploads (created_at DESC);
 
 -- 友情链接：站长维护，访客也可申请收录（source=user，默认 pending 待审）
 CREATE TABLE IF NOT EXISTS friend_links (

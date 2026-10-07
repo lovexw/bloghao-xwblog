@@ -375,10 +375,12 @@ export async function relatedPosts(db: D1Database, post: PostRow, limit = 3): Pr
 
 export async function listCategories(db: D1Database, opts: { withCount?: boolean } = {}): Promise<(CategoryRow & { post_count?: number })[]> {
   if (opts.withCount) {
+    // 计数滤掉回收站文章（含草稿是故意的：后台口径=已归类总量）；公开分类页不带计数，不受影响
     const { results } = await db
       .prepare(
         `SELECT c.*, COUNT(pc.post_id) AS post_count
          FROM categories c LEFT JOIN post_categories pc ON pc.category_id = c.id
+           AND pc.post_id IN (SELECT id FROM posts WHERE deleted_at IS NULL)
          GROUP BY c.id ORDER BY c.sort ASC, c.id ASC`
       )
       .all<CategoryRow & { post_count: number }>()
@@ -825,6 +827,10 @@ const SCHEMA_INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_members_points ON members (points DESC)',
   'CREATE INDEX IF NOT EXISTS idx_member_sessions_expiry ON member_sessions (expires_at)',
   'CREATE INDEX IF NOT EXISTS idx_points_log_member ON member_points_log (member_id, created_at)',
+  // 记分幂等的数据库强制：评论 ref_id=评论 id、每日登录 ref_id=北京日序号，并发重复记账由唯一索引拦下
+  // （points.ts awardPoints 捕获 UNIQUE 冲突视为已记过；ref_id=0 的 adminAdjust/老 dailyLogin 行不进索引）
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_points_log_dedup ON member_points_log (member_id, reason, ref_id) WHERE ref_id > 0',
+  'CREATE INDEX IF NOT EXISTS idx_uploads_created ON uploads (created_at DESC)',
   'CREATE INDEX IF NOT EXISTS idx_friend_links_status ON friend_links (status, sort, id)',
   'CREATE INDEX IF NOT EXISTS idx_visit_day ON visit_log (day, ts)',
 ]
@@ -887,20 +893,25 @@ export async function ensureSchema(db: D1Database): Promise<void> {
   }
   // 「关于我」→ 页面系统一次性迁移：settings 记账位防重复播种（页面被删后也不会复活）。
   // 老站升级把 settings.about 播成 slug='about' 的页面；新站首装播种默认文案，两者同一条路径。
+  // OR IGNORE + 吞冲突：部署后并发 isolate 会同时读到记账位缺失，输家撞 slug UNIQUE 不能打瘫首个请求（同 ftsSeeded 块口径）。
   const seeded = await db.prepare("SELECT value FROM settings WHERE key = 'pagesSeeded'").first<{ value: string }>()
   if (!seeded) {
     const about = await db.prepare("SELECT value FROM settings WHERE key = 'about'").first<{ value: string }>()
     const now = Date.now()
-    await db.batch([
-      db
-        .prepare(
-          "INSERT INTO pages (title, slug, content, status, show_in_nav, sort, created_at, updated_at) VALUES ('关于我', 'about', ?, 'published', 1, 90, ?, ?)"
-        )
-        .bind(about?.value || DEFAULT_SETTINGS.about, now, now),
-      db
-        .prepare("INSERT INTO settings (key, value) VALUES ('pagesSeeded', '1') ON CONFLICT(key) DO UPDATE SET value = '1'")
-        .bind(),
-    ])
+    try {
+      await db.batch([
+        db
+          .prepare(
+            "INSERT OR IGNORE INTO pages (title, slug, content, status, show_in_nav, sort, created_at, updated_at) VALUES ('关于我', 'about', ?, 'published', 1, 90, ?, ?)"
+          )
+          .bind(about?.value || DEFAULT_SETTINGS.about, now, now),
+        db
+          .prepare("INSERT INTO settings (key, value) VALUES ('pagesSeeded', '1') ON CONFLICT(key) DO UPDATE SET value = '1'")
+          .bind(),
+      ])
+    } catch {
+      /* 并发 isolate 已处理：不记账也无碍，下次冷启动重试 */
+    }
   }
 }
 

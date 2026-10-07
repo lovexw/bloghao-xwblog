@@ -1339,7 +1339,9 @@
       // 同组：同一容器里的所有内容图（文章正文 / 微博九图），按 DOM 顺序
       var holder = target.closest('.rich, .wb-imgs, .wb-card') || document.body
       var imgs = [].slice.call(holder.querySelectorAll('img')).filter(function (im) {
-        return (im.currentSrc || im.src) && !im.closest('a')
+        // 同入口委托口径排除小图（<100px，头像/图标/表情）：键盘翻页不翻进 22px 表情再被拉伸成模糊大图
+        var w = im.getBoundingClientRect().width
+        return (im.currentSrc || im.src) && !im.closest('a') && !(w && w < 100)
       })
       group = imgs.map(function (im) {
         return im.currentSrc || im.src

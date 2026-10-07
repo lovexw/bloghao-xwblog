@@ -255,7 +255,9 @@ async function shellView(active, contentHTML) {
   if (!state.user) return
   // 路由已切走（或已登出）时放弃本次渲染，防慢响应把旧页面盖回来
   if (active !== pendingRoute) return
-  const sideMini = localStorage.getItem('admin-side') === 'mini'
+  // 隐私加固浏览器（Safari 锁定模式等）访问 localStorage 即抛 SecurityError：偏好存取吞异常，降级默认值
+  const prefGet = (k) => { try { return localStorage.getItem(k) } catch { return null } }
+  const sideMini = prefGet('admin-side') === 'mini'
   // 移动端底部栏只放高频项，其余收进「更多」抽屉；不在栏内的待审数聚合成红点
   const barItems = MOBILE_TAB_IDS.map((id) => MENU.find((m) => m.id === id)).filter(Boolean)
   const moreDot = MENU.reduce((sum, m) => (m.badge && !MOBILE_TAB_IDS.includes(m.id) ? sum + m.badge() : sum), 0)
@@ -283,7 +285,7 @@ async function shellView(active, contentHTML) {
   </div>`
   document.getElementById('btn-side-fold').addEventListener('click', (e) => {
     const mini = $app.querySelector('.shell').classList.toggle('side-mini')
-    localStorage.setItem('admin-side', mini ? 'mini' : 'full')
+    try { localStorage.setItem('admin-side', mini ? 'mini' : 'full') } catch { /* 锁定模式下不记住偏好 */ }
     e.currentTarget.title = mini ? '展开侧栏' : '收起侧栏'
   })
   document.getElementById('btn-logout').addEventListener('click', async () => {
@@ -605,6 +607,7 @@ async function viewPosts() {
   searchEl.addEventListener('focus', () => (searchFocused = true))
   searchEl.addEventListener('blur', () => (searchFocused = false))
   searchEl.addEventListener('input', () => {
+    if (searchEl.isComposing) return // 中文输入法组词中的 input 不触发搜索（组词结束会有一次 isComposing=false 的 input）
     clearTimeout(postsSearchTimer)
     postsSearchTimer = setTimeout(() => nav({ q: searchEl.value.trim(), page: 1 }), 400)
   })
@@ -765,6 +768,7 @@ async function viewWeibo() {
   }
 
   /** 加图统一入口：文件选择 / 粘贴 / 拖拽共用，自动过滤非图片并尊重 9 图上限 */
+  let wbUploading = 0 // 在途上传计数：发布/存草稿前必须归零（同前台发布器 cpUploading 口径），防半截图发出
   async function addImageFiles(fileList) {
     const all = [...(fileList || [])]
     const imgs = all.filter((f) => /^image\//.test(f.type))
@@ -777,6 +781,7 @@ async function viewWeibo() {
     if (imgs.length > room) toast(`最多 ${WB_MAX_IMAGES} 张图，多出的 ${imgs.length - room} 张已忽略`, true)
     const label = addImgBtn.textContent
     for (const f of imgs.slice(0, room)) {
+      wbUploading++
       try {
         addImgBtn.textContent = `上传中 ${f.name.slice(0, 12)}…`
         const r = await uploadFile(await compressImage(f), null)
@@ -784,6 +789,8 @@ async function viewWeibo() {
         renderImgs()
       } catch (e) {
         toast(e.message, true)
+      } finally {
+        wbUploading--
       }
     }
     addImgBtn.textContent = label
@@ -820,6 +827,8 @@ async function viewWeibo() {
   async function saveWeibo(status) {
     const content = contentEl.value.trim()
     if (!content && !images.length) return toast('写点什么，或者配张图吧', true)
+    // 二道防线：上传未完就点发布，微博会以缺图状态发出（图片还在闭包里推）
+    if (wbUploading > 0) return toast('还有图片在上传中，稍等一下', true)
     // 请求期间禁用全部按钮：连击会重复发微博
     const btns = ['wb-save', 'wb-publish', 'wb-draft'].map((id) => document.getElementById(id)).filter(Boolean)
     btns.forEach((b) => (b.disabled = true))
@@ -1257,6 +1266,8 @@ async function viewCategories() {
         </div>
         <div class="modal-foot"><button class="btn" data-close>取消</button><button class="btn btn-primary" id="cat-edit-save">保存</button></div>`)
       m.mask.querySelector('#cat-edit-save').addEventListener('click', async () => {
+        const saveBtn = m.mask.querySelector('#cat-edit-save')
+        saveBtn.disabled = true
         try {
           await api(`/admin/categories/${id}`, {
             method: 'PUT',
@@ -1270,6 +1281,8 @@ async function viewCategories() {
           navigate()
         } catch (e) {
           toast(e.message, true)
+        } finally {
+          saveBtn.disabled = false // 弹窗已关时改的是游离节点，无副作用
         }
       })
     })
@@ -1518,6 +1531,7 @@ async function viewMembers() {
   }
   const searchEl = document.getElementById('mb-search')
   searchEl.addEventListener('input', () => {
+    if (searchEl.isComposing) return // 同文章搜索：组词中不打断输入
     clearTimeout(membersSearchTimer)
     membersSearchTimer = setTimeout(() => nav({ q: searchEl.value.trim(), page: 1 }), 400)
   })
@@ -2674,6 +2688,8 @@ async function viewSettings() {
     const oldP = document.getElementById('pw-old').value
     const newP = document.getElementById('pw-new').value
     if (!oldP || newP.length < 8) return toast('新密码至少 8 位', true)
+    const btn = document.getElementById('btn-pw')
+    btn.disabled = true // 连击会发两次 PUT，第二次旧密码已错报「修改失败」盖住成功提示
     try {
       await api('/admin/password', { method: 'PUT', body: { oldPassword: oldP, newPassword: newP } })
       toast('密码已修改')
@@ -2681,6 +2697,8 @@ async function viewSettings() {
       document.getElementById('pw-new').value = ''
     } catch (e) {
       toast(e.message, true)
+    } finally {
+      btn.disabled = false
     }
   })
 
@@ -2688,6 +2706,8 @@ async function viewSettings() {
   tokenInput.addEventListener('click', () => tokenInput.select()) // 事件绑定（CSP 禁内联脚本）
   document.getElementById('btn-token-gen').addEventListener('click', async () => {
     if (tokenInput.value && !(await confirmBox('重新生成后旧 Token 立即失效，已配置的外部工具需要更换新 Token。确定？'))) return
+    const btn = document.getElementById('btn-token-gen')
+    btn.disabled = true // 连击会生成两个 Token，后者使前者失效
     try {
       const d = await api('/admin/external/token', { method: 'POST' })
       tokenInput.value = d.token
@@ -2695,6 +2715,8 @@ async function viewSettings() {
       toast('Token 已生成并保存，同步给外部工具即可使用')
     } catch (e) {
       toast(e.message, true)
+    } finally {
+      btn.disabled = false
     }
   })
   document.getElementById('btn-token-copy').addEventListener('click', () => {
@@ -2764,8 +2786,17 @@ function uploadFile(file, onProgress) {
     }
     xhr.onload = () => {
       const d = xhr.response || {}
-      if (xhr.status >= 200 && xhr.status < 300) resolve(d)
-      else reject(new Error(d.error || '上传失败'))
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(d)
+        return
+      }
+      // 与 api() 的会话过期兜底同口径：上传期间会话过期也回登录页，别让用户对着「未登录」toast 反复重试
+      if (xhr.status === 401 && state.user) {
+        state.user = null
+        authView('login')
+        toast('登录已过期，请重新登录', true)
+      }
+      reject(new Error(d.error || '上传失败'))
     }
     xhr.onerror = () => reject(new Error('网络错误，上传失败'))
     const fd = new FormData()

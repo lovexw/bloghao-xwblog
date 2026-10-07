@@ -576,7 +576,9 @@ api.post('/admin/posts', async (c) => {
       slug,
       title,
       sanitizeHtml(p.content),
-      p.summary || excerpt(p.content, 80),
+      // 密码文的自动摘要留空：summary 列是对外导读面（RSS description / meta / 公开列表），
+      // 不能拿加密正文截前 80 字泄出去；作者手填的摘要照常保留（作者主动公开的导读）
+      p.summary || (passwordHash ? '' : excerpt(p.content, 80)),
       p.cover,
       JSON.stringify(p.tags),
       p.status,
@@ -626,10 +628,13 @@ api.put('/admin/posts/:id', async (c) => {
   const title = p.has.title ? p.title || '无标题' : existing.title
   const slug = p.has.slug && p.slug && p.slug !== existing.slug ? await uniqueSlug(c.env.DB, p.slug, id) : existing.slug
   const content = p.has.content ? sanitizeHtml(p.content) : existing.content
-  const summary = p.has.summary ? p.summary || (p.status === 'published' ? excerpt(content, 80) : '') : existing.summary
+  // status 先解析（部分更新语义：缺键沿用库里状态），summary 兜底按解析后的状态算，别用 payload 默认值。
+  // 密码文的自动摘要同样留空（同 POST 创建口径）：summary 是公开导读面，加密正文不出前 80 字
+  const status = p.has.status ? p.status : existing.status
+  const willLock = p.has.password ? !!p.password : !!existing.password_hash
+  const summary = p.has.summary ? p.summary || (willLock ? '' : status === 'published' ? excerpt(content, 80) : '') : existing.summary
   const cover = p.has.cover ? p.cover : existing.cover
   const tags = p.has.tags ? JSON.stringify(p.tags) : existing.tags
-  const status = p.has.status ? p.status : existing.status
   const pinned = p.has.pinned ? p.pinned : existing.pinned
   const minTier = p.has.minTier ? p.minTier : normalizeMinTier(existing.min_tier)
   // 草稿也保留已有 published_at：采集插件会把原文发布时间写入草稿，
@@ -820,14 +825,6 @@ api.delete('/admin/weibo/:id', async (c) => {
 })
 
 /* ---------------- 友情链接管理 ---------------- */
-const LINK_ICON_MIMES: Record<string, string> = {
-  'image/x-icon': 'ico',
-  'image/vnd.microsoft.icon': 'ico',
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/webp': 'webp',
-  'image/gif': 'gif',
-}
 const LINK_ICON_MAX_BYTES = 300 * 1024
 const ICON_FETCH_UA = 'Mozilla/5.0 (compatible; BlogHaoBot/1.0; +https://github.com/lovexw/bloghao)'
 
@@ -860,12 +857,13 @@ async function storeLinkIcon(env: Env, iconUrl: string, host: string): Promise<s
       headers: { 'user-agent': ICON_FETCH_UA },
     })
     if (!res.ok) return ''
-    const mime = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()
-    // hasOwnProperty 挡原型链（同 upload 的 IMAGE_MIMES 口径）：继承属性 truthy 会穿透成非法扩展名
-    const ext = Object.prototype.hasOwnProperty.call(LINK_ICON_MIMES, mime) ? LINK_ICON_MIMES[mime] : ''
-    if (!ext) return ''
     const buf = await res.arrayBuffer()
     if (!buf.byteLength || buf.byteLength > LINK_ICON_MAX_BYTES) return ''
+    // 只认文件魔数、不信任源站 Content-Type（同 collect 转存口径）：favicon 常是 ICO（sniffImageExt 不认），单独判魔数
+    const h = new Uint8Array(buf, 0, Math.min(4, buf.byteLength))
+    const ext = h[0] === 0 && h[1] === 0 && h[2] === 1 && h[3] === 0 ? 'ico' : sniffImageExt(buf)
+    if (!ext) return ''
+    const mime = ext === 'ico' ? 'image/x-icon' : `image/${ext === 'jpg' ? 'jpeg' : ext}`
     const key = `u/fav/${host.replace(/[^a-z0-9.-]/gi, '')}.${ext}`
     await env.IMAGES.put(key, buf, {
       httpMetadata: { contentType: mime, cacheControl: 'public, max-age=604800' },
@@ -1257,9 +1255,9 @@ api.post('/admin/trash/purge', async (c) => {
 })
 
 api.get('/admin/tags', async (c) => {
-  // 文章里实际用到的标签（含草稿）+ 分类页预建的标签（count 为 0）
+  // 文章里实际用到的标签（含草稿，不含回收站）+ 分类页预建的标签（count 为 0）
   const [postsRes, extraRes] = await Promise.all([
-    c.env.DB.prepare('SELECT tags FROM posts LIMIT 2000').all<{ tags: string }>(),
+    c.env.DB.prepare('SELECT tags FROM posts WHERE deleted_at IS NULL LIMIT 2000').all<{ tags: string }>(),
     c.env.DB.prepare('SELECT name FROM tags').all<{ name: string }>(),
   ])
   const count = new Map<string, number>()
@@ -1469,11 +1467,15 @@ api.put('/admin/comments/:id', async (c) => {
   const id = parseId(c.req.param('id'))
   if (!id) return jsonError('评论不存在', 404)
   const body = await c.req.json<{ status?: string }>().catch(() => null)
-  const status = body?.status === 'pending' ? 'pending' : 'approved'
+  // status 白名单：拼错值/空 body 不得隐式过审（同 theme/siteMode 枚举口径）
+  if (body?.status !== 'approved' && body?.status !== 'pending') return jsonError('status 只允许 approved / pending')
+  // 先查后改：目标不存在回 404（同 pin/restore 口径），顺带带出 member_id 供计分
+  const target = await c.env.DB.prepare('SELECT member_id FROM comments WHERE id = ?').bind(id).first<{ member_id: number | null }>()
+  if (!target) return jsonError('评论不存在', 404)
+  const status = body.status
   // 会员评论过审才计积分（awardCommentPoints 按 ref_id 去重，反复 通过↔待审 不重复记）
-  const target = await c.env.DB.prepare('SELECT member_id FROM comments WHERE id = ?').bind(id).first<{ member_id: number }>()
   await c.env.DB.prepare('UPDATE comments SET status = ? WHERE id = ?').bind(status, id).run()
-  if (status === 'approved' && target?.member_id) {
+  if (status === 'approved' && target.member_id) {
     c.executionCtx.waitUntil(awardCommentPoints(c.env.DB, target.member_id, id))
   }
   return c.json({ ok: true })
