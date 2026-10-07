@@ -1,3 +1,4 @@
+import * as bitcoin from './bitcoin'
 import * as journal from './journal'
 import * as midnight from './midnight'
 import * as minimal from './minimal'
@@ -265,6 +266,13 @@ export const THEMES: Record<string, ThemeModule> = {
     name: '夜航',
     description: '深夜星图蓝 + 等宽字体点缀的开发者日志风',
     colors: ['#0f1115', '#58a6ff', '#161a22', '#1d232e', '#181d26'],
+  },
+  bitcoin: {
+    ...bitcoin,
+    id: 'bitcoin',
+    name: '比特币',
+    description: '比特币橙 × 暖白纸面，描边分层、衬线大标题与等宽眉题的品牌 kit 风',
+    colors: ['#faf9f6', '#f7931a', '#ffffff', '#fff3e0', '#f2f0ea'],
   },
 }
 

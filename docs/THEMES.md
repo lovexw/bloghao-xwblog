@@ -11,7 +11,8 @@ src/themes/
 ├── journal.ts / journal.css
 ├── paper.ts / paper.css
 ├── minimal.ts / minimal.css
-└── midnight.ts / midnight.css
+├── midnight.ts / midnight.css
+└── bitcoin.ts / bitcoin.css
 ```
 
 ## 一个主题需要提供什么
