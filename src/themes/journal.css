@@ -759,6 +759,9 @@ img { max-width: 100%; height: auto; }
 .cmt-item:last-child { border-bottom: none; }
 .cmt-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .cmt-name { font-size: 14.5px; font-weight: 600; }
+
+.cmt-avatar { width: 22px; height: 22px; flex: none; align-self: center; border-radius: 6px; background: var(--jrn-accent); color: #fff; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; }
+.cmt-avatar-img { object-fit: cover; }
 .cmt-time { font-size: 12px; color: var(--jrn-ink-soft); }
 .cmt-body { font-size: 15px; line-height: 1.8; margin-top: 6px; white-space: pre-wrap; word-break: break-word; }
 .cmt-children { margin: 12px 0 0; padding-left: 14px; border-left: 2px dashed var(--jrn-line); }
@@ -994,6 +997,9 @@ img { max-width: 100%; height: auto; }
 .wb-cmt-item { padding: 9px 0; }
 .wb-cmt-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .wb-cmt-name { font-size: 13.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+
+.wb-cmt-avatar { width: 20px; height: 20px; flex: none; border-radius: 6px; background: var(--jrn-accent); color: #fff; font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; }
+.wb-cmt-avatar-img { object-fit: cover; }
 .wb-cmt-badge {
   font-size: 11px; line-height: 1; font-weight: 400;
   color: var(--jrn-accent);
@@ -1291,6 +1297,9 @@ main .gb-section { margin-top: 8px; }
 .rk-item { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px dashed var(--jrn-line); }
 .rk-item:last-child { border-bottom: none; }
 .rk-no { flex: 0 0 22px; font-size: 13px; font-weight: 700; color: var(--jrn-ink-soft); font-variant-numeric: tabular-nums; text-align: center; }
+
+.rk-avatar { width: 28px; height: 28px; flex: none; border-radius: 6px; background: var(--jrn-accent); color: #fff; font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; }
+.rk-avatar-img { object-fit: cover; }
 .rk-item.is-top1 .rk-no, .rk-item.is-top2 .rk-no, .rk-item.is-top3 .rk-no { color: var(--jrn-accent); }
 .rk-name { flex: 1 1 auto; min-width: 0; font-size: 14px; color: var(--jrn-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rk-tier { flex: 0 0 auto; font-size: 11px; color: var(--jrn-accent); background: var(--jrn-hl); border-radius: 999px; padding: 1px 8px; }

@@ -26,6 +26,8 @@ export interface MemberRow {
   email: string
   display_name: string
   avatar: string
+  /** 绑定的 QQ 号（仅头像抓取记账位）；任何公开出参不携带，头像走站内转存 */
+  qq: string
   tier: MemberTier
   points: number
   status: 'active' | 'banned'
@@ -105,6 +107,8 @@ export interface CommentRow {
   /** 会员徽标冗余字段：评论列表 LEFT JOIN members 带出（member_id > 0 时非空，契约 DEVPLAN 附录 A） */
   member_name?: string
   member_tier?: MemberTier
+  /** 会员头像（站内 /images/ 转存地址）：评论头像位展示用；QQ 号本体永不出参 */
+  member_avatar?: string
 }
 
 export interface CategoryRow {

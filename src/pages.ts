@@ -836,6 +836,7 @@ function toRankEntry(m: RankMemberRow, rank: number, sessionId: number | null): 
     nickname: (m.display_name || m.username).slice(0, 24),
     tier: m.tier,
     points: m.points,
+    avatarUrl: m.avatar || undefined,
     isMe: sessionId !== null && sessionId === m.id,
   }
 }
@@ -870,6 +871,7 @@ export async function renderMember(c: C): Promise<Response> {
         points: row.points,
         email: row.email,
         avatarUrl: row.avatar || undefined,
+        qq: row.qq,
         createdAt: row.created_at,
         displayNameChangedAt: row.display_name_changed_at,
       }

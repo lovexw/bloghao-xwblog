@@ -788,6 +788,8 @@ export interface MemberView {
   email?: string
   /** P1 预留：会员自定义头像（无则退回昵称首字，与站点头像同款降级） */
   avatarUrl?: string
+  /** 绑定的 QQ 号（本人视角才有——评论 / 榜单等公开面一律不携带，红线见 DEVPLAN） */
+  qq?: string
   createdAt?: number
   /** 上次改昵称时间（本人视角才有；null/缺省 = 从未改过，首次修改不受 30 天窗口限制） */
   displayNameChangedAt?: number | null
@@ -799,6 +801,8 @@ export interface RankEntryView {
   nickname: string
   tier: MemberTier
   points: number
+  /** 会员头像（站内 /images/ 转存地址），空 = 首字图标 */
+  avatarUrl?: string
   /** 当前访客本人行（榜单页高亮用） */
   isMe?: boolean
 }
@@ -810,10 +814,19 @@ export function memberAvatarHtml(m: MemberView, cls: string): string {
   return `<span class="${cls}" aria-hidden="true">${esc(ch)}</span>`
 }
 
+/** 评论头像位（文章 / 留言板评论）：会员有站内头像用图，游客与未绑头像的会员退回昵称首字块；
+ *  site.js 的微博评论渲染是本函数的 ES5 手工镜像，改任一侧记得同步 */
+function commentAvatarHtml(c: CommentRow): string {
+  if (c.member_avatar) return `<img class="cmt-avatar cmt-avatar-img" src="${esc(c.member_avatar)}" alt="">`
+  const ch = (c.nickname || '客').trim().charAt(0) || '客'
+  return `<span class="cmt-avatar" aria-hidden="true">${esc(ch)}</span>`
+}
+
 /** 排行榜单行（/rank 页结构） */
 function rankRow(e: RankEntryView): string {
   return `<li class="rk-item${e.rank <= 3 ? ` is-top${e.rank}` : ''}${e.isMe ? ' is-me' : ''}">
   <span class="rk-no">${e.rank}</span>
+  ${memberAvatarHtml(e, 'rk-avatar')}
   <span class="rk-name">${esc(e.nickname)}</span>
   <span class="rk-tier">${tierLabel(e.tier)}</span>
   <b class="rk-pts">${e.points}</b>
@@ -858,6 +871,21 @@ export function memberCardHtml(m: MemberView): string {
     <input class="mem-input" name="nickname" maxlength="24" value="${esc(m.nickname)}" placeholder="昵称（中英文均可）" aria-label="昵称"${dis}>
     <p class="mem-swap">${esc(rule.text)}</p>
     <button class="mem-btn" type="submit"${dis}>保存昵称</button>
+    <p class="mem-tip" data-member-tip aria-live="polite"></p>
+  </form>
+</section>
+<section class="mem-card">
+  <h2 class="mem-form-title">QQ 头像</h2>
+  <form data-member-qq-form>
+    <input class="mem-input" name="qq" inputmode="numeric" maxlength="11" value="${esc(m.qq || '')}" placeholder="输入你的 QQ 号" aria-label="QQ 号">
+    <p class="mem-swap">${
+      m.qq
+        ? m.avatarUrl
+          ? '已绑定，头像会显示在评论区与排行榜'
+          : '已绑定但头像还没抓到，点下方按钮重试'
+        : '绑定后评论区与排行榜显示 QQ 头像；QQ 号仅用于抓取头像，不会公开展示'
+    }</p>
+    <button class="mem-btn" type="submit">${m.qq && !m.avatarUrl ? '重试头像' : '保存'}</button>
     <p class="mem-tip" data-member-tip aria-live="polite"></p>
   </form>
 </section>
@@ -1070,6 +1098,7 @@ export function commentsHtml(o: {
     const kids = children.get(c.id) || []
     return `<li class="cmt-item" id="cmt-${c.id}">
   <div class="cmt-head">
+    ${commentAvatarHtml(c)}
     <span class="cmt-name">${esc(c.nickname)}${badge}</span>
     <span class="cmt-time">${fmtDateTime(c.created_at)}</span>
     ${replyBtn}

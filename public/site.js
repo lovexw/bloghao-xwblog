@@ -457,10 +457,17 @@
       listEl.innerHTML = '<p class="wb-cmt-empty">还没有评论，来抢沙发～</p>'
       return
     }
+    // 评论头像位（服务端 commentAvatarHtml 的 ES5 手工镜像，改任一侧记得同步）：
+    // 会员有站内头像用图，游客与未绑头像的会员退回昵称首字块
+    function avatarHtml(c) {
+      if (c.member_avatar) return '<img class="wb-cmt-avatar wb-cmt-avatar-img" src="' + esc(c.member_avatar) + '" alt="">'
+      var ch = (c.nickname || '客').charAt(0) || '客'
+      return '<span class="wb-cmt-avatar" aria-hidden="true">' + esc(ch) + '</span>'
+    }
     function item(c, nested) {
       var html =
         '<li class="wb-cmt-item' + (nested ? ' wb-cmt-nested' : '') + '" id="wbc-' + c.id + '">' +
-        '<div class="wb-cmt-head"><span class="wb-cmt-name">' + esc(c.nickname) +
+        '<div class="wb-cmt-head">' + avatarHtml(c) + '<span class="wb-cmt-name">' + esc(c.nickname) +
         (Number(c.is_admin) ? '<span class="wb-cmt-badge">作者</span>' : c.member_name ? '<span class="wb-cmt-badge">会员</span>' : '') +
         '</span><span class="wb-cmt-time">' + fmtTime(c.created_at) + '</span>' +
         (isAdmin
@@ -1554,6 +1561,46 @@
           setTimeout(function () {
             location.reload()
           }, 500)
+        })
+        .catch(function (err) {
+          if (tip) tip.textContent = err.message || '保存失败，请重试'
+          btn.textContent = label
+          btn.disabled = false
+        })
+    })
+  }
+
+  // 会员中心卡（memberCardHtml）：QQ 头像绑定（评论头像 C2）——绑过再存即幂等重试头像；
+  // QQ 号正则与 utils.ts isValidQQ 同款镜像，改任一侧记得同步
+  var memQQForm = document.querySelector('[data-member-qq-form]')
+  if (memQQForm) {
+    memQQForm.addEventListener('submit', function (e) {
+      e.preventDefault()
+      var btn = memQQForm.querySelector('.mem-btn')
+      var tip = memQQForm.querySelector('[data-member-tip]')
+      var input = memQQForm.querySelector('[name=qq]')
+      if (!btn || btn.disabled) return
+      var qq = input ? input.value.trim() : ''
+      if (!/^[1-9][0-9]{4,10}$/.test(qq)) {
+        if (tip) tip.textContent = 'QQ 号格式不对（5-11 位数字，不以 0 开头）'
+        return
+      }
+      var label = btn.textContent
+      btn.disabled = true
+      btn.textContent = '保存中…'
+      postJSON('/api/member/profile', { qq: qq })
+        .then(function (d) {
+          if (d && d.avatarFailed) {
+            // 头像抓取失败但 qq 已记上：提示重试（服务端容忍失败是设计口径）
+            if (tip) tip.textContent = 'QQ 已绑定，但头像没抓到，稍后再点一次重试'
+            btn.textContent = '重试头像'
+            btn.disabled = false
+          } else {
+            if (tip) tip.textContent = '已保存，正在刷新…'
+            setTimeout(function () {
+              location.reload()
+            }, 500)
+          }
         })
         .catch(function (err) {
           if (tip) tip.textContent = err.message || '保存失败，请重试'

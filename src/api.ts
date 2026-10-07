@@ -52,6 +52,7 @@ import {
   uniqueSlug,
   updateMemberAdmin,
   updateMemberNickname,
+  updateMemberQQ,
   weiboCommentCountMap,
   weiboImageList,
   weiboTopicList,
@@ -67,13 +68,13 @@ import { fireCommentCreated, firePostPublished, listServerPlugins } from './hook
 import { SITE_MODE_VALUES, siteBase, toHomePost, type SiteMode } from './render'
 import { sanitizeHtml } from './sanitize'
 import { cleanupUnreferenced, backfillHashes, mergeDuplicate, runAudit } from './audit'
-import { imageExtOf, MAX_REMOTE_IMAGES, MAX_UPLOAD_BYTES, saveUpload, transferImage } from './store'
+import { imageExtOf, MAX_REMOTE_IMAGES, MAX_UPLOAD_BYTES, saveUpload, sniffImageExt, transferImage } from './store'
 import { hashPostPassword } from './protect'
 import { listTrash, restorePostStatus, trashTable, type TrashTable } from './trash'
 import { classifyBrowser, classifyDevice, cleanPath, cleanRef, cleanTitle, cleanVid, getVisitStats, recordVisit } from './stats'
 import { THEMES } from './themes/registry'
 import type { CommentRow, Env, MemberRow, MemberTier, PostRow, SessionUser } from './types'
-import { clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extractWeiboTopics, fmtDateCN, isDemo, jsonItemLikePattern, nicknameCooldown, normalizeLinkUrl, slugify } from './utils'
+import { clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extractWeiboTopics, fmtDateCN, isDemo, isValidQQ, jsonItemLikePattern, nicknameCooldown, normalizeLinkUrl, slugify } from './utils'
 
 type AppEnv = { Bindings: Env; Variables: { user: SessionUser } }
 
@@ -193,6 +194,7 @@ function memberView(m: MemberRow, self = false) {
   if (self) {
     v.username = m.username
     v.email = m.email
+    v.qq = m.qq
     v.createdAt = m.created_at
     v.displayNameChangedAt = m.display_name_changed_at ?? null
   }
@@ -274,24 +276,70 @@ api.get('/member/me', async (c) => {
 
 /* 会员个人资料（/member 页会员卡，契约见 docs/DEVPLAN-2026-10-07.md）：改昵称（30 天一次）与改密码 */
 
+/** 抓取 QQ 头像并转存进站内图床，返回站内地址；失败返回 null（调用方容忍只存 qq 号，
+ *  会员中心「重试头像」重跑同一请求补抓）。q1 主端点、q2 备用镜像，s=140 档（100 略糊、
+ *  640 浪费流量）；只认文件魔数（同 collect 转存口径），落库统一走 saveUpload（EXIF 剥离同款兜底） */
+async function fetchQQAvatar(env: Env, qq: string): Promise<string | null> {
+  for (const host of ['q1.qlogo.cn', 'q2.qlogo.cn']) {
+    try {
+      const res = await fetch(`https://${host}/g?b=qq&nk=${encodeURIComponent(qq)}&s=140`, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', Referer: 'https://q.qlogo.cn/' },
+        signal: AbortSignal.timeout(6_000),
+      })
+      if (!res.ok) continue
+      if (Number(res.headers.get('content-length') || 0) > 1024 * 1024) continue
+      const buf = await res.arrayBuffer()
+      if (buf.byteLength === 0 || buf.byteLength > 1024 * 1024) continue
+      const ext = sniffImageExt(buf)
+      if (!ext || ext === 'gif') continue // 头像只收 jpg/png/webp
+      return await saveUpload(env, buf, `image/${ext === 'jpg' ? 'jpeg' : ext}`, `qq-${qq}.${ext}`, ext)
+    } catch {
+      /* 单镜像失败换下一个，最终失败由调用方容忍 */
+    }
+  }
+  return null
+}
+
 api.post('/member/profile', async (c) => {
   const settings = await getSettings(c.env.DB)
   if (settings.membersEnabled !== '1') return jsonError('会员功能未开放', 404)
   const session = await getMemberUser(c.env.DB, c.req.raw)
   if (!session) return jsonError('请先登录', 401)
-  const body = await c.req.json<{ nickname?: string }>().catch(() => null)
-  const nickname = cleanNickname(body?.nickname)
-  if (!nickname) return jsonError('昵称不能为空')
-  const row = await getMemberById(c.env.DB, session.id)
-  if (!row) return jsonError('请先登录', 401)
-  const cd = nicknameCooldown(row.display_name_changed_at)
-  if (!cd.allowed) return jsonError(`昵称每 30 天只能修改一次，${fmtDateCN(cd.nextAt)}后可再改`, 403)
-  // 条件更新把窗口判定下沉进 SQL：并发双开同时过上面的前置检查时，只有一动能落库
+  const body = await c.req.json<{ nickname?: string; qq?: string }>().catch(() => null)
+  const hasNickname = !!body && typeof body.nickname === 'string'
+  const nickname = hasNickname ? cleanNickname(body?.nickname) : ''
+  // qq 只在显式携带时处理：带键即意图（绑定/重试头像），不带键不碰
+  const qq = body && typeof body.qq === 'string' ? body.qq.trim() : undefined
+  if (!hasNickname && qq === undefined) return jsonError('没有要修改的内容')
+  if (hasNickname && !nickname) return jsonError('昵称不能为空')
+  const res: Record<string, unknown> = { ok: true }
   const now = Date.now()
-  if (!(await updateMemberNickname(c.env.DB, session.id, nickname, now))) {
-    return jsonError(`昵称每 30 天只能修改一次，${fmtDateCN(nicknameCooldown(now).nextAt)}后可再改`, 403)
+
+  if (hasNickname) {
+    const row = await getMemberById(c.env.DB, session.id)
+    if (!row) return jsonError('请先登录', 401)
+    const cd = nicknameCooldown(row.display_name_changed_at)
+    if (!cd.allowed) return jsonError(`昵称每 30 天只能修改一次，${fmtDateCN(cd.nextAt)}后可再改`, 403)
+    // 条件更新把窗口判定下沉进 SQL：并发双开同时过上面的前置检查时，只有一动能落库
+    if (!(await updateMemberNickname(c.env.DB, session.id, nickname, now))) {
+      return jsonError(`昵称每 30 天只能修改一次，${fmtDateCN(nicknameCooldown(now).nextAt)}后可再改`, 403)
+    }
+    res.nickname = nickname
+    res.displayNameChangedAt = now
   }
-  return c.json({ ok: true, nickname, displayNameChangedAt: now })
+
+  if (qq !== undefined) {
+    // 评论头像（C2）：qq 号仅作头像抓取记账位，任何公开出参不携带；绑过再绑 = 幂等重试头像
+    if (!isValidQQ(qq)) return jsonError('QQ 号格式不对（5-11 位数字，不以 0 开头）')
+    if (!rateLimit(`qqbind:${session.id}`, 10, 60_000)) return jsonError('操作太频繁，请稍后再试', 429)
+    const avatarUrl = await fetchQQAvatar(c.env, qq)
+    await updateMemberQQ(c.env.DB, session.id, qq, avatarUrl, now)
+    res.qq = qq
+    if (avatarUrl) res.avatarUrl = avatarUrl
+    else res.avatarFailed = true
+  }
+
+  return c.json(res)
 })
 
 api.post('/member/password', async (c) => {
@@ -1857,7 +1905,7 @@ api.get('/public/weibo/:id/comments', async (c) => {
   const settings = await getSettings(c.env.DB)
   const { results } = await c.env.DB
     .prepare(
-      "SELECT cm.id, cm.parent_id, cm.is_admin, cm.nickname, cm.content, cm.created_at, m.display_name AS member_name, m.tier AS member_tier FROM comments cm LEFT JOIN members m ON m.id = cm.member_id WHERE cm.weibo_id = ? AND cm.status = 'approved' ORDER BY cm.created_at ASC LIMIT 200"
+      "SELECT cm.id, cm.parent_id, cm.is_admin, cm.nickname, cm.content, cm.created_at, m.display_name AS member_name, m.tier AS member_tier, m.avatar AS member_avatar FROM comments cm LEFT JOIN members m ON m.id = cm.member_id WHERE cm.weibo_id = ? AND cm.status = 'approved' ORDER BY cm.created_at ASC LIMIT 200"
     )
     .bind(id)
     .all()

@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { awardPoints, awardCommentPoints, canRead, cstDayStart, normalizeMinTier, POINTS_RULES } from '../src/points.ts'
-import { createMember, listMembersAdmin, listRankTop, updateMemberAdmin, updateMemberNickname } from '../src/db.ts'
-import { cleanNickname, NICKNAME_CHANGE_COOLDOWN_MS, nicknameCooldown, teaserHtml } from '../src/utils.ts'
+import { createMember, listApprovedComments, listGuestbookComments, listMembersAdmin, listRankTop, updateMemberAdmin, updateMemberNickname, updateMemberQQ } from '../src/db.ts'
+import { cleanNickname, isValidQQ, NICKNAME_CHANGE_COOLDOWN_MS, nicknameCooldown, teaserHtml } from '../src/utils.ts'
 
 // ── 会员体系（契约见 docs/DEVPLAN-2026-10-07.md 附录 A）：积分引擎 / 会员查询 SQL 形状 ──
 
@@ -318,4 +318,41 @@ test('teaserHtml：按可见文本截断、闭合未关标签、标签本身不�
   assert.equal(teaserHtml('<p>短文</p>', 200), '<p>短文</p>')
   // void 标签不进栈，不会产出多余的闭合
   assert.equal(teaserHtml('<p>a<br>b<img src="/images/x.jpg">c</p>', 200), '<p>a<br>b<img src="/images/x.jpg">c</p>')
+})
+
+// ── 评论头像（C2）：QQ 绑定链路，机制见 src/exif.ts 同批的 saveUpload / render.ts commentAvatarHtml ──
+
+test('isValidQQ：5-11 位数字、不以 0 开头；其余一律拒绝', () => {
+  assert.ok(isValidQQ('12345'))
+  assert.ok(isValidQQ('10000'))
+  assert.ok(isValidQQ('12345678901'), '11 位是上限')
+  assert.equal(isValidQQ('01234'), false, '0 开头拒绝')
+  assert.equal(isValidQQ('1234'), false, '不足 5 位')
+  assert.equal(isValidQQ('123456789012'), false, '超 11 位')
+  assert.equal(isValidQQ(''), false)
+  assert.equal(isValidQQ('abc'), false)
+  assert.equal(isValidQQ(null), false)
+})
+
+test('updateMemberQQ：qq 与头像回写；avatar=null 只存 qq（qlogo 抓取失败容忍，重试补抓）', async () => {
+  const { db, sqls, allBinds } = fakeCaptureDb()
+  await updateMemberQQ(db, 7, '12345', '/images/u/202610/abc.png', 1_000)
+  assert.match(
+    sqls[0],
+    /UPDATE members SET qq = \?, updated_at = \?, avatar = COALESCE\(\?, avatar\) WHERE id = \?/,
+    'COALESCE 保证抓取失败时不清掉已有头像'
+  )
+  assert.deepEqual(allBinds[0], ['12345', 1_000, '/images/u/202610/abc.png', 7])
+  await updateMemberQQ(db, 7, '12345', null, 2_000)
+  assert.deepEqual(allBinds[1], ['12345', 2_000, null, 7])
+})
+
+test('评论列表 SQL 带出 m.avatar AS member_avatar，且 qq 号本体永不进评论出参', async () => {
+  const { db, sqls } = fakeCaptureDb()
+  await listApprovedComments(db, 1)
+  await listGuestbookComments(db)
+  assert.match(sqls[0], /m\.avatar AS member_avatar/)
+  assert.match(sqls[1], /m\.avatar AS member_avatar/)
+  assert.doesNotMatch(sqls[0], /m\.qq/, '隐私红线：qq 只进本人视角')
+  assert.doesNotMatch(sqls[1], /m\.qq/)
 })

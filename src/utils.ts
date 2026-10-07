@@ -131,6 +131,12 @@ export function cleanNickname(raw: unknown): string {
 /** 昵称修改冷却窗口（30 天）：NULL = 从未改过，首次修改不受限 */
 export const NICKNAME_CHANGE_COOLDOWN_MS = 30 * 24 * 3600_000
 
+/** QQ 号校验（评论头像 C2）：5-11 位数字、不以 0 开头——qlogo 头像抓取的入参门槛。
+ *  site.js 会员卡里有一份同款 ES5 正则镜像，改任一侧记得同步 */
+export function isValidQQ(q: unknown): boolean {
+  return /^[1-9][0-9]{4,10}$/.test(String(q ?? ''))
+}
+
 /** 30 天窗口判定：allowed = 现在能不能改；nextAt = 冷却中时的解禁时间（毫秒，可喂给 fmtDateCN） */
 export function nicknameCooldown(
   changedAt: number | null | undefined,

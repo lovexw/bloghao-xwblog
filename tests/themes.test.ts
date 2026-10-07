@@ -5,6 +5,8 @@ import { pathToFileURL } from 'node:url'
 import type { ThemeModule } from '../src/themes/registry.ts'
 import type { AboutData, ArchivesData, GuestbookData, HomeData, LinksData, MemberData, PageData, PostData, RankData, WeiboData } from '../src/themes/registry.ts'
 import type { HomePostView, MemberView, RankEntryView, WeiboItemView, ArchiveYearGroup, FriendLinkView, CategoryLink, TagCount } from '../src/render.ts'
+import type { CommentRow } from '../src/types.ts'
+import { commentsHtml, memberCardHtml, rankListHtml } from '../src/render.ts'
 import { packMatrix, qrMatrix } from '../src/qrcode.ts'
 
 // 主题模块 import 了 .css（wrangler 部署走 Text rule）——测试环境先用 hook 顶替，再动态加载注册表
@@ -300,4 +302,60 @@ test('getTheme：未知主题回退 wechat（hasOwnProperty 挡原型链）', as
   const { getTheme } = await import('../src/themes/registry.ts')
   assert.equal(getTheme('nope').id, 'wechat')
   assert.equal(getTheme('constructor').id, 'wechat')
+})
+
+// ── 评论头像（C2）：评论头像位 / 排行榜头像位 / 会员中心 QQ 绑定卡 ──
+
+const cmt = (over: Partial<CommentRow>): CommentRow => ({
+  id: 1,
+  post_id: 1,
+  weibo_id: 0,
+  parent_id: 0,
+  is_admin: 0,
+  nickname: '游客甲',
+  email: '',
+  website: '',
+  content: '留言内容',
+  status: 'approved',
+  ip: '',
+  created_at: TS,
+  ...over,
+})
+
+test('评论头像位：会员出站内头像图，游客与未绑头像的会员退回昵称首字块', () => {
+  const html = commentsHtml({
+    comments: [
+      cmt({ id: 1, member_avatar: '/images/u/202610/a.png' }),
+      cmt({ id: 2, nickname: '游客甲' }),
+      cmt({ id: 3, nickname: '小明', member_name: '小明', member_tier: 'normal' }),
+    ],
+    slug: 'hello',
+    allowComments: true,
+    count: 3,
+  })
+  assert.match(html, /<img class="cmt-avatar cmt-avatar-img" src="\/images\/u\/202610\/a\.png"/)
+  assert.match(html, /<span class="cmt-avatar" aria-hidden="true">游<\/span>/)
+  assert.match(html, /<span class="cmt-avatar" aria-hidden="true">小<\/span>/)
+})
+
+test('排行榜头像位：有 avatarUrl 出图，否则首字块', () => {
+  const html = rankListHtml([
+    { rank: 1, nickname: '小明', tier: 'top', points: 30, avatarUrl: '/images/u/a.png' },
+    { rank: 2, nickname: '小红', tier: 'normal', points: 10 },
+  ])
+  assert.match(html, /<img class="rk-avatar rk-avatar-img" src="\/images\/u\/a\.png"/)
+  assert.match(html, /<span class="rk-avatar" aria-hidden="true">小<\/span>/)
+})
+
+test('会员中心 QQ 绑定卡：本人视角出 value；绑了 qq 没抓到头像出重试态', () => {
+  const bound = memberCardHtml({ nickname: '小明', tier: 'normal', points: 3, qq: '12345' })
+  assert.match(bound, /data-member-qq-form/)
+  assert.match(bound, /value="12345"/)
+  assert.match(bound, /重试头像/, '有 qq 没头像 = 重试态')
+  assert.match(bound, /头像还没抓到/, '绑定态提示与重试入口呼应')
+  const withAvatar = memberCardHtml({ nickname: '小明', tier: 'normal', points: 3, qq: '12345', avatarUrl: '/images/u/a.png' })
+  assert.match(withAvatar, /已绑定，头像会显示在评论区与排行榜/)
+  assert.ok(!withAvatar.includes('重试头像'))
+  const unbound = memberCardHtml({ nickname: '小明', tier: 'normal', points: 3 })
+  assert.match(unbound, /不会公开展示/)
 })

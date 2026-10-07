@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS members (
   email         TEXT    NOT NULL DEFAULT '',          -- 可选；邮件服务（B1）落地后启用验证与找回
   display_name  TEXT    NOT NULL DEFAULT '',          -- 前台展示名，空 = 用 username
   avatar        TEXT    NOT NULL DEFAULT '',          -- 头像地址（站内 /images/ 或外链），空 = 首字图标
+  qq            TEXT    NOT NULL DEFAULT '',          -- 绑定的 QQ 号（仅头像抓取记账位，任何公开出参不携带）
   tier          TEXT    NOT NULL DEFAULT 'normal',    -- normal | coffee | top（档位与 min_tier 语义见 docs/DEVPLAN-2026-10-07.md 附录 A）
   points        INTEGER NOT NULL DEFAULT 0,           -- 当前积分余额（冗余，明细在 member_points_log）
   status        TEXT    NOT NULL DEFAULT 'active',    -- active | banned（封禁后禁登录与评论，历史评论保留）

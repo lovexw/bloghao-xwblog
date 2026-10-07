@@ -208,10 +208,11 @@ export async function uniqueSlug(db: D1Database, base: string, excludeId?: numbe
 }
 
 export async function listApprovedComments(db: D1Database, postId: number): Promise<CommentRow[]> {
-  // LEFT JOIN members 带会员徽标数据（member_id = 0 的游客行为 NULL），渲染层按契约 DEVPLAN 附录 A 消费
+  // LEFT JOIN members 带会员徽标数据（member_id = 0 的游客行为 NULL），渲染层按契约 DEVPLAN 附录 A 消费；
+  // member_avatar 仅供评论头像位展示（QQ 号本体永不出参，头像已站内转存）
   const { results } = await db
     .prepare(
-      'SELECT c.*, m.display_name AS member_name, m.tier AS member_tier FROM comments c LEFT JOIN members m ON m.id = c.member_id WHERE c.post_id = ? AND c.status = ? ORDER BY c.created_at ASC LIMIT 500'
+      'SELECT c.*, m.display_name AS member_name, m.tier AS member_tier, m.avatar AS member_avatar FROM comments c LEFT JOIN members m ON m.id = c.member_id WHERE c.post_id = ? AND c.status = ? ORDER BY c.created_at ASC LIMIT 500'
     )
     .bind(postId, 'approved')
     .all<CommentRow>()
@@ -222,7 +223,7 @@ export async function listApprovedComments(db: D1Database, postId: number): Prom
 export async function listGuestbookComments(db: D1Database): Promise<CommentRow[]> {
   const { results } = await db
     .prepare(
-      "SELECT c.*, m.display_name AS member_name, m.tier AS member_tier FROM comments c LEFT JOIN members m ON m.id = c.member_id WHERE c.post_id = 0 AND c.weibo_id = 0 AND c.status = 'approved' ORDER BY c.created_at ASC LIMIT 500"
+      "SELECT c.*, m.display_name AS member_name, m.tier AS member_tier, m.avatar AS member_avatar FROM comments c LEFT JOIN members m ON m.id = c.member_id WHERE c.post_id = 0 AND c.weibo_id = 0 AND c.status = 'approved' ORDER BY c.created_at ASC LIMIT 500"
     )
     .all<CommentRow>()
   return results ?? []
@@ -695,6 +696,8 @@ const SCHEMA_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: 'posts', column: 'password_hash', ddl: "ALTER TABLE posts ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''" },
   // 会员昵称 30 天一次修改窗口（src/utils.ts nicknameCooldown）：NULL = 从未改过，首次修改不受限
   { table: 'members', column: 'display_name_changed_at', ddl: 'ALTER TABLE members ADD COLUMN display_name_changed_at INTEGER' },
+  // 评论头像（C2）：绑定的 QQ 号，仅头像抓取记账位——任何公开出参不携带（头像走站内转存，见 members.avatar）
+  { table: 'members', column: 'qq', ddl: "ALTER TABLE members ADD COLUMN qq TEXT NOT NULL DEFAULT ''" },
 ]
 const SCHEMA_TABLES = [
   // 会员体系（2026-10-07 起，见 docs/DEVPLAN-2026-10-07.md 附录 A 契约）：
@@ -707,6 +710,7 @@ const SCHEMA_TABLES = [
     email         TEXT    NOT NULL DEFAULT '',
     display_name  TEXT    NOT NULL DEFAULT '',
     avatar        TEXT    NOT NULL DEFAULT '',
+    qq            TEXT    NOT NULL DEFAULT '',
     tier          TEXT    NOT NULL DEFAULT 'normal',
     points        INTEGER NOT NULL DEFAULT 0,
     status        TEXT    NOT NULL DEFAULT 'active',
@@ -964,6 +968,15 @@ export async function updateMemberNickname(db: D1Database, id: number, displayNa
     .bind(displayName, now, now, id, now - NICKNAME_CHANGE_COOLDOWN_MS)
     .run()
   return (r.meta.changes ?? 0) > 0
+}
+
+/** 绑定 QQ 号并回写头像（评论头像 C2）：avatar 传 null = 只存 qq 不动头像（qlogo 抓取失败容忍，
+ *  会员中心「重试头像」用同一 qq 重跑本函数补抓）；qq/avatar 都是本人提交或站内转存的值，无公开面 */
+export async function updateMemberQQ(db: D1Database, id: number, qq: string, avatar: string | null, now: number): Promise<void> {
+  await db
+    .prepare('UPDATE members SET qq = ?, updated_at = ?, avatar = COALESCE(?, avatar) WHERE id = ?')
+    .bind(qq, now, avatar, id)
+    .run()
 }
 
 /** 后台会员列表：q 模糊匹配用户名/邮箱（likePattern 同口径转义），20 条/页，新会员在前 */
