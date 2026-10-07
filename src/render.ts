@@ -628,6 +628,9 @@ export function weiboCommentPanel(w: WeiboItemView, allowComments: boolean, admi
         : `<div class="wb-cmt-row">
     <input class="wb-cmt-input" name="nickname" maxlength="24" placeholder="昵称" required>
     <input class="cmt-hp" name="link" tabindex="-1" autocomplete="off" aria-hidden="true">
+  </div>
+  <div class="wb-cmt-row">
+    <input class="wb-cmt-input" name="qq" inputmode="numeric" maxlength="11" placeholder="QQ 号（选填，展示头像）" autocomplete="off" title="仅用于抓取头像，不会公开展示">
   </div>`
   }
   <textarea class="wb-cmt-textarea" name="content" maxlength="1000" rows="2" placeholder="说点什么…" required></textarea>
@@ -820,6 +823,8 @@ export function memberAvatarHtml(m: MemberView, cls: string): string {
 function commentAvatarHtml(c: CommentRow, adminAvatar?: string): string {
   if (c.member_avatar) return `<img class="cmt-avatar cmt-avatar-img" src="${esc(c.member_avatar)}" alt="">`
   if (c.is_admin && adminAvatar) return `<img class="cmt-avatar cmt-avatar-img" src="${esc(adminAvatar)}" alt="">`
+  // 游客自填 QQ 抓取转存的站内头像（C2 扩展）：qq 本体永不出参，这里只会是 /images/ 地址
+  if (c.avatar) return `<img class="cmt-avatar cmt-avatar-img" src="${esc(c.avatar)}" alt="">`
   const ch = (c.nickname || '客').trim().charAt(0) || '客'
   return `<span class="cmt-avatar" aria-hidden="true">${esc(ch)}</span>`
 }
@@ -1124,6 +1129,9 @@ export function commentsHtml(o: {
         : `<div class="cmt-form-row">
     <input class="cmt-input" name="nickname" maxlength="24" placeholder="昵称" required>
     <input class="cmt-input cmt-hp" name="link" tabindex="-1" autocomplete="off" aria-hidden="true">
+  </div>
+  <div class="cmt-form-row">
+    <input class="cmt-input" name="qq" inputmode="numeric" maxlength="11" placeholder="QQ 号（选填，展示头像）" autocomplete="off" title="仅用于抓取头像，不会公开展示">
   </div>`
   }
   <textarea class="cmt-textarea" name="content" maxlength="1000" rows="3" placeholder="${o.guestbook ? '想对作者说点什么…' : '写下你的想法…'}" required></textarea>

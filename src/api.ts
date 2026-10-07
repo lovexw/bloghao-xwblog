@@ -1715,6 +1715,8 @@ type CommentBody = {
   website?: string
   parentId?: number
   link?: string
+  /** 游客选填 QQ（评论头像 C2 扩展）：仅头像抓取记账位，任何公开出参不携带 */
+  qq?: string
 }
 
 async function publicComment(
@@ -1803,10 +1805,21 @@ async function publicComment(
   }
   const nickname = String(body?.nickname || '').trim().slice(0, 24)
   if (!nickname) return jsonError(`昵称和${o.noun}内容不能为空`)
+  // 游客 QQ 头像（评论头像 C2 扩展）：选填，格式不对按「没填」处理——选填字段不拦评论。
+  // 先查同号历史头像直接复用（抓取次数 = 唯一 QQ 数，且被评论限流再压一层），未命中才出站抓取；
+  // qq 本体只落库内部列，任何公开出参不携带，头像一律站内转存同源输出
+  const qqRaw = String(body?.qq || '').trim()
+  const guestQQ = qqRaw && isValidQQ(qqRaw) ? qqRaw : ''
+  const guestAvatar = guestQQ
+    ? (await db
+        .prepare("SELECT avatar FROM comments WHERE qq = ? AND avatar != '' ORDER BY created_at DESC LIMIT 1")
+        .bind(guestQQ)
+        .first<{ avatar: string }>())?.avatar || (await fetchQQAvatar(c.env, guestQQ)) || ''
+    : ''
   if (o.withContact) {
     await db
       .prepare(
-        'INSERT INTO comments (post_id, weibo_id, parent_id, is_admin, nickname, email, website, content, status, ip, created_at) VALUES (?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO comments (post_id, weibo_id, parent_id, is_admin, nickname, email, website, qq, avatar, content, status, ip, created_at) VALUES (?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .bind(
         t.postId,
@@ -1814,6 +1827,8 @@ async function publicComment(
         nickname,
         String(body?.email || '').slice(0, 100),
         String(body?.website || '').slice(0, 200),
+        guestQQ,
+        guestAvatar,
         content,
         pending ? 'pending' : 'approved',
         ip,
@@ -1823,9 +1838,9 @@ async function publicComment(
   } else {
     await db
       .prepare(
-        'INSERT INTO comments (post_id, weibo_id, parent_id, is_admin, nickname, content, status, ip, created_at) VALUES (?, ?, 0, 0, ?, ?, ?, ?, ?)'
+        'INSERT INTO comments (post_id, weibo_id, parent_id, is_admin, nickname, qq, avatar, content, status, ip, created_at) VALUES (?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)'
       )
-      .bind(t.postId, t.weiboId, nickname, content, pending ? 'pending' : 'approved', ip, now)
+      .bind(t.postId, t.weiboId, nickname, guestQQ, guestAvatar, content, pending ? 'pending' : 'approved', ip, now)
       .run()
   }
   // 新留言推送到 Telegram（异步，不阻塞回复；开关在后台「设置 → 外部发布」）
@@ -1907,7 +1922,7 @@ api.get('/public/weibo/:id/comments', async (c) => {
   const settings = await getSettings(c.env.DB)
   const { results } = await c.env.DB
     .prepare(
-      "SELECT cm.id, cm.parent_id, cm.is_admin, cm.nickname, cm.content, cm.created_at, m.display_name AS member_name, m.tier AS member_tier, m.avatar AS member_avatar FROM comments cm LEFT JOIN members m ON m.id = cm.member_id WHERE cm.weibo_id = ? AND cm.status = 'approved' ORDER BY cm.created_at ASC LIMIT 200"
+      "SELECT cm.id, cm.parent_id, cm.is_admin, cm.nickname, cm.content, cm.created_at, cm.avatar, m.display_name AS member_name, m.tier AS member_tier, m.avatar AS member_avatar FROM comments cm LEFT JOIN members m ON m.id = cm.member_id WHERE cm.weibo_id = ? AND cm.status = 'approved' ORDER BY cm.created_at ASC LIMIT 200"
     )
     .bind(id)
     .all()

@@ -91,4 +91,4 @@ P1 全量上线：游客注册登录（独立 members 表与会话，不碰 user
 - **评论区消费四处**：db.ts 两处评论列表查询（文章 ~213 / 留言板 ~224）与 api.ts 微博评论 JSON（~1793）的 LEFT JOIN 补 `m.avatar AS member_avatar`；types.ts CommentRow 增 `member_avatar` 并同步 DEVPLAN 附录 A 契约；render.ts `commentsHtml` renderItem 加头像位（复用 memberAvatarHtml 思路，游客首字）；site.js 微博评论渲染（~403 行）同步出头像（保持 ES5）；六主题 `.cmt-item` / `.cmt-avatar` 样式 + themes.test 回归，过 390px 检查
 - **隐私红线**：QQ 号本体不出任何公开出参（评论 / 排行 HTML 一律不携带），头像一律走站内 /images/ 转存后同源输出——直接拼 qlogo 外链虽省一次转存，但公开 HTML 会暴露用户 QQ 号，不取
 - **顺手项**：/rank 榜单头像——db.ts `rankTopN` 查询已 SELECT avatar 但 `RankEntryView` 没接，补 `avatarUrl` 字段 + `rankRow` 出头像位即得；后台会员管理列表要不要带头像另定（MemberAdminRow 显式列名清单需同步）
-- **待拍板**：游客要不要「QQ 选填」（直出外链省事但 QQ 号进公开 HTML，按上面红线应同样转存，每条评论多一次抓取——建议先只做会员侧）；头像档位取 s=140 一档即可（100 略糊、640 浪费流量）；测试落 tests/members.test.ts（qq 校验 / 转存失败容忍）与 tests/themes.test.ts（评论头像渲染）
+- **待拍板 → 已拍板落地（2026-10-07）**：游客 QQ 选填已做——三路评论表单选填 qq，服务端转存同款红线（qq 进 comments.qq 内部列不出公开面、头像站内转存），同号历史头像复用（抓取次数 = 唯一 QQ 数），格式不对按没填处理不拦评论；头像档位取 s=140 一档（100 略糊、640 浪费流量）；测试落 tests/members.test.ts（qq 校验 / 转存失败容忍）与 tests/themes.test.ts（评论头像渲染 + site.js 镜像守卫）

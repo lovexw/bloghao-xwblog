@@ -224,6 +224,26 @@
       })
   })
 
+  /* ---------------- 游客 QQ 头像（评论头像 C2 扩展，三处评论表单共用） ----------------
+   * 选填：填了才抓头像；正则与 utils.ts isValidQQ 同款镜像（改任一侧记得同步）；
+   * 填错给提示但不静默丢弃——游客自己决定改还是清空；上次填过的 QQ 存本机自动回填 */
+  function guestQQ(form, tipEl) {
+    var input = form.querySelector('[name=qq]')
+    var qq = input ? input.value.trim() : ''
+    if (!qq) return ''
+    if (!/^[1-9][0-9]{4,10}$/.test(qq)) {
+      if (tipEl) tipEl.textContent = 'QQ 号格式不对（5-11 位数字，不以 0 开头），可留空或修改后再发'
+      if (input) input.focus()
+      return null
+    }
+    return qq
+  }
+  var savedQQ = storeGet('cmt-qq') || ''
+  if (savedQQ) {
+    var qqInputs = document.querySelectorAll('input[name=qq]')
+    for (var qi = 0; qi < qqInputs.length; qi++) if (!qqInputs[qi].value) qqInputs[qi].value = savedQQ
+  }
+
   /* ---------------- 文章留言（管理员可回复：楼中楼） ---------------- */
   var form = document.getElementById('comment-form')
   if (form) {
@@ -269,6 +289,8 @@
       if (!content.value.trim()) return
       // 管理员表单没有昵称输入（服务端直接取作者身份），访客留言必须填昵称
       if (nicknameInput && !replyId && !nicknameInput.value.trim()) return
+      var qq = guestQQ(form, tipEl)
+      if (qq === null) return
       var label = btn.textContent
       btn.textContent = '发送中…'
       btn.disabled = true
@@ -277,9 +299,11 @@
         nickname: nicknameInput ? nicknameInput.value.trim() : '',
         content: content.value.trim(),
         link: link ? link.value : '',
+        qq: qq || undefined,
         parentId: replyId || undefined,
       })
         .then(function (d) {
+          if (qq) storeSet('cmt-qq', qq)
           if (d && d.pending) {
             if (tipEl) tipEl.textContent = '已提交，审核通过后展示'
             content.value = ''
@@ -346,6 +370,8 @@
       if (!content.value.trim()) return
       // 管理员表单没有昵称输入（服务端直接取作者身份），访客留言必须填昵称
       if (gbNickname && !gbForm.dataset.replyId && !gbNickname.value.trim()) return
+      var qq = guestQQ(gbForm, gbTip)
+      if (qq === null) return
       var label = btn.textContent
       btn.textContent = '发送中…'
       btn.disabled = true
@@ -353,9 +379,11 @@
         nickname: gbNickname ? gbNickname.value.trim() : '',
         content: content.value.trim(),
         link: link ? link.value : '',
+        qq: qq || undefined,
         parentId: gbForm.dataset.replyId ? Number(gbForm.dataset.replyId) : undefined,
       })
         .then(function (d) {
+          if (qq) storeSet('cmt-qq', qq)
           if (d && d.pending) {
             if (gbTip) gbTip.textContent = '已提交，审核通过后展示'
             content.value = ''
@@ -459,10 +487,11 @@
     }
     // 评论头像位（服务端 commentAvatarHtml 的 ES5 手工镜像，改任一侧记得同步）：
     // 会员有站内头像用图；作者（管理员）发言用站点头像（adminAvatar，接口随列表下发）；
-    // 其余退回昵称首字块
+    // 游客自填 QQ 抓取转存的站内头像（接口只出 /images/ 地址，qq 本体永不下发）；其余退回昵称首字块
     function avatarHtml(c) {
       if (c.member_avatar) return '<img class="wb-cmt-avatar wb-cmt-avatar-img" src="' + esc(c.member_avatar) + '" alt="">'
       if (Number(c.is_admin) && adminAvatar) return '<img class="wb-cmt-avatar wb-cmt-avatar-img" src="' + esc(adminAvatar) + '" alt="">'
+      if (c.avatar) return '<img class="wb-cmt-avatar wb-cmt-avatar-img" src="' + esc(c.avatar) + '" alt="">'
       var ch = (c.nickname || '客').charAt(0) || '客'
       return '<span class="wb-cmt-avatar" aria-hidden="true">' + esc(ch) + '</span>'
     }
@@ -559,6 +588,8 @@
     if (!content || !content.value.trim()) return
     // 管理员表单没有昵称输入（服务端直接取作者身份），访客必须填
     if (nickname && !form.dataset.replyId && !nickname.value.trim()) return
+    var qq = guestQQ(form, tip)
+    if (qq === null) return
     var label = btn ? btn.textContent : ''
     if (btn) {
       btn.textContent = '发送中…'
@@ -568,9 +599,11 @@
       nickname: nickname ? nickname.value.trim() : '',
       content: content.value.trim(),
       link: link ? link.value : '',
+      qq: qq || undefined,
       parentId: form.dataset.replyId ? Number(form.dataset.replyId) : undefined,
     })
       .then(function (d) {
+        if (qq) storeSet('cmt-qq', qq)
         if (d && d.pending) {
           if (tip) tip.textContent = '已提交，审核通过后展示'
           content.value = ''

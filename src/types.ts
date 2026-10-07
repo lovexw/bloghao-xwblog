@@ -109,6 +109,10 @@ export interface CommentRow {
   member_tier?: MemberTier
   /** 会员头像（站内 /images/ 转存地址）：评论头像位展示用；QQ 号本体永不出参 */
   member_avatar?: string
+  /** 游客选填的 QQ 号（评论头像 C2）：仅头像抓取记账位，任何公开出参不携带 */
+  qq?: string
+  /** 游客头像（服务端 qlogo 抓取后站内转存地址）：评论头像位展示用；空 = 首字块 */
+  avatar?: string
 }
 
 export interface CategoryRow {

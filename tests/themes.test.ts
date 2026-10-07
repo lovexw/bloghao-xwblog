@@ -369,8 +369,9 @@ test('评论头像位：作者（管理员）评论用站点头像，未设置�
 })
 
 // site.js 的 renderWeiboComments.avatarHtml 是服务端 commentAvatarHtml 的 ES5 手工镜像（作者评论
-// 头像走接口下发的 adminAvatar）——把 site.js 源码切片在 Node 里执行，头像位双端同态，漂移当场见红
-test('site.js 微博评论头像镜像：会员图 / 作者站点头像 / 首字块与服务端同态', () => {
+// 头像走接口下发的 adminAvatar，游客自填 QQ 走行内 avatar）——把 site.js 源码切片在 Node 里执行，
+// 头像位双端同态，漂移当场见红
+test('site.js 微博评论头像镜像：会员图 / 作者站点头像 / 游客自填头像 / 首字块与服务端同态', () => {
   const src = readFileSync(new URL('../public/site.js', import.meta.url), 'utf8')
   const seg = src.slice(src.indexOf('function renderWeiboComments'), src.indexOf('function loadWeiboComments'))
   assert.ok(seg.includes('function renderWeiboComments') && seg.includes('adminAvatar'), 'site.js 切片失败：镜像段不在预期位置')
@@ -382,11 +383,13 @@ test('site.js 微博评论头像镜像：会员图 / 作者站点头像 / 首字
     { id: 1, parent_id: 0, is_admin: 0, nickname: '会员甲', content: '内容', created_at: TS, member_avatar: '/images/u/202610/a.png' },
     { id: 2, parent_id: 0, is_admin: 0, nickname: '游客甲', content: '内容', created_at: TS },
     { id: 3, parent_id: 0, is_admin: 1, nickname: '站长', content: '内容', created_at: TS },
+    { id: 4, parent_id: 0, is_admin: 0, nickname: '游客乙', content: '内容', created_at: TS, avatar: '/images/u/guest.png' },
   ]
   render({ querySelector: () => listEl }, rows, false, '/images/u/site.png')
   assert.match(listEl.innerHTML, /<img class="wb-cmt-avatar wb-cmt-avatar-img" src="\/images\/u\/202610\/a\.png"/, '会员头像位')
   assert.match(listEl.innerHTML, /<img class="wb-cmt-avatar wb-cmt-avatar-img" src="\/images\/u\/site\.png"/, '作者评论用站点头像')
-  assert.match(listEl.innerHTML, /<span class="wb-cmt-avatar" aria-hidden="true">游<\/span>/, '游客退首字块')
+  assert.match(listEl.innerHTML, /<img class="wb-cmt-avatar wb-cmt-avatar-img" src="\/images\/u\/guest\.png"/, '游客自填 QQ 的站内转存头像位')
+  assert.match(listEl.innerHTML, /<span class="wb-cmt-avatar" aria-hidden="true">游<\/span>/, '没填 QQ 的游客退首字块')
   // 接口没带 adminAvatar（站点未设头像）时，作者评论退回首字块，与 SSR 同态
   listEl.innerHTML = ''
   render({ querySelector: () => listEl }, [rows[2]], false, '')
@@ -413,4 +416,22 @@ test('会员中心 QQ 绑定卡：本人视角出 value；绑了 qq 没抓到头
   assert.ok(!withAvatar.includes('重试头像'))
   const unbound = memberCardHtml({ nickname: '小明', tier: 'normal', points: 3 })
   assert.match(unbound, /不会公开展示/)
+})
+
+// ── 游客 QQ 头像（C2 扩展）：SSR 评论头像位认游客行内 avatar（站内转存地址），qq 本体不出参 ──
+
+test('SSR 评论头像位：游客自填 QQ 的站内头像出图；与会员头像同现时会员优先', () => {
+  const html = commentsHtml({
+    comments: [
+      cmt({ id: 11, nickname: '游客丙', avatar: '/images/u/202610/guest.png' }),
+      cmt({ id: 12, nickname: '小明', member_name: '小明', member_tier: 'normal', member_avatar: '/images/u/m.png', avatar: '/images/u/old.png' }),
+    ],
+    slug: 'hello',
+    allowComments: true,
+    count: 2,
+  })
+  assert.match(html, /<img class="cmt-avatar cmt-avatar-img" src="\/images\/u\/202610\/guest\.png"/, '游客头像位')
+  assert.match(html, /<img class="cmt-avatar cmt-avatar-img" src="\/images\/u\/m\.png"/, '会员头像优先于行内 avatar')
+  assert.ok(!html.includes('/images/u/old.png'), '行内 avatar 被会员头像遮蔽时不输出')
+  assert.ok(!/<img[^>]*src="12345"/.test(html), 'qq 本体永不进公开 HTML')
 })

@@ -98,6 +98,8 @@ CREATE TABLE IF NOT EXISTS comments (
   nickname   TEXT    NOT NULL,
   email      TEXT    NOT NULL DEFAULT '',
   website    TEXT    NOT NULL DEFAULT '',
+  qq         TEXT    NOT NULL DEFAULT '',          -- 游客选填的 QQ 号（评论头像 C2）：仅头像抓取记账位，任何公开出参不携带
+  avatar     TEXT    NOT NULL DEFAULT '',          -- 游客头像（服务端 qlogo 抓取后站内转存的 /images/ 地址），空 = 首字块
   content    TEXT    NOT NULL,
   status     TEXT    NOT NULL DEFAULT 'approved', -- approved | pending
   ip         TEXT    NOT NULL DEFAULT '',
