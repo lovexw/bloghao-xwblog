@@ -101,6 +101,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - 侧边栏菜单由 app.js 顶部 `MENU` 配置数组渲染（分组标签 + 待审徽标），桌面侧栏、移动端底部栏与「更多」抽屉共用同一份数据——**新增后台页面要同时登记 `MENU`、`navigate()` 与 `MOBILE_TAB_IDS`（不放底栏的会自动进抽屉）**，别再往模板里手写 `<a>`
 - 插件 manifest（public/plugins/manifest.json）是对象格式 `{ id, file, title, description, version, author }`（editor.js 兼容旧字符串格式）；停用名单存 settings `pluginsDisabled`（`utils.ts cleanDisabledPlugins` 校验，id 只允许 `[A-Za-z0-9_-]`），皮肤/插件市场目录在 `public/market/catalog.json`
 - 编辑器 `save()` 是串行队列（勿改回早退模式——会丢发布意图造成假成功）；新弹窗一律用现成的 `modal()`（自带 Esc 关闭与焦点管理）
+- 微信表情（文本码体系，机制在 `src/emoji.ts` + `public/admin/emoji.js`）：映射表**单一来源 `src/emoji.ts`**，经 `/api/public/emoji` 下发（客户端拉不到就降级纯文本码）；`scripts/fetch-emoji.mjs` 按表拉取 Twemoji PNG 到 `public/emoji/`（改表后重跑，tests/emoji.test.ts 守「表里每个码点 PNG 存在」）。**存库永远是文本码**：editor.js 富文本里插的是带 `data-emoji` 的 img，save()/自动保存的 serialize 过 `stripEmojiImgs` 反替换、htmlToMd 两处 img 分支认 data-emoji 还原码——新增「把 editor.innerHTML 写进 payload」的路径必须同样过它，别让 img 落库
 - 动态创建 `<input type="file">` 必须走 `pickFiles` 助手（editor.js 导出、app.js 导入；site.js 有同款 ES5 版本，改动两端任一侧记得同步语义）：**游离节点在 iOS Safari 上选图器能打开、照片能选，但 change 不回填**——上传从未开始且全程无提示，手机上表现为「选了图发布出来只有文字」（2026-10 修复，headless 浏览器测不出）；先隐藏挂到 body 再 click，读完文件 / 用户取消即摘除；前台发布器还有在途上传计数守卫，发布 / 保存前必须归零
 - 输入框回车提交必须判 `e.isComposing || e.keyCode === 229`（中文输入法组词回车）
 
@@ -108,6 +109,8 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 
 - 保持 ES5 风格（var/function）：**禁用 lookbehind 正则**（`(?<!…)` Safari ≤ 16.3 解析期抛 SyntaxError）——微博文本分词正则（URL 链接化 + 话题）用捕获组消费前导字符的写法，改正则先跑 tests/outlink.test.ts 对照（与服务端 weiboTextHtml 同口径，见「外链中间页」防线节）
 - **禁止裸调 localStorage**：隐私加固浏览器访问该属性即抛 SecurityError，一律走 `storeGet/storeSet`（内部 try/catch）
+- **微信表情镜像**（`WXQ_CODES`/`wxqReplace`/`wbTextHtml` 内的表情分支，大 IIFE 顶层）：客户端表由 `/api/public/emoji` 下发、服务端在 `src/emoji.ts`——`wxqReplace` 与服务端 `replaceEmoji` 同口径（token 正则排除属性/实体特征字符、inTag 标签态状态机、hasOwnProperty 查表），改任一侧跑 tests/emoji.test.ts 双端镜像比对（该测试把 site.js 表情段 + wb 段切片拼接执行并注入服务端同一张表）；outlink.test.ts 的镜像工厂给 `wxqReplace` 传恒等 stub（其用例不含表情码）
+
 
 **演示站（tests/demo.test.ts，docs/DEMO.md）**
 

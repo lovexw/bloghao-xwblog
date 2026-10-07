@@ -607,6 +607,52 @@ try {
     console.log('  ✗ 微博正文：外链自动超链（建冒烟微博失败）')
   }
 
+  // 微信表情链路（src/emoji.ts）：映射表端点 → 微博正文渲染 → 文章正文渲染 → 评论区渲染
+  const emojiApi = await mJson(await raw('GET', '/api/public/emoji'))
+  const emojiOk = emojiApi?.base === '/emoji/' && (emojiApi?.codes?.['微笑'] ?? '') !== ''
+  results.push(['微信表情：映射表端点', emojiOk])
+  console.log(`  ${emojiOk ? '✓' : '✗'} 微信表情：映射表端点（${Object.keys(emojiApi?.codes ?? {}).length} 个码点）`)
+  const wbEmoji = await raw('POST', '/api/admin/weibo', {
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({ content: '冒烟表情：早上好[微笑]，裂开[裂开] #随手记#', images: [], status: 'published' }),
+  })
+  const wbEmojiId = (await mJson(wbEmoji))?.weibo?.id
+  if (wbEmojiId) {
+    await check('GET', '/weibo', 200, 'wxq-emoji')
+    await check('GET', '/weibo', 200, `src="/emoji/${emojiApi.codes['裂开']}.png"`)
+    await check('GET', '/weibo', 200, `alt="[微笑]"`)
+    await raw('DELETE', `/api/admin/weibo/${wbEmojiId}`, { headers: { Cookie: cookie } })
+    await raw('DELETE', `/api/admin/trash/weibo/${wbEmojiId}`, { headers: { Cookie: cookie } })
+  } else {
+    results.push(['微信表情：微博正文渲染', false])
+    console.log('  ✗ 微信表情：微博正文渲染（建冒烟微博失败）')
+  }
+  const emojiPost = await raw('POST', '/api/admin/posts', {
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({ title: '冒烟：微信表情文章', content: '<p>正文里一个[捂脸]，再来一个[强]。</p>', status: 'published' }),
+  })
+  const emojiPostBody = await mJson(emojiPost)
+  const emojiSlug = emojiPostBody?.post?.slug
+  if (emojiSlug) {
+    await check('GET', `/post/${emojiSlug}`, 200, `src="/emoji/${emojiApi.codes['捂脸']}.png"`)
+    // 评论区渲染：游客评论带表情（SSR 后晒在页面里）
+    const emojiCmt = await raw('POST', '/api/public/comments', {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slug: emojiSlug, content: '游客评论[爱心]', nickname: '冒烟游客', link: '' }),
+    })
+    const cmtOk = (await mJson(emojiCmt))?.ok === true
+    if (cmtOk) await check('GET', `/post/${emojiSlug}`, 200, `alt="[爱心]"`)
+    else {
+      results.push(['微信表情：评论渲染（发评论）', false])
+      console.log('  ✗ 微信表情：评论渲染（发评论失败）')
+    }
+    await raw('DELETE', `/api/admin/posts/${emojiPostBody.post.id}`, { headers: { Cookie: cookie } })
+    await raw('DELETE', `/api/admin/trash/post/${emojiPostBody.post.id}`, { headers: { Cookie: cookie } })
+  } else {
+    results.push(['微信表情：文章正文渲染', false])
+    console.log('  ✗ 微信表情：文章正文渲染（建冒烟文章失败）')
+  }
+
   // 外链中间页（/go）：白名单域名 302 直跳，非白名单出确认页（免责声明），非法目标回首页
   const goDirect = await fetch(`${BASE}/go?u=${encodeURIComponent('https://www.apple.com/iphone')}`, {
     redirect: 'manual',

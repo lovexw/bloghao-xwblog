@@ -365,6 +365,19 @@ input, textarea, select { font: inherit; color: inherit; }
 .ed-editor h4 { font-size: 16px; }
 .ed-editor img { max-width: 100%; height: auto; border-radius: 8px; }
 .ed-editor video { max-width: 100%; border-radius: 8px; }
+
+/* 微信表情（文本码渲染的小图 + 选择面板；grid/cell 与前台 popover 同视觉口径） */
+.ed-editor img.wxq-emoji { width: 1.4em; height: 1.4em; max-width: none; border-radius: 0; vertical-align: -0.2em; display: inline-block; }
+.wxq-modal-body { max-height: 56vh; overflow-y: auto; }
+.wxq-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; }
+.wxq-cell { border: none; background: none; padding: 2px; cursor: pointer; border-radius: 6px; line-height: 0; }
+.wxq-cell:hover { background: var(--bg2, #f2f2f2); }
+.wxq-cell img { width: 26px; height: 26px; }
+.wxq-empty { color: var(--sub, #888); font-size: 13px; margin: 4px 0; }
+@media (max-width: 480px) {
+  .wxq-grid { grid-template-columns: repeat(6, 1fr); }
+  .wxq-cell img { width: 30px; height: 30px; }
+}
 .ed-editor blockquote {
   margin: 0 0 18px; padding: 12px 15px;
   border-left: 3px solid rgba(178, 58, 41, 0.55); background: #faf6ee;

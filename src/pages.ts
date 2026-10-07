@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import { clientIp, getCookie, getMemberUser, getSessionUser } from './auth'
+import { replaceEmoji } from './emoji'
 import {
   getCategoryBySlug,
   getMemberById,
@@ -454,7 +455,7 @@ export async function renderPost(c: C): Promise<Response> {
   const locked = !pwLocked && !user && !canRead(minTier, member?.tier)
   // 密码墙时正文一个字节都不出：连 sanitize 都不做，fullHtml 留空（teaser 分支不会被走到）。
   // 渲染路径传 origin：非白名单外链包 /go 中间页（存库/RSS/导出不传，保持原始 URL）
-  const fullHtml = pwLocked ? '' : stripCoverDuplicate(sanitizeHtml(row.content, { origin: url.origin }), row.cover)
+  const fullHtml = pwLocked ? '' : replaceEmoji(stripCoverDuplicate(sanitizeHtml(row.content, { origin: url.origin }), row.cover))
   const commentsBlock = commentsHtml({
     comments,
     slug: row.slug,
@@ -543,7 +544,7 @@ export async function renderAbout(c: C): Promise<Response> {
     const html = themePageHtml(theme, {
       settings,
       title: aboutRow.title,
-      contentHtml: sanitizeHtml(aboutRow.content, { origin: new URL(c.req.url).origin }),
+      contentHtml: replaceEmoji(sanitizeHtml(aboutRow.content, { origin: new URL(c.req.url).origin })),
       categories,
       tags,
       pages,
@@ -565,7 +566,7 @@ export async function renderAbout(c: C): Promise<Response> {
   const [categories, tags, pages] = await Promise.all([navCategories(c), navTags(c), navPages(c)])
   const html = theme.about({
     settings,
-    contentHtml: sanitizeHtml(settings.about || '<p>作者很懒，什么都没写。</p>', { origin: new URL(c.req.url).origin }),
+    contentHtml: replaceEmoji(sanitizeHtml(settings.about || '<p>作者很懒，什么都没写。</p>', { origin: new URL(c.req.url).origin })),
     categories,
     tags,
     pages,
@@ -598,7 +599,7 @@ export async function renderPage(c: C): Promise<Response> {
   const html = themePageHtml(theme, {
     settings,
     title: row.title,
-    contentHtml: sanitizeHtml(row.content, { origin: new URL(c.req.url).origin }),
+    contentHtml: replaceEmoji(sanitizeHtml(row.content, { origin: new URL(c.req.url).origin })),
     categories,
     tags,
     pages,

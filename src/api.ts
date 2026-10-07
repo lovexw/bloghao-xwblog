@@ -58,6 +58,7 @@ import {
   WEIBO_MAX_CHARS,
 } from './db'
 import { mdToHtml } from './markdown'
+import { EMOJI_BASE, WECHAT_EMOJI } from './emoji'
 import { awardCommentPoints, awardPoints, normalizeMinTier } from './points'
 import { collectRoutes } from './collect'
 import { exportRoutes } from './export'
@@ -1628,6 +1629,14 @@ api.post('/admin/tools/sanitize', async (c) => {
 })
 
 /* ---------------- 公开接口 ---------------- */
+
+/* 微信表情映射表（src/emoji.ts 单一来源）：编辑器/发布器面板与 site.js 客户端渲染共用，
+ * 静态数据 + 一天浏览器缓存；闭站时 503——编辑器面板降级为空、文本码插入渲染不受影响 */
+api.get('/public/emoji', (c) => {
+  c.header('Cache-Control', 'public, max-age=86400')
+  return c.json({ base: EMOJI_BASE, codes: WECHAT_EMOJI })
+})
+
 api.get('/public/posts', async (c) => {
   const tag = c.req.query('tag') || undefined
   const r = await listPosts(c.env.DB, {

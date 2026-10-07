@@ -9,6 +9,9 @@
 ### GET /api/health
 `{"ok":true,"time":...}`
 
+### GET /api/public/emoji
+微信默认表情映射表（文本码 → 站内小图码点），单一来源 `src/emoji.ts`：`{ base: "/emoji/", codes: { "微笑": "1f60a", ... } }`。静态数据，浏览器缓存一天（`Cache-Control: public, max-age=86400`）；闭站时随公开 API 一律 503（编辑器表情面板降级为空，文本码插入与渲染不受影响）。正文 / 微博 / 评论区渲染层把 `[微笑]` 替换成 `<img class="wxq-emoji" src="/emoji/1f60a.png" alt="[微笑]">`（查表不到原样保留），存库永远是文本码。图源 Twemoji（CC-BY 4.0，归属见 public/emoji/README.md）。
+
 ### GET /api/public/posts?page=1&limit=10&tag=生活
 已发布文章分页（摘要视图），返回 `{items, total, page, totalPages}`，`items` 元素含 `slug/title/summary/cover/tags/published_at/views/likes/pinned`。
 

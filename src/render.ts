@@ -3,6 +3,7 @@ import type { PostSort } from './db'
 import { renderFooterHtml } from './hooks'
 import { outHref } from './outlink'
 import { cstDate, esc, excerpt, extractWeiboTopics, fmtDate, fmtDateCN, fmtDateTime, isoDate, NICKNAME_CHANGE_COOLDOWN_MS, nicknameCooldown } from './utils'
+import { replaceEmoji } from './emoji'
 
 export interface ThemePageOptions {
   settings: SettingsMap
@@ -534,19 +535,20 @@ export function weiboTextHtml(content: string): string {
   let out = ''
   let last = 0
   for (const m of content.matchAll(WEIBO_TEXT_RE)) {
-    out += esc(content.slice(last, m.index))
+    // 微信表情文本码替换包在每段转义后的纯文本上（属性 href 不包，URL 分段无中文码不会命中）
+    out += replaceEmoji(esc(content.slice(last, m.index)))
     last = m.index + m[0].length
     if (m[1]) {
       // URL：尾部标点留在链接外；锚文本与 href 都来自原文分段，经 esc 落进属性/文本上下文
       const url = trimUrlTail(m[1])
-      out += `<a class="wb-link" href="${esc(outHref(url))}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>${esc(m[0].slice(url.length))}`
+      out += `<a class="wb-link" href="${esc(outHref(url))}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>${replaceEmoji(esc(m[0].slice(url.length)))}`
       continue
     }
     const name = extractWeiboTopics(m[0])[0]
-    if (!name) out += esc(m[0])
+    if (!name) out += replaceEmoji(esc(m[0]))
     else out += `<a class="wb-topic" href="/weibo?topic=${encodeURIComponent(name)}">${esc(m[0])}</a>`
   }
-  return out + esc(content.slice(last))
+  return out + replaceEmoji(esc(content.slice(last)))
 }
 
 /** 微博话题条：默认不显示（避免标签堆满页头）；仅从正文 #话题# 链接进入筛选时，显示「全部 + 当前话题」方便退出筛选 */
@@ -1063,7 +1065,7 @@ export function commentsHtml(o: {
     <span class="cmt-time">${fmtDateTime(c.created_at)}</span>
     ${replyBtn}
   </div>
-  <div class="cmt-body">${esc(c.content)}</div>
+  <div class="cmt-body">${replaceEmoji(esc(c.content))}</div>
   ${kids.length ? `<ul class="cmt-children">${kids.map(renderItem).join('')}</ul>` : ''}
 </li>`
   }

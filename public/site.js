@@ -377,6 +377,61 @@
     })
   }
 
+  /* ---------------- 微信表情（[微笑] → 站内小图，表与 src/emoji.ts 同源经 /api/public/emoji 下发） ----------------
+   * 声明在大 IIFE 顶层：wbTextHtml（下方嵌套块）与微博评论渲染（本层）共用；文章/微博/评论的 SSR
+   * 直出由服务端 replaceEmoji 完成，这里只负责客户端就地重渲染。表未拉到时降级为纯文本码。
+   * 镜像测试（tests/emoji.test.ts）把本段与 wbTextHtml 段切片拼接执行，双端同输入比对输出 */
+  var WXQ_CODES
+  var WXQ_BASE = '/emoji/'
+  // 文本码 token：[名称]，名称里排除属性/实体特征字符（= ; & < > " ' / \）——与服务端同口径
+  var WXQ_TOKEN_RE = /\[([^\[\]=;&<>"'/\\\n]{1,12})\]/g
+  function wxqTokenHtml(token) {
+    if (!WXQ_CODES) return token
+    var name = token.slice(1, -1)
+    if (!Object.prototype.hasOwnProperty.call(WXQ_CODES, name)) return token
+    return (
+      '<img class="wxq-emoji" style="width:1.4em;height:1.4em;vertical-align:-0.2em;" src="' +
+      WXQ_BASE +
+      WXQ_CODES[name] +
+      '.png" alt="' +
+      token +
+      '" loading="lazy">'
+    )
+  }
+  // 与 src/emoji.ts replaceEmoji 同口径：只替换 <> 标签外的 token（esc 后文本里的 < 已是 &lt;，
+  // 不会误入标签态），hasOwnProperty 防原型链属性，查不到原样保留
+  function wxqReplace(escaped) {
+    if (!WXQ_CODES) return escaped
+    var out = ''
+    var last = 0
+    var inTag = false
+    WXQ_TOKEN_RE.lastIndex = 0
+    var m
+    while ((m = WXQ_TOKEN_RE.exec(escaped))) {
+      var between = escaped.slice(last, m.index)
+      for (var i = 0; i < between.length; i++) {
+        var ch = between.charAt(i)
+        if (ch === '<') inTag = true
+        else if (ch === '>') inTag = false
+      }
+      out += between + (inTag ? m[0] : wxqTokenHtml(m[0]))
+      last = m.index + m[0].length
+    }
+    return out + escaped.slice(last)
+  }
+  // 拉取映射表（镜像测试切片到本行之前，Node 里不会真的发请求；失败保持降级）
+  fetch('/api/public/emoji')
+    .then(function (r) {
+      return r.ok ? r.json() : null
+    })
+    .then(function (d) {
+      if (d && d.codes && d.base) {
+        WXQ_CODES = d.codes
+        WXQ_BASE = d.base
+      }
+    })
+    .catch(function () {})
+
   /* ---------------- 微博卡片：折叠评论区 ---------------- */
   var authPromise = null
   function authState() {
@@ -411,7 +466,7 @@
         (isAdmin
           ? '<button type="button" class="wb-cmt-reply-btn" data-reply="' + c.id + '" data-name="' + esc(c.nickname) + '">回复</button>'
           : '') +
-        '</div><div class="wb-cmt-body">' + esc(c.content) + '</div>'
+        '</div><div class="wb-cmt-body">' + wxqReplace(esc(c.content)) + '</div>'
       var kids = byParent[c.id] || []
       if (kids.length) html += '<ul class="wb-cmt-children">' + kids.map(function (k) { return item(k, true) }).join('') + '</ul>'
       return html + '</li>'
@@ -582,6 +637,88 @@
       })
   })
 
+  /* ---------------- 微信表情面板（前台发布器 / 卡片编辑共用，ES5；表在上方 WXQ_CODES） ---------------- */
+  function wxqInsertToken(ta, token) {
+    if (!ta) return
+    var s = ta.selectionStart == null ? ta.value.length : ta.selectionStart
+    var e = ta.selectionEnd == null ? s : ta.selectionEnd
+    ta.value = ta.value.slice(0, s) + token + ta.value.slice(e)
+    var pos = s + token.length
+    ta.focus()
+    try {
+      ta.setSelectionRange(pos, pos)
+    } catch (err) {}
+  }
+
+  function wxqTogglePanel(btn, ta) {
+    var old = document.querySelector('[data-wxq-panel]')
+    if (old) {
+      old.remove()
+      return
+    }
+    if (!WXQ_CODES) return
+    var names = []
+    for (var k in WXQ_CODES) {
+      if (Object.prototype.hasOwnProperty.call(WXQ_CODES, k)) names.push(k)
+    }
+    var panel = document.createElement('div')
+    panel.setAttribute('data-wxq-panel', '')
+    panel.setAttribute(
+      'style',
+      'position:absolute;z-index:80;background:#fff;border:1px solid rgba(0,0,0,.12);border-radius:12px;box-shadow:0 10px 28px rgba(0,0,0,.14);padding:8px;display:grid;grid-template-columns:repeat(8,32px);gap:2px;width:296px;max-height:216px;overflow-y:auto;'
+    )
+    for (var i = 0; i < names.length; i++) {
+      ;(function (name) {
+        var cell = document.createElement('button')
+        cell.type = 'button'
+        cell.title = '[' + name + ']'
+        cell.setAttribute(
+          'style',
+          'border:none;background:none;padding:0;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:6px;'
+        )
+        var img = document.createElement('img')
+        img.src = WXQ_BASE + WXQ_CODES[name] + '.png'
+        img.alt = ''
+        img.loading = 'lazy'
+        img.setAttribute('style', 'width:24px;height:24px;display:block;')
+        cell.appendChild(img)
+        cell.addEventListener('click', function (ev) {
+          ev.preventDefault()
+          wxqInsertToken(ta, '[' + name + ']')
+        })
+        panel.appendChild(cell)
+      })(names[i])
+    }
+    var r = btn.getBoundingClientRect()
+    var docW = document.documentElement.clientWidth
+    panel.style.top = r.bottom + window.pageYOffset + 6 + 'px'
+    panel.style.left = Math.max(8, Math.min(r.left + window.pageXOffset, docW - 306)) + 'px'
+    document.body.appendChild(panel)
+  }
+
+  // 点外关闭（全局委托，一次注册）
+  document.addEventListener('click', function (e) {
+    var panel = document.querySelector('[data-wxq-panel]')
+    if (!panel) return
+    if (e.target.closest && (e.target.closest('[data-wxq-panel]') || e.target.closest('[data-wxq-btn]'))) return
+    panel.remove()
+  })
+
+  // 给发布器 / 卡片编辑的按钮行插入表情按钮（插入动作依赖 JS，按钮也由 JS 动态加）
+  function wxqAttachButton(foot, ta) {
+    if (!foot || foot.querySelector('[data-wxq-btn]')) return
+    var btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'wb-composer-add'
+    btn.textContent = '😊 表情'
+    btn.setAttribute('data-wxq-btn', '')
+    btn.addEventListener('click', function (e) {
+      e.preventDefault()
+      wxqTogglePanel(btn, ta)
+    })
+    foot.insertBefore(btn, foot.firstChild)
+  }
+
   /* ---------------- 前台发微博（管理员登录时微博页顶部的发布框，能力与后台发布器一致） ---------------- */
   var composerForm = document.querySelector('[data-wb-composer]')
   if (composerForm) {
@@ -673,6 +810,8 @@
         })
       })
     }
+
+    wxqAttachButton(composerForm.querySelector('.wb-composer-foot'), cpText)
 
     // 粘贴图片：光标在发布框内 ⌘/Ctrl+V 即上传（纯文本粘贴不受影响）
     composerForm.addEventListener('paste', function (e) {
@@ -802,23 +941,23 @@
       var m
       WB_TEXT_RE.lastIndex = 0
       while ((m = WB_TEXT_RE.exec(text))) {
-        out += esc(text.slice(last, m.index))
+        out += wxqReplace(esc(text.slice(last, m.index)))
         last = m.index + m[0].length
         if (m[1]) {
           var url = trimUrlTailJs(m[1])
           out +=
             '<a class="wb-link" href="' + esc(outHrefJs(url)) + '" target="_blank" rel="noopener noreferrer">' +
-            esc(url) + '</a>' + esc(m[0].slice(url.length))
+            esc(url) + '</a>' + wxqReplace(esc(m[0].slice(url.length)))
         } else {
           var lead = m[3] || ''
           var tag = m[4]
           var name = tag.replace(/^#/, '').replace(/#$/, '')
           out += esc(lead)
-          if (!name) out += esc(tag)
+          if (!name) out += wxqReplace(esc(tag))
           else out += '<a class="wb-topic" href="/weibo?topic=' + encodeURIComponent(name) + '">' + esc(tag) + '</a>'
         }
       }
-      out += esc(text.slice(last))
+      out += wxqReplace(esc(text.slice(last)))
       return out
     }
 
@@ -886,6 +1025,7 @@
       if (foot) card.insertBefore(form, foot)
       else card.appendChild(form)
 
+      wxqAttachButton(form.querySelector('.wb-composer-foot'), form.querySelector('textarea'))
       var ta = form.querySelector('textarea')
       var tiles = form.querySelector('.wb-composer-tiles')
       var addBtn = form.querySelector('.wb-composer-add')

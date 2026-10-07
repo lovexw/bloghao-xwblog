@@ -1,5 +1,6 @@
 /* 博客号后台 SPA（原生 ES Module，无构建依赖） */
 import { flushEditorSave, mountEditor, disposeEditor, pickFiles, compressImage } from './editor.js'
+import { loadEmoji, emojiGridHtml, insertToken } from './emoji.js'
 
 const $app = document.getElementById('app')
 const $toastSlot = document.getElementById('toast-slot')
@@ -716,6 +717,7 @@ async function viewWeibo() {
       <div class="wb-imgs" id="wb-imgs"></div>
       <div class="wb-composer-foot">
         <button class="btn btn-ghost btn-sm" id="wb-add-img" type="button">${I.image} 加图（${images.length}/${WB_MAX_IMAGES}）</button>
+        <button class="btn btn-ghost btn-sm" id="wb-emoji" type="button">😊 表情</button>
         <span class="wb-count" id="wb-count">${(wbEditing?.content || '').length} / ${WB_MAX_CHARS}</span>
         <span class="spacer"></span>
         ${wbEditing
@@ -731,6 +733,20 @@ async function viewWeibo() {
   const addImgBtn = document.getElementById('wb-add-img')
   const countEl = document.getElementById('wb-count')
   const composer = $app.querySelector('.wb-composer')
+
+  // 微信表情面板：点击插入文本码（[微笑]）到发布框光标处，可连续选；渲染层才把码转成图
+  document.getElementById('wb-emoji')?.addEventListener('click', async () => {
+    await loadEmoji()
+    const m = modal(
+      `<div class="modal-head"><span>微信表情</span><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body wxq-modal-body">${emojiGridHtml()}</div>`
+    )
+    m.mask.addEventListener('click', (e) => {
+      const cell = e.target.closest('[data-wxq]')
+      if (!cell) return
+      insertToken(contentEl, `[${cell.getAttribute('data-wxq')}]`)
+    })
+  })
 
   function renderImgs() {
     const box = document.getElementById('wb-imgs')

@@ -164,9 +164,11 @@ test('site.js wbTextHtml 镜像：与服务端 weiboTextHtml 同输入同输出'
   const factory = new Function(
     'esc',
     'location',
+    'wxqReplace',
     seg + '\n;return { wbTextHtml: wbTextHtml, outHrefJs: outHrefJs, trimUrlTailJs: trimUrlTailJs }'
   )
-  const client = factory(esc, { origin: 'https://s.test' })
+  // wxqReplace（微信表情替换）stub 成恒等：本组用例不含表情码；完整镜像（含表情）在 tests/emoji.test.ts
+  const client = factory(esc, { origin: 'https://s.test' }, (s: string) => s)
   const samples = [
     '',
     '纯文本，没有链接。',

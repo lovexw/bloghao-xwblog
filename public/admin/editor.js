@@ -10,6 +10,8 @@
  * - 插件系统：window.BlogHao.registerPlugin（见 docs/PLUGINS.md）
  */
 
+import { loadEmoji, emojiGridHtml, emojiEditorImg, stripEmojiImgs, insertToken } from './emoji.js'
+
 function esc(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
@@ -437,7 +439,11 @@ function htmlToMd(html) {
       else if (t === 'del' || t === 's') out += `~~${inner.trim()}~~`
       else if (t === 'code') out += '`' + n.textContent + '`'
       else if (t === 'a') out += `[${inner.trim()}](${n.getAttribute('href') || ''})`
-      else if (t === 'img') out += `![${n.getAttribute('alt') || ''}](${n.getAttribute('src') || ''})`
+      else if (t === 'img') {
+        // 编辑器插入的表情图还原成文本码（不转 markdown 图片语法）；data-emoji 值就是 [微笑] 这类码
+        const emojiCode = n.getAttribute('data-emoji')
+        out += emojiCode || `![${n.getAttribute('alt') || ''}](${n.getAttribute('src') || ''})`
+      }
       else out += inner
     })
     return out
@@ -463,7 +469,7 @@ function htmlToMd(html) {
         lines.push((t === 'ul' ? '- ' : `${i++}. `) + inline(li).trim())
       })
     } else if (t === 'hr') lines.push('---')
-    else if (t === 'img') lines.push(`![](${n.getAttribute('src') || ''})`)
+    else if (t === 'img') lines.push(n.getAttribute('data-emoji') || `![](${n.getAttribute('src') || ''})`)
     else {
       const text = inline(n).trim()
       if (text) lines.push(text)
@@ -567,6 +573,7 @@ export async function mountEditor(root, postId, opts = {}) {
     <button class="ed-btn" data-act="image" title="图片（可粘贴 / 拖拽）">${IC.image}</button>
     <button class="ed-btn" data-act="video" title="视频">${IC.video}</button>
     <button class="ed-btn" data-act="clear" title="清除格式">${IC.eraser}</button>
+    <button class="ed-btn" data-act="emoji" title="微信表情">😊</button>
     <span class="ed-sep"></span>
     <span id="ed-plugin-slot" style="display:flex;gap:2px;"></span>
   </div>
@@ -799,7 +806,7 @@ export async function mountEditor(root, postId, opts = {}) {
     }
     return {
       title: titleEl.value.trim(),
-      content: editor.innerHTML,
+      content: stripEmojiImgs(editor.innerHTML),
       summary: document.getElementById('ed-summary').value.trim(),
       cover: post.cover,
       tags: post.tags,
@@ -1027,6 +1034,8 @@ export async function mountEditor(root, postId, opts = {}) {
       document.execCommand('removeFormat')
       document.execCommand('formatBlock', false, 'p')
       markDirty()
+    } else if (act === 'emoji') {
+      await emojiDialog()
     }
     refreshToolbarState()
   })
@@ -1038,6 +1047,27 @@ export async function mountEditor(root, postId, opts = {}) {
   document.addEventListener('selectionchange', onSelectionChange)
 
   /* ---------- 对话框们 ---------- */
+  /* ---------- 微信表情（文本码体系，渲染层 [微笑]→站内小图；存库永远是文本码） ---------- */
+  async function emojiDialog() {
+    await loadEmoji()
+    const m = modal(
+      `<div class="modal-head"><span>微信表情</span><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body wxq-modal-body">${emojiGridHtml()}</div>`
+    )
+    // 点击插入不关面板（连续选表情）；富文本插 img（保存时反替换为文本码），Markdown 模式直接插码
+    m.mask.addEventListener('click', (e) => {
+      const cell = e.target.closest('[data-wxq]')
+      if (!cell) return
+      const name = cell.getAttribute('data-wxq')
+      if (mdMode) {
+        insertToken(mdArea, `[${name}]`)
+      } else {
+        insertHTML(emojiEditorImg(name))
+      }
+      markDirty()
+    })
+  }
+
   function linkDialog() {
     saveSelection()
     const selText = window.getSelection().toString()
