@@ -814,10 +814,12 @@ export function memberAvatarHtml(m: MemberView, cls: string): string {
   return `<span class="${cls}" aria-hidden="true">${esc(ch)}</span>`
 }
 
-/** 评论头像位（文章 / 留言板评论）：会员有站内头像用图，游客与未绑头像的会员退回昵称首字块；
+/** 评论头像位（文章 / 留言板评论）：会员有站内头像用图；作者（管理员）发言用站点头像
+ *  （settings.avatarUrl，与微博卡/后台侧栏同源）；其余退回昵称首字块。
  *  site.js 的微博评论渲染是本函数的 ES5 手工镜像，改任一侧记得同步 */
-function commentAvatarHtml(c: CommentRow): string {
+function commentAvatarHtml(c: CommentRow, adminAvatar?: string): string {
   if (c.member_avatar) return `<img class="cmt-avatar cmt-avatar-img" src="${esc(c.member_avatar)}" alt="">`
+  if (c.is_admin && adminAvatar) return `<img class="cmt-avatar cmt-avatar-img" src="${esc(adminAvatar)}" alt="">`
   const ch = (c.nickname || '客').trim().charAt(0) || '客'
   return `<span class="cmt-avatar" aria-hidden="true">${esc(ch)}</span>`
 }
@@ -1070,6 +1072,8 @@ export function commentsHtml(o: {
   adminName?: string
   /** 登录会员昵称（管理员未登录时生效）：表单免填昵称，以会员身份发言 */
   memberName?: string
+  /** 站点头像（settings.avatarUrl）：作者（管理员）评论的头像位用它，与微博卡同源 */
+  adminAvatar?: string
   title?: string
   tip?: string
   /** 留言板模式：区块与表单换成 guestbook 专用 id，提交目标不同 */
@@ -1098,7 +1102,7 @@ export function commentsHtml(o: {
     const kids = children.get(c.id) || []
     return `<li class="cmt-item" id="cmt-${c.id}">
   <div class="cmt-head">
-    ${commentAvatarHtml(c)}
+    ${commentAvatarHtml(c, o.adminAvatar)}
     <span class="cmt-name">${esc(c.nickname)}${badge}</span>
     <span class="cmt-time">${fmtDateTime(c.created_at)}</span>
     ${replyBtn}

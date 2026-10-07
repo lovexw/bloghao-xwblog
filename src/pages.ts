@@ -467,6 +467,8 @@ export async function renderPost(c: C): Promise<Response> {
     adminName: user ? (user.display_name || user.username || '').slice(0, 24) : undefined,
     memberName:
       !user && member ? (member.display_name || member.username || '').slice(0, 24) : undefined,
+    // 作者评论的头像位用站点头像（与微博卡同源），游客/会员评论不适用
+    adminAvatar: settings.avatarUrl || undefined,
     tip: settings.moderateComments === '1' && !user ? '提交后审核通过即展示' : undefined,
   })
 
@@ -683,6 +685,7 @@ export async function renderGuestbook(c: C): Promise<Response> {
       // 管理员登录：表单免填昵称，以作者身份发言；会员登录次之，以会员身份发言
       adminName: user ? (user.display_name || user.username || '').slice(0, 24) : undefined,
       memberName: !user && member ? (member.display_name || member.username || '').slice(0, 24) : undefined,
+      adminAvatar: settings.avatarUrl || undefined,
       tip: settings.moderateComments === '1' && !user ? '提交后审核通过即展示' : undefined,
       guestbook: true,
       // 页头已有「留言板」大标题，留言区标题换成「全部留言」避免重复

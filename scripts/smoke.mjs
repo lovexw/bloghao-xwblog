@@ -495,6 +495,8 @@ try {
     results.push(['回收站：微博恢复', twRestore.status === 200])
     console.log(`  ${twRestore.status === 200 ? '✓' : '✗'} 回收站：微博恢复`)
     await check('GET', '/weibo', 200, '冒烟回收站临时微博')
+    // 恢复后评论接口恢复 200：响应体带 adminAvatar 键（作者评论头像位的数据来源，site.js 消费）
+    await check('GET', `/api/public/weibo/${twId}/comments`, 200, 'adminAvatar')
     await raw('DELETE', `/api/admin/weibo/${twId}`, twCookie)
     const twPurge = await raw('DELETE', `/api/admin/trash/weibo/${twId}`, twCookie)
     results.push(['回收站：微博彻底删除', twPurge.status === 200])

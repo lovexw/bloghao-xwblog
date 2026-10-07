@@ -440,7 +440,7 @@
   }
 
   // 平铺评论 → 楼中楼（父评论被删的回复按顶层展示）
-  function renderWeiboComments(panel, comments, isAdmin) {
+  function renderWeiboComments(panel, comments, isAdmin, adminAvatar) {
     var listEl = panel.querySelector('[data-role=list]')
     if (!listEl) return
     var byParent = {}
@@ -458,9 +458,11 @@
       return
     }
     // 评论头像位（服务端 commentAvatarHtml 的 ES5 手工镜像，改任一侧记得同步）：
-    // 会员有站内头像用图，游客与未绑头像的会员退回昵称首字块
+    // 会员有站内头像用图；作者（管理员）发言用站点头像（adminAvatar，接口随列表下发）；
+    // 其余退回昵称首字块
     function avatarHtml(c) {
       if (c.member_avatar) return '<img class="wb-cmt-avatar wb-cmt-avatar-img" src="' + esc(c.member_avatar) + '" alt="">'
+      if (Number(c.is_admin) && adminAvatar) return '<img class="wb-cmt-avatar wb-cmt-avatar-img" src="' + esc(adminAvatar) + '" alt="">'
       var ch = (c.nickname || '客').charAt(0) || '客'
       return '<span class="wb-cmt-avatar" aria-hidden="true">' + esc(ch) + '</span>'
     }
@@ -488,7 +490,7 @@
     listEl.innerHTML = '<p class="wb-cmt-loading">加载中…</p>'
     Promise.all([getJSON('/api/public/weibo/' + encodeURIComponent(wbId) + '/comments'), authState()])
       .then(function (rs) {
-        renderWeiboComments(panel, (rs[0] && rs[0].comments) || [], !!(rs[1] && rs[1].user))
+        renderWeiboComments(panel, (rs[0] && rs[0].comments) || [], !!(rs[1] && rs[1].user), (rs[0] && rs[0].adminAvatar) || '')
       })
       .catch(function () {
         listEl.innerHTML = '<p class="wb-cmt-empty">评论加载失败，稍后再试</p>'

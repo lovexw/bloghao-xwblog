@@ -1911,7 +1911,7 @@ api.get('/public/weibo/:id/comments', async (c) => {
     )
     .bind(id)
     .all()
-  return c.json({ comments: results ?? [], allowComments: settings.allowComments === '1' })
+  return c.json({ comments: results ?? [], allowComments: settings.allowComments === '1', adminAvatar: settings.avatarUrl || '' })
 })
 
 api.post('/public/weibo/:id/comments', async (c) => {

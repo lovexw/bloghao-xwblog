@@ -2,11 +2,13 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { register } from 'node:module'
 import { pathToFileURL } from 'node:url'
+import { readFileSync } from 'node:fs'
 import type { ThemeModule } from '../src/themes/registry.ts'
-import type { AboutData, ArchivesData, GuestbookData, HomeData, LinksData, MemberData, PageData, PostData, RankData, WeiboData } from '../src/themes/registry.ts'
+import type { AboutData, ArchivesData, GuestbookData, HomeData, LinksData, MemberData, PageData, RankData, WeiboData } from '../src/themes/registry.ts'
 import type { HomePostView, MemberView, RankEntryView, WeiboItemView, ArchiveYearGroup, FriendLinkView, CategoryLink, TagCount } from '../src/render.ts'
 import type { CommentRow } from '../src/types.ts'
 import { commentsHtml, memberCardHtml, rankListHtml } from '../src/render.ts'
+import { esc } from '../src/utils.ts'
 import { packMatrix, qrMatrix } from '../src/qrcode.ts'
 
 // 主题模块 import 了 .css（wrangler 部署走 Text rule）——测试环境先用 hook 顶替，再动态加载注册表
@@ -336,6 +338,59 @@ test('评论头像位：会员出站内头像图，游客与未绑头像的会�
   assert.match(html, /<img class="cmt-avatar cmt-avatar-img" src="\/images\/u\/202610\/a\.png"/)
   assert.match(html, /<span class="cmt-avatar" aria-hidden="true">游<\/span>/)
   assert.match(html, /<span class="cmt-avatar" aria-hidden="true">小<\/span>/)
+})
+
+test('评论头像位：作者（管理员）评论用站点头像，未设置站点头像退回首字块', () => {
+  const withAvatar = commentsHtml({
+    comments: [cmt({ id: 1, is_admin: 1, nickname: '站长' })],
+    slug: 'hello',
+    allowComments: true,
+    count: 1,
+    adminAvatar: '/images/u/site.png',
+  })
+  assert.match(withAvatar, /<img class="cmt-avatar cmt-avatar-img" src="\/images\/u\/site\.png"/)
+  assert.doesNotMatch(withAvatar, /<span class="cmt-avatar" aria-hidden="true">站<\/span>/, '有站点头像不再落首字块')
+  // 会员头像优先于站点头像（is_admin 评论不会有 member_avatar，此条守优先级不回归）
+  const both = commentsHtml({
+    comments: [cmt({ id: 1, is_admin: 1, nickname: '站长', member_avatar: '/images/u/m.png' })],
+    slug: 'hello',
+    allowComments: true,
+    count: 1,
+    adminAvatar: '/images/u/site.png',
+  })
+  assert.match(both, /src="\/images\/u\/m\.png"/)
+  const noAvatar = commentsHtml({
+    comments: [cmt({ id: 1, is_admin: 1, nickname: '站长' })],
+    slug: 'hello',
+    allowComments: true,
+    count: 1,
+  })
+  assert.match(noAvatar, /<span class="cmt-avatar" aria-hidden="true">站<\/span>/, '没设站点头像维持首字块')
+})
+
+// site.js 的 renderWeiboComments.avatarHtml 是服务端 commentAvatarHtml 的 ES5 手工镜像（作者评论
+// 头像走接口下发的 adminAvatar）——把 site.js 源码切片在 Node 里执行，头像位双端同态，漂移当场见红
+test('site.js 微博评论头像镜像：会员图 / 作者站点头像 / 首字块与服务端同态', () => {
+  const src = readFileSync(new URL('../public/site.js', import.meta.url), 'utf8')
+  const seg = src.slice(src.indexOf('function renderWeiboComments'), src.indexOf('function loadWeiboComments'))
+  assert.ok(seg.includes('function renderWeiboComments') && seg.includes('adminAvatar'), 'site.js 切片失败：镜像段不在预期位置')
+  // esc 注入服务端实现（两端语义一致）；fmtTime / wxqReplace 与头像位无关，stub 掉
+  const factory = new Function('esc', 'fmtTime', 'wxqReplace', seg + '\n;return renderWeiboComments')
+  const render = factory(esc, (t: number) => String(t), (s: string) => s)
+  const listEl = { innerHTML: '' }
+  const rows = [
+    { id: 1, parent_id: 0, is_admin: 0, nickname: '会员甲', content: '内容', created_at: TS, member_avatar: '/images/u/202610/a.png' },
+    { id: 2, parent_id: 0, is_admin: 0, nickname: '游客甲', content: '内容', created_at: TS },
+    { id: 3, parent_id: 0, is_admin: 1, nickname: '站长', content: '内容', created_at: TS },
+  ]
+  render({ querySelector: () => listEl }, rows, false, '/images/u/site.png')
+  assert.match(listEl.innerHTML, /<img class="wb-cmt-avatar wb-cmt-avatar-img" src="\/images\/u\/202610\/a\.png"/, '会员头像位')
+  assert.match(listEl.innerHTML, /<img class="wb-cmt-avatar wb-cmt-avatar-img" src="\/images\/u\/site\.png"/, '作者评论用站点头像')
+  assert.match(listEl.innerHTML, /<span class="wb-cmt-avatar" aria-hidden="true">游<\/span>/, '游客退首字块')
+  // 接口没带 adminAvatar（站点未设头像）时，作者评论退回首字块，与 SSR 同态
+  listEl.innerHTML = ''
+  render({ querySelector: () => listEl }, [rows[2]], false, '')
+  assert.match(listEl.innerHTML, /<span class="wb-cmt-avatar" aria-hidden="true">站<\/span>/)
 })
 
 test('排行榜头像位：有 avatarUrl 出图，否则首字块', () => {

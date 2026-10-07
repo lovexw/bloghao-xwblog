@@ -40,7 +40,7 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 留言板留言（`/guestbook` 页）。Body 与规则同 `POST /api/public/comments`（`nickname` / `content` / 蜜罐 `link` / 限流 / 审核），无 `slug`；管理员带 `parentId` 即以作者身份回复（楼中楼）。存储上留言板留言是 `post_id = 0 AND weibo_id = 0` 的评论。响应 `{ok, pending?}`。
 
 ### GET /api/public/weibo/:id/comments
-微博的已展示评论（平铺 ASC，最多 200 条），元素含 `id/parent_id/is_admin/nickname/content/created_at`；前端按 `parent_id` 组装楼中楼。响应 `{comments, allowComments}`。
+微博的已展示评论（平铺 ASC，最多 200 条），元素含 `id/parent_id/is_admin/nickname/content/created_at`；前端按 `parent_id` 组装楼中楼。响应 `{comments, allowComments, adminAvatar}`——`adminAvatar` 是站点头像（settings.avatarUrl，可为空串），前端给 `is_admin` 评论的作者头像位用，与会员 `member_avatar` 同一展示位。
 
 ### POST /api/public/weibo/:id/comments
 微博评论。规则同 `POST /api/public/comments`（蜜罐 / 限流 / 审核 / 管理员 `parentId` 回复），`nickname`/`content` 约束一致。
@@ -95,6 +95,7 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 - **昵称**：清洗口径与注册一致（剥控制字符、trim、≤24 字符），空值 400「昵称不能为空」；**30 天一次**——冷却中 403（消息含解禁日期，如「昵称每 30 天只能修改一次，2026年11月6日后可再改」）；窗口判定下沉为 SQL 条件更新（`display_name_changed_at IS NULL OR <= now-30d`），并发双开同时过前置检查时只有一动能落库；成功 `{ok:true, nickname, displayNameChangedAt}`
 - **QQ 头像**（评论头像 C2）：`qq` 校验 `^[1-9][0-9]{4,10}$`（`utils.ts isValidQQ`，每会员 10 次/分钟限流）；服务端抓 `q1/q2.qlogo.cn`（s=140）→ 魔数识别 → 站内 R2 转存（EXIF 剥离同款兜底）→ 回写 `members.avatar`。**抓取失败容忍**：只记 qq 号，出参 `avatarFailed:true`，重发同一请求即重试头像；成功出参含 `avatarUrl`（站内 `/images/` 地址）。**`qq` 号本体只进本人视角出参**（`/api/member/me` 的 self 视图），评论 / 排行榜等公开面一律不携带
 - 微博评论 JSON（`GET /api/public/weibo/:id/comments`）与文章 / 留言板评论渲染新增 `member_avatar` 字段（会员站内头像地址，游客与未绑会员无此字段，前端退回昵称首字块）
+- 评论头像位优先级：会员 `member_avatar` → 作者评论（`is_admin=1`）用 `adminAvatar`（站点头像，与微博卡同源）→ 昵称首字块
 
 ### POST /api/member/password
 修改密码（需登录；会员功能关闭时 404）。Body：`{ "currentPassword": "当前密码", "newPassword": "新密码" }`。
