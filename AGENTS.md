@@ -60,7 +60,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - 会员数据只在 members / member_sessions / member_points_log 三表：**严禁写 users / sessions**（users 只承载管理员，`/api/auth/setup` 靠 `countUsers() === 0` 判断首装）；会员会话 Cookie 独立（`xw_member_session`），勿与管理员 `bloghao_session` 混用
 - 积分数值与单日上限**只改 `src/points.ts` 常量表一处**（2026-10-07 拍板：评论 +2 每日上限 10 条、每日登录 +1）；记分必须走 `awardPoints`（自带北京时间日上限与 hasOwnProperty reason 校验），评论积分**过审才计**且同一评论只计一次（`awardCommentPoints` 按 ref_id 去重——即时通过在发言当下、先审后展挂到后台「通过」动作，两路共用防重复）
 - `/api/member/*` 受 settings `membersEnabled` 门控（关 = 404）；封禁（status='banned'）后 `getMemberUser` 查询层即视为未登录，后台拉黑时同时清空该会员全部会话；`rankTopN` 由 `clampInt(1,50)` 兜底
-- 评论三路会员发言走 publicComment 公共核心的 member 分支：身份来自会话，**表单昵称/邮箱/网站字段一律忽略**；会员暂不可回复楼中楼（与游客同口径，放开属契约变更）；评论列表（SSR 文章/留言板 + 微博 JSON）经 LEFT JOIN members 带出 `member_name`/`member_tier` 徽标数据，渲染消费在 B 序列（契约 A3）
+- 评论三路会员发言走 publicComment 公共核心的 member 分支：身份来自会话，**表单昵称/邮箱/网站字段一律忽略**；会员暂不可回复楼中楼（与游客同口径，放开属契约变更）；评论列表（SSR 文章/留言板 + 微博 JSON）经 LEFT JOIN members 带出 `member_name`/`member_tier` 徽标数据；SSR 三处评论表单的 `memberName`（「以会员 xxx 的身份发言」免填昵称）由 pages.ts 统一传（renderPost / renderGuestbook / renderWeibo / 首页 weiboFeed，管理员优先会员次之），会员查询一律 `membersEnabled ? getMemberUser(...) : null` 门控——新增带评论表单的页面要照此接线，别让会员看到游客昵称框
 - 付费墙的**安全边界是服务端截断**（`utils.ts teaserHtml`，200 可见字符预算、闭合未关标签）：locked 文章浏览器拿到的就是残文，改渲染层永远补不回安全。可见判定统一 `points.ts canRead/normalizeMinTier`（脏 min_tier 归 all，宁漏勿锁死）；**新公开面（新增导出/接口/主题字段）必须过防泄漏清单**——已过滤：RSS content:encoded（locked 只出试读段+引导）、/api/public/posts（只出 summary）、搜索/卡片摘要（≤120 字摘要口径）；搜索 LIKE 可命中标题属既定取舍（契约 A2 会签记录）
 - schema 三张会员表已登记备份（members / member_points_log 进，member_sessions 与 sessions 同理属临时凭证不进）；排行查询只出 active 且积分 > 0；A/B 双机并行期间文件所有权与契约变更纪律照 DEVPLAN 公约，越界改动前先对齐
 
@@ -73,6 +73,13 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - **防泄漏清单**（新增公开面必须过一遍）：文章页密码锁定时正文 / 自动摘要（`excerpt(row.content)`）/ JSON-LD 描述 / OG 从正文提取卡图，全部不出——meta 描述走 `protectedDescription`（作者自填摘要优先，否则固定话术）；RSS 不出该文 `content:encoded`（比会员锁文的试读段更严）；关键词搜索整体不命中加密文章（content LIKE 命中本身即泄露，listPosts 的 q 分支有过滤）；`/random` 不进加密文章；标题、作者自填摘要、封面、标签照常公开（作者主动公开的导读面）
 - 解锁端点是**表单 POST `/post/:slug/unlock`（index.ts，303 回跳，无 JS 依赖）**：必须保留同源 Origin 校验、按「IP+文章」限流（PBKDF2 是慢操作，防爆破 10 次/10 分钟）、目标不存在/未加密静默 303 回跳不透露存在性；错误态走 `?pwerr=1` / `?pwerr=slow` 回显在表单里。表单与样式都在 protect.ts（`passwordFormHtml` / `PP_CSS` 随主题 CSS 注入 head），不要往 themes 五主题里各抄一份
 - 备份/导出含 password_hash 属预期（备份要可还原，导出是管理员工具）
+
+**外链中间页（tests/outlink.test.ts、冒烟「外链中间页」，机制在 src/outlink.ts）**
+
+- 第三方链接一律走 `outHref` 判定：白名单（`TRUSTED_OUT_DOMAINS`，主域名 + 子域跟随）与本站同源直出，其余包成 `/go?u=<encodeURIComponent>` 确认页（免责声明、noindex、无 JS 不自动跳转——`/go` 路由只对白名单/同源 302 直跳，非白名单**永不**服务端跳转，不构成开放重定向；目标必须 http(s) 且 ≤2048 字符，非法一律回首页）。新增「想给外链加中间页」的公开面只准调 `outHref` / `wrapAnchorHref`，别手搓白名单判断
+- **包装只发生在渲染层**：文章/页面/关于我走 `sanitizeHtml(html, { origin })`（不传 origin 的存库/RSS/导出路径保持原始 URL，`/go?u=` 是相对地址所以重复净化天然幂等），微博文本走 render.ts `weiboTextHtml`；weiboTextHtml 用 URL 与 #话题# **单次扫描**的分词正则（先转链接再扫话题会把 href 的 #fragment 误判成话题），URL 字符集排除 CJK 与全角标点（`https://x.com的官网` 链接停在汉字前）
+- **site.js 的 `wbTextHtml` / `TRUSTED_OUT` / `outHrefJs` / `trimUrlTailJs` 是服务端的手工镜像**（白名单表、分词正则、尾标点修剪四处同步），改任一侧必须两边同改并跑 tests/outlink.test.ts；客户端仍守 ES5 与禁 lookbehind 老规矩
+- 白名单前四项是站长自有域名（bloghao.com / xiaowuleyi.com / habfut.com / btchao.com），官方版挑洗时按 RELEASING 个人定制台账处理；友链页是站长逐条审核的收录结果，属「把握的域名」，不走中间页
 
 **后台交互（public/admin/，无自动化测试，靠约定）**
 
@@ -89,7 +96,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 
 **前台 site.js 兼容（全文件是一个 IIFE，一处解析错误全站交互瘫痪）**
 
-- 保持 ES5 风格（var/function）：**禁用 lookbehind 正则**（`(?<!…)` Safari ≤ 16.3 解析期抛 SyntaxError）——微博话题正则用捕获组消费前导字符的写法，改正则先跑 tests 外的 18 用例对照（与服务端 weiboTextHtml 同口径）
+- 保持 ES5 风格（var/function）：**禁用 lookbehind 正则**（`(?<!…)` Safari ≤ 16.3 解析期抛 SyntaxError）——微博文本分词正则（URL 链接化 + 话题）用捕获组消费前导字符的写法，改正则先跑 tests/outlink.test.ts 对照（与服务端 weiboTextHtml 同口径，见「外链中间页」防线节）
 - **禁止裸调 localStorage**：隐私加固浏览器访问该属性即抛 SecurityError，一律走 `storeGet/storeSet`（内部 try/catch）
 
 **演示站（tests/demo.test.ts，docs/DEMO.md）**

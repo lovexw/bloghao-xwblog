@@ -559,9 +559,45 @@ try {
   results.push(['会员链路：评论计分落账（每日登录+1、评论+2）', ptsOk])
   console.log(`  ${ptsOk ? '✓' : '✗'} 会员链路：评论计分落账（当前 ${mMeAfter?.member?.points ?? '?'} 分）`)
 
-  // 榜单页与首页挂件：上榜会员可见（只出 active 且积分>0）
+  // 榜单页：上榜会员可见（只出 active 且积分>0）；首页不再渲染排行挂件（榜单收敛到 /rank）
   await check('GET', '/rank', 200, MEMBER_NAME)
-  await check('GET', '/', 200, 'rk-card')
+  await check('GET', '/', 200, undefined, { notContains: 'rk-card' })
+
+  // 会员登录态贯通前台评论表单（memberName 接线）：文章页/微博页免填昵称、以会员身份发言；游客仍需填昵称
+  await check('GET', '/post/smoke-multi-tag', 200, '以会员 <b>smokemember</b>', { headers: { Cookie: mCookie } })
+  await check('GET', '/post/smoke-multi-tag', 200, 'name="nickname"')
+  await check('GET', '/weibo', 200, '以会员 <b>smokemember</b>', { headers: { Cookie: mCookie } })
+  await check('GET', '/guestbook', 200, '以会员 <b>smokemember</b>', { headers: { Cookie: mCookie } })
+
+  // 微博正文链接自动超链（服务端 weiboTextHtml）：非白名单外链包 /go 中间页，话题不受影响
+  const wbLinkRes = await raw('POST', '/api/admin/weibo', {
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({ content: '冒烟外链：https://example.com/very-link #随手记#', images: [], status: 'published' }),
+  })
+  const wbLinkId = (await mJson(wbLinkRes))?.weibo?.id
+  if (wbLinkId) {
+    await check('GET', '/weibo', 200, 'wb-link')
+    await check('GET', '/weibo', 200, `/go?u=${encodeURIComponent('https://example.com/very-link')}`)
+    await raw('DELETE', `/api/admin/weibo/${wbLinkId}`, { headers: { Cookie: cookie } })
+    await raw('DELETE', `/api/admin/trash/weibo/${wbLinkId}`, { headers: { Cookie: cookie } })
+  } else {
+    results.push(['微博正文：外链自动超链（建冒烟微博）', false])
+    console.log('  ✗ 微博正文：外链自动超链（建冒烟微博失败）')
+  }
+
+  // 外链中间页（/go）：白名单域名 302 直跳，非白名单出确认页（免责声明），非法目标回首页
+  const goDirect = await fetch(`${BASE}/go?u=${encodeURIComponent('https://www.apple.com/iphone')}`, {
+    redirect: 'manual',
+    signal: AbortSignal.timeout(15_000),
+  })
+  const goDirectOk = goDirect.status === 302 && (goDirect.headers.get('location') || '').startsWith('https://www.apple.com/iphone')
+  results.push(['外链中间页：白名单域名 302 直跳', goDirectOk])
+  console.log(`  ${goDirectOk ? '✓' : '✗'} 外链中间页：白名单域名 302 直跳（${goDirect.status}）`)
+  await check('GET', `/go?u=${encodeURIComponent('https://example.com/page')}`, 200, '免责声明')
+  const goBad = await fetch(`${BASE}/go?u=javascript:alert(1)`, { redirect: 'manual', signal: AbortSignal.timeout(15_000) })
+  const goBadOk = goBad.status === 302 && (goBad.headers.get('location') || '').endsWith('/')
+  results.push(['外链中间页：非法目标回首页', goBadOk])
+  console.log(`  ${goBadOk ? '✓' : '✗'} 外链中间页：非法目标回首页（${goBad.status}）`)
 
   // 付费墙（契约 A2）：会员专属文——游客只见试读段与遮挡卡，会员可读全文，RSS 不出全文。
   // 密文必须落在 200 字试读预算之外：开头标记 + 200 字垫充，密文在第二个段落（预算外）

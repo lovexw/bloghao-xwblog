@@ -706,17 +706,87 @@
   ;(function () {
     var WB_MAX_IMAGES = 9
     var WB_MAX_CHARS = 5000
-    // 与后端 weiboTextHtml 同口径：esc 后把 #话题# 渲染成链接（编辑保存后就地重渲染用）。
+    // 与后端 weiboTextHtml（src/render.ts）同口径：URL 与 #话题# 单次扫描二选一（先转链接再扫
+    // 话题会把 href 里的 #fragment 误判成话题），URL 不吞 CJK 与全角标点。
     // 用捕获组消费「# 前的字符」代替 lookbehind——Safari ≤ 16.3 不支持 lookbehind，
     // 正则字面量在解析期就抛 SyntaxError，会让整个 site.js 瘫掉（匹配语义与服务端一致）
-    var WB_TOPIC_RE = /(^|[^\p{L}\p{N}#])(#[^\s#&<>"']{1,24}(?:#|(?=\s)|$))/gu
+    var WB_TEXT_RE = /(https?:\/\/[^\s<>"'\u3000-\u303f\uff00-\uffef\u4e00-\u9fff]+)|((^|[^\p{L}\p{N}#])(#[^\s#&<>"']{1,24}(?:#|(?=\s)|$)))/gu
+
+    // 与 src/outlink.ts 的 TRUSTED_OUT_DOMAINS 手工同步：前四项是站长自有域名，其余主流大站；
+    // 白名单外域包 /go 中间页（外链提醒 + 免责声明），同源与白名单直出
+    var TRUSTED_OUT = ['bloghao.com', 'xiaowuleyi.com', 'habfut.com', 'btchao.com', 'apple.com', 'icloud.com', 'google.com', 'youtube.com', 'android.com', 'microsoft.com', 'live.com', 'office.com', 'bing.com', 'github.com', 'gitlab.com', 'stackoverflow.com', 'npmjs.com', 'wikipedia.org', 'wikimedia.org', 'mozilla.org', 'cloudflare.com', 'amazon.com', 'x.com', 'twitter.com', 'twimg.com', 'facebook.com', 'instagram.com', 'threads.net', 'linkedin.com', 'reddit.com', 'pinterest.com', 'tiktok.com', 'telegram.org', 't.me', 'discord.com', 'medium.com', 'substack.com', 'openai.com', 'anthropic.com', 'huggingface.co', 'weibo.com', 'weibo.cn', 'sina.com.cn', 'baidu.com', 'zhihu.com', 'bilibili.com', 'b23.tv', 'qq.com', 'tencent.com', '163.com', '126.com', 'netease.com', 'jd.com', 'taobao.com', 'tmall.com', 'alipay.com', 'aliyun.com', 'alibaba.com', 'douyin.com', 'kuaishou.com', 'xiaohongshu.com', 'sohu.com', 'csdn.net', 'juejin.cn', 'cnblogs.com', 'segmentfault.com', 'v2ex.com', 'gitee.com', 'oschina.net', 'jianshu.com', 'sspai.com', 'ithome.com', '36kr.com', 'mi.com', 'xiaomi.com', 'huawei.com']
+
+    function trustedOutHost(host) {
+      var h = String(host || '').toLowerCase().replace(/\.+$/, '')
+      if (!h) return false
+      for (var i = 0; i < TRUSTED_OUT.length; i++) {
+        var d = TRUSTED_OUT[i]
+        if (h === d || h.slice(-(d.length + 1)) === '.' + d) return true
+      }
+      return false
+    }
+
+    // 与后端 outHref 同口径（超长 URL 不包，防撑爆请求行）
+    function outHrefJs(url) {
+      try {
+        var u = new URL(url)
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return url
+        if (u.origin === location.origin) return url
+        if (trustedOutHost(u.hostname)) return url
+        if (url.length > 1000) return url
+        return '/go?u=' + encodeURIComponent(u.href)
+      } catch (e) {
+        return url
+      }
+    }
+
+    // 与后端 trimUrlTail 同口径：链接尾部标点留在链接外，括号配对时保留
+    function trimUrlTailJs(u) {
+      var s = u
+      while (s.length > 1) {
+        var last = s.charAt(s.length - 1)
+        if (last === ')') {
+          var opens = (s.match(/\(/g) || []).length
+          if ((s.match(/\)/g) || []).length > opens) {
+            s = s.slice(0, -1)
+            continue
+          }
+          break
+        }
+        if (".,;:!?>'、。，；：！？）】」』》›»…·".indexOf(last) !== -1) {
+          s = s.slice(0, -1)
+          continue
+        }
+        break
+      }
+      return s
+    }
 
     function wbTextHtml(content) {
-      return esc(content).replace(WB_TOPIC_RE, function (m, lead, tag) {
-        var name = tag.replace(/^#/, '').replace(/#$/, '')
-        if (!name) return m
-        return lead + '<a class="wb-topic" href="/weibo?topic=' + encodeURIComponent(name) + '">' + esc(tag) + '</a>'
-      })
+      var out = ''
+      var last = 0
+      var text = String(content == null ? '' : content)
+      var m
+      WB_TEXT_RE.lastIndex = 0
+      while ((m = WB_TEXT_RE.exec(text))) {
+        out += esc(text.slice(last, m.index))
+        last = m.index + m[0].length
+        if (m[4]) {
+          var url = trimUrlTailJs(m[4])
+          out +=
+            '<a class="wb-link" href="' + esc(outHrefJs(url)) + '" target="_blank" rel="noopener noreferrer">' +
+            esc(url) + '</a>' + esc(m[0].slice(url.length))
+        } else {
+          var lead = m[2] || ''
+          var tag = m[3]
+          var name = tag.replace(/^#/, '').replace(/#$/, '')
+          out += esc(lead)
+          if (!name) out += esc(tag)
+          else out += '<a class="wb-topic" href="/weibo?topic=' + encodeURIComponent(name) + '">' + esc(tag) + '</a>'
+        }
+      }
+      out += esc(text.slice(last))
+      return out
     }
 
     // 图片网格 class 与后端 weiboImageGrid 同口径：1 张大图，2/4 张两列，其余三列

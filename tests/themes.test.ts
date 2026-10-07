@@ -264,12 +264,18 @@ for (const [themeId, theme] of Object.entries(THEMES as Record<string, ThemeModu
     assert.ok(!loggedIn.includes('data-member-form'), '已登录不再渲染登录/注册表单')
   })
 
-  test(`${themeId}: home 会员排行挂件（有数据渲染/缺省不渲染）`, () => {
-    const withRank = theme.home({ ...homeData(), rank: rankEntries })
-    assert.ok(withRank.includes('rk-card'), '传入 rank 时应渲染排行挂件')
-    assert.ok(withRank.includes('完整榜单'))
-    const without = theme.home(homeData())
-    assert.ok(!without.includes('rk-card'), 'rank 缺省时不渲染挂件')
+  test(`${themeId}: home 无排行挂件（榜单收敛到 /rank 页，不再占首页卡片位）`, () => {
+    const html = theme.home(homeData())
+    assert.ok(!html.includes('rk-card'), '首页不渲染排行挂件')
+    assert.ok(!html.includes('rk-list'), '首页无榜单列表')
+    assert.ok(!html.includes('完整榜单'), '首页无榜单入口')
+  })
+
+  test(`${themeId}: weibo 评论表单带会员身份（memberName 免填昵称）`, () => {
+    const html = theme.weibo({ ...weiboData(), adminName: undefined, memberName: '小张' })
+    checkPage(themeId, 'weibo(member)', html)
+    assert.ok(html.includes('以会员 <b>小张</b>'), '会员身份行应渲染')
+    assert.ok(!html.includes('name="nickname"'), '会员表单免填昵称')
   })
 
   test(`${themeId}: page 未实现时运行时兜底由 pages.ts 负责（本主题已实现）`, () => {

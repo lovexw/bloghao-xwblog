@@ -1,6 +1,7 @@
 import type { CommentRow, PostRow, SettingsMap } from './types'
 import type { PostSort } from './db'
 import { renderFooterHtml } from './hooks'
+import { outHref } from './outlink'
 import { cstDate, esc, excerpt, extractWeiboTopics, fmtDate, fmtDateCN, fmtDateTime, isoDate } from './utils'
 
 export interface ThemePageOptions {
@@ -481,13 +482,54 @@ export function weiboImageGrid(images: string[]): string {
   return `<div class="wb-imgs ${cls}">${imgs}</div>`
 }
 
-/** 微博正文：转义后把 #话题# 渲染成指向 /weibo?topic= 的链接 */
+/** 微博正文链接尾部标点（句读/引号/右括号）留在链接外，括号配对时保留（维基百科类 URL）。
+ *  site.js 的 wbTextHtml 有一份同逻辑镜像，改动两边同步 */
+export function trimUrlTail(u: string): string {
+  let s = u
+  while (s.length > 1) {
+    const last = s[s.length - 1]
+    if (last === ')') {
+      const opens = (s.match(/\(/g) || []).length
+      if ((s.match(/\)/g) || []).length > opens) {
+        s = s.slice(0, -1)
+        continue
+      }
+      break
+    }
+    if (".,;:!?>'、。，；：！？）】」』》›»…·".includes(last)) {
+      s = s.slice(0, -1)
+      continue
+    }
+    break
+  }
+  return s
+}
+
+/** 微博正文分词：URL 与 #话题# 共用一个正则一次扫描（先转链接再扫话题会把 href 里的
+ *  #fragment 误判成话题、把生成的锚点拆坏）。URL 不吞 CJK 字符与全角标点——
+ *  「https://x.com的官网」这类中文紧贴的写法，链接应停在汉字前 */
+const WEIBO_TEXT_RE =
+  /(https?:\/\/[^\s<>"'\u3000-\u303f\uff00-\uffef\u4e00-\u9fff]+)|((?<![\p{L}\p{N}#])#[^\s#&<>"']{1,24}(?:#|(?=\s)|$))/gu
+
+/** 微博正文：URL 转可点击超链（白名单外域过 /go 中间页，src/outlink.ts），
+ *  #话题# 渲染成指向 /weibo?topic= 的链接；其余文本转义 */
 export function weiboTextHtml(content: string): string {
-  return esc(content).replace(/(?<![\p{L}\p{N}#])#[^\s#&<>"']{1,24}(?:#|(?=\s)|$)/gu, (m) => {
-    const name = extractWeiboTopics(m)[0]
-    if (!name) return esc(m)
-    return `<a class="wb-topic" href="/weibo?topic=${encodeURIComponent(name)}">${esc(m)}</a>`
-  })
+  let out = ''
+  let last = 0
+  for (const m of content.matchAll(WEIBO_TEXT_RE)) {
+    out += esc(content.slice(last, m.index))
+    last = m.index + m[0].length
+    if (m[1]) {
+      // URL：尾部标点留在链接外；锚文本与 href 都来自原文分段，经 esc 落进属性/文本上下文
+      const url = trimUrlTail(m[1])
+      out += `<a class="wb-link" href="${esc(outHref(url))}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>${esc(m[0].slice(url.length))}`
+      continue
+    }
+    const name = extractWeiboTopics(m[0])[0]
+    if (!name) out += esc(m[0])
+    else out += `<a class="wb-topic" href="/weibo?topic=${encodeURIComponent(name)}">${esc(m[0])}</a>`
+  }
+  return out + esc(content.slice(last))
 }
 
 /** 微博话题条：默认不显示（避免标签堆满页头）；仅从正文 #话题# 链接进入筛选时，显示「全部 + 当前话题」方便退出筛选 */
@@ -714,7 +756,7 @@ export function memberAvatarHtml(m: MemberView, cls: string): string {
   return `<span class="${cls}" aria-hidden="true">${esc(ch)}</span>`
 }
 
-/** 排行榜单行（首页挂件与 /rank 页共用结构） */
+/** 排行榜单行（/rank 页结构） */
 function rankRow(e: RankEntryView): string {
   return `<li class="rk-item${e.rank <= 3 ? ` is-top${e.rank}` : ''}${e.isMe ? ' is-me' : ''}">
   <span class="rk-no">${e.rank}</span>
@@ -722,20 +764,6 @@ function rankRow(e: RankEntryView): string {
   <span class="rk-tier">${tierLabel(e.tier)}</span>
   <b class="rk-pts">${e.points}</b>
 </li>`
-}
-
-/** 首页积分排行挂件：top N 榜（数据缺省/为空不渲染），完整榜单指向 /rank */
-export function rankCard(entries: RankEntryView[] | null | undefined): string {
-  if (!entries?.length) return ''
-  return `<section class="rk-card" aria-label="会员积分排行">
-  <header class="rk-head">
-    <svg class="rk-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 21h8M12 17v4"/><path d="M7 4h10v4a5 5 0 0 1-10 0z"/><path d="M7 5H4v2a3 3 0 0 0 3 3M17 5h3v2a3 3 0 0 1-3 3"/></svg>
-    <span class="rk-title">会员排行</span>
-    <span class="rk-sub">留言、常回来，积分自然涨</span>
-    <a class="rk-more" href="/rank">完整榜单 →</a>
-  </header>
-  <ol class="rk-list">${entries.map(rankRow).join('\n')}</ol>
-</section>`
 }
 
 /** /rank 完整榜单列表（页面壳由主题渲染）；空榜返回空串，由页面出空态文案 */

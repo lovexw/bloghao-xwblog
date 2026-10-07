@@ -100,3 +100,4 @@ git fetch upstream --tags         # 新 tag 带回本地坐标
 | 日期 | 内容（对应 commit / 功能名） | 不进官方版的原因 | 涉及文件 |
 | --- | --- | --- | --- |
 | 2026-10-07 | 批次核对（会员体系 P1 / 积分 / 排行榜 / 文章访问密码，main 0cb8c0d 集成） | —（**本批无个人定制**：四项均为写得出用法文档的官方功能候选，GUIDE §15 / API 会员节 / CHANGELOG Unreleased 已备；会员「跳队先行」是否随下版发布由发布日定，见 ROADMAP B2。收费配置、站点人设内容等运营属性尚未落地，落地当天在此登记） | — |
+| 2026-10-07 | 外链中间页白名单含站长自有域名（批次：外链提醒页 /go + 微博链接超链化 + 会员评论表单贯通 + 首页排行挂件下线） | **部分**：外链提醒页本身是官方功能（GUIDE §5 / API `/go` 已备），但 `src/outlink.ts` `TRUSTED_OUT_DOMAINS`（及 site.js `TRUSTED_OUT` 镜像）前四项是站长自有域名（bloghao.com / xiaowuleyi.com / habfut.com / btchao.com）——发布挑洗时把这两处清单里的自有域名剔除（保留主流大站），其余照发 | src/outlink.ts、public/site.js |

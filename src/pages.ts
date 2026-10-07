@@ -190,7 +190,7 @@ async function renderList(
     sort === 'random' ? clampInt(url.searchParams.get('seed'), 1, 999999999, 0) || 1 + Math.floor(Math.random() * 999999998) : 0
 
   // 搜索模式不分页，直接取前 50 条
-  const [r, tags, categories, pages, category, wb, wbFeedRaw, feedUser, otd, rankSession] = await Promise.all([    listPosts(c.env.DB, {
+  const [r, tags, categories, pages, category, wb, wbFeedRaw, feedUser, otd, memberSession] = await Promise.all([    listPosts(c.env.DB, {
       status: 'published',
       tag: opts.mode === 'home' ? tag : undefined,
       q: opts.mode === 'search' ? q || undefined : undefined,
@@ -215,7 +215,7 @@ async function renderList(
     opts.mode === 'home' && mode === 'weibo-blog' ? getSessionUser(c.env.DB, c.req.raw) : Promise.resolve(null),
     // 历史上的今天：仅首页第一页且未带筛选时查（有内部按天缓存）
     opts.mode === 'home' && pageNum === 1 && !tag && !q ? listOnThisDay(c.env.DB) : Promise.resolve(null),
-    // 会员会话（首页排行挂件的 isMe 标记用；未开启时省一次查询，无 Cookie 时是纯内存快路径）
+    // 会员会话（首页微博流的 memberName 用；未开启时省一次查询，无 Cookie 时是纯内存快路径）
     membersEnabled(settings) ? getMemberUser(c.env.DB, c.req.raw) : Promise.resolve(null),
   ])
   if (opts.mode === 'category' && !category) return renderNotFound(c)
@@ -253,8 +253,14 @@ async function renderList(
       }
     : null
 
-  // 首页微博流（微博+博客模式）：补评论数与管理员身份，卡片交互与 /weibo 页同款
-  let weiboFeed: { items: WeiboItemView[]; total: number; allowComments: boolean; adminName?: string } | null = null
+  // 首页微博流（微博+博客模式）：补评论数与登录身份（管理员优先、会员次之），卡片交互与 /weibo 页同款
+  let weiboFeed: {
+    items: WeiboItemView[]
+    total: number
+    allowComments: boolean
+    adminName?: string
+    memberName?: string
+  } | null = null
   if (wbFeedRaw) {
     const cmt = await weiboCommentCountMap(
       c.env.DB,
@@ -273,14 +279,10 @@ async function renderList(
       total: wbFeedRaw.total,
       allowComments: settings.allowComments === '1',
       adminName: feedUser ? (feedUser.display_name || feedUser.username || '').slice(0, 24) : undefined,
+      memberName:
+        !feedUser && memberSession ? (memberSession.display_name || memberSession.username || '').slice(0, 24) : undefined,
     }
   }
-
-  // 首页会员排行挂件（契约 A1/A4）：仅首页第一页且未带筛选时取数，其余页面/翻页不渲染
-  const rank =
-    opts.mode === 'home' && pageNum === 1 && !tag && !q && membersEnabled(settings)
-      ? await rankEntries(c, settings, rankSession?.id ?? null)
-      : null
 
   let notice = ''
   let emptyText = ''
@@ -330,7 +332,6 @@ async function renderList(
     weiboFeed,
     // 纯博客模式：历史上的今天只保留文章条目（微博模块已隐藏）
     onThisDay: mode === 'blog' && otd ? otd.filter((i) => i.kind === 'post') : otd,
-    rank,
   })
   c.header('Cache-Control', 'no-cache')
   return c.html(
@@ -398,16 +399,19 @@ export async function renderPost(c: C): Promise<Response> {
   // 管理员（作者本人预览）不受限；membersEnabled 关闭时无会员会话，锁文对所有人只出试读段
   const minTier = normalizeMinTier(row.min_tier)
   const locked = !pwLocked && !user && !canRead(minTier, member?.tier)
-  // 密码墙时正文一个字节都不出：连 sanitize 都不做，fullHtml 留空（teaser 分支不会被走到）
-  const fullHtml = pwLocked ? '' : stripCoverDuplicate(sanitizeHtml(row.content), row.cover)
+  // 密码墙时正文一个字节都不出：连 sanitize 都不做，fullHtml 留空（teaser 分支不会被走到）。
+  // 渲染路径传 origin：非白名单外链包 /go 中间页（存库/RSS/导出不传，保持原始 URL）
+  const fullHtml = pwLocked ? '' : stripCoverDuplicate(sanitizeHtml(row.content, { origin: url.origin }), row.cover)
   const commentsBlock = commentsHtml({
     comments,
     slug: row.slug,
     allowComments: settings.allowComments === '1' && row.status === 'published',
     count: commentTotal,
     isAdmin: !!user,
-    // 管理员登录：表单免填昵称，以作者身份发言
+    // 管理员登录：表单免填昵称，以作者身份发言；会员登录次之，以会员身份发言
     adminName: user ? (user.display_name || user.username || '').slice(0, 24) : undefined,
+    memberName:
+      !user && member ? (member.display_name || member.username || '').slice(0, 24) : undefined,
     tip: settings.moderateComments === '1' && !user ? '提交后审核通过即展示' : undefined,
   })
 
@@ -486,7 +490,7 @@ export async function renderAbout(c: C): Promise<Response> {
     const html = themePageHtml(theme, {
       settings,
       title: aboutRow.title,
-      contentHtml: sanitizeHtml(aboutRow.content),
+      contentHtml: sanitizeHtml(aboutRow.content, { origin: new URL(c.req.url).origin }),
       categories,
       tags,
       pages,
@@ -508,7 +512,7 @@ export async function renderAbout(c: C): Promise<Response> {
   const [categories, tags, pages] = await Promise.all([navCategories(c), navTags(c), navPages(c)])
   const html = theme.about({
     settings,
-    contentHtml: sanitizeHtml(settings.about || '<p>作者很懒，什么都没写。</p>'),
+    contentHtml: sanitizeHtml(settings.about || '<p>作者很懒，什么都没写。</p>', { origin: new URL(c.req.url).origin }),
     categories,
     tags,
     pages,
@@ -541,7 +545,7 @@ export async function renderPage(c: C): Promise<Response> {
   const html = themePageHtml(theme, {
     settings,
     title: row.title,
-    contentHtml: sanitizeHtml(row.content),
+    contentHtml: sanitizeHtml(row.content, { origin: new URL(c.req.url).origin }),
     categories,
     tags,
     pages,
@@ -599,7 +603,7 @@ export async function renderGuestbook(c: C): Promise<Response> {
   baseHeaders(c)
   const settings = await getSettings(c.env.DB)
   const theme = getTheme(settings.theme)
-  const [comments, categories, tags, pages, user, gbCount] = await Promise.all([
+  const [comments, categories, tags, pages, user, gbCount, member] = await Promise.all([
     listGuestbookComments(c.env.DB),
     navCategories(c),
     navTags(c),
@@ -607,6 +611,7 @@ export async function renderGuestbook(c: C): Promise<Response> {
     getSessionUser(c.env.DB, c.req.raw),
     // 留言总数独立取：列表 LIMIT 500，超限后 length 会少报
     c.env.DB.prepare("SELECT COUNT(*) AS n FROM comments WHERE post_id = 0 AND weibo_id = 0 AND status = 'approved'").first<{ n: number }>(),
+    membersEnabled(settings) ? getMemberUser(c.env.DB, c.req.raw) : Promise.resolve(null),
   ])
   const html = theme.guestbook({
     settings,
@@ -620,8 +625,9 @@ export async function renderGuestbook(c: C): Promise<Response> {
       allowComments: settings.allowComments === '1',
       count: gbCount?.n ?? comments.length,
       isAdmin: !!user,
-      // 管理员登录：表单免填昵称，以作者身份发言
+      // 管理员登录：表单免填昵称，以作者身份发言；会员登录次之，以会员身份发言
       adminName: user ? (user.display_name || user.username || '').slice(0, 24) : undefined,
+      memberName: !user && member ? (member.display_name || member.username || '').slice(0, 24) : undefined,
       tip: settings.moderateComments === '1' && !user ? '提交后审核通过即展示' : undefined,
       guestbook: true,
       // 页头已有「留言板」大标题，留言区标题换成「全部留言」避免重复
@@ -663,7 +669,7 @@ export async function renderWeibo(c: C, asHome = false): Promise<Response> {
     const located = await locateWeiboPage(c.env.DB, Number(wbParam), { limit: perPage, topic: topic || undefined })
     if (located) pageNum = located
   }
-  const [r, categories, topics, user, tags, pages] = await Promise.all([
+  const [r, categories, topics, user, tags, pages, member] = await Promise.all([
     listWeibo(c.env.DB, {
       status: 'published',
       page: pageNum,
@@ -677,6 +683,7 @@ export async function renderWeibo(c: C, asHome = false): Promise<Response> {
     getSessionUser(c.env.DB, c.req.raw),
     navTags(c),
     navPages(c),
+    membersEnabled(settings) ? getMemberUser(c.env.DB, c.req.raw) : Promise.resolve(null),
   ])
   // 页码越界时回到最后一页重取一次
   if (r.page > r.totalPages && r.total > 0) {
@@ -708,8 +715,9 @@ export async function renderWeibo(c: C, asHome = false): Promise<Response> {
     totalPages: r.totalPages,
     total: r.total,
     allowComments: settings.allowComments === '1',
-    // 管理员登录：卡片内评论表单免填昵称，以作者身份发言
+    // 管理员登录：卡片内评论表单免填昵称，以作者身份发言；会员登录次之，以会员身份发言
     adminName: user ? (user.display_name || user.username || '').slice(0, 24) : undefined,
+    memberName: !user && member ? (member.display_name || member.username || '').slice(0, 24) : undefined,
     topic: topic || undefined,
     topics,
   })

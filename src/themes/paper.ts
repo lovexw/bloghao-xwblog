@@ -16,7 +16,6 @@ import {
   onThisDayCard,
   pagerHtml,
   paywallHtml,
-  rankCard,
   rankListHtml,
   shareBtn,
   siteMode,
@@ -89,10 +88,9 @@ export function home(d: HomeData): string {
     <p class="pp-site-desc">${esc(s.siteDescription)}</p>
   </header>
   ${d.notice ? `<div class="pp-notice">${d.notice}</div>` : ''}
-  ${d.weiboFeed ? weiboHomeFeed({ settings: s, items: d.weiboFeed.items, total: d.weiboFeed.total, avatarHtml: seal(s), allowComments: d.weiboFeed.allowComments, adminName: d.weiboFeed.adminName }) : ''}
+  ${d.weiboFeed ? weiboHomeFeed({ settings: s, items: d.weiboFeed.items, total: d.weiboFeed.total, avatarHtml: seal(s), allowComments: d.weiboFeed.allowComments, adminName: d.weiboFeed.adminName, memberName: d.weiboFeed.memberName }) : ''}
   ${d.weibo ? weiboHomeEntry(d.weibo) : ''}
   ${onThisDayCard(d.onThisDay)}
-  ${rankCard(d.rank)}
   ${searchForm(d.q)}
   ${homeSortBar({ sort: d.sort, seed: d.seed, tag: d.tag, categorySlug: d.categorySlug, q: d.q })}
   <main class="pp-list">
@@ -193,6 +191,7 @@ export function weibo(d: WeiboData): string {
     avatarHtml: seal(s),
     allowComments: d.allowComments,
     adminName: d.adminName,
+    memberName: d.memberName,
   })
   return `<div class="pp-page">
   ${siteNav({ mode: siteMode(d.settings), memberEnabled: d.settings.membersEnabled === '1', cls: 'pp-snav', categories: d.categories, tags: d.tags, pages: d.pages, active: 'weibo' })}

@@ -5,6 +5,7 @@ import { api } from './api'
 import { siteClosedResponse } from './closed'
 import { clientIp, getCookie, rateLimit } from './auth'
 import { ensureSchema, getPostBySlug, getSettings, listCategories, listPublishedTags, listPosts, listSitemapPages, listSitemapPosts } from './db'
+import { goPageHtml, isTrustedOutHost } from './outlink'
 import { renderAbout, renderArchive, renderCategory, renderGuestbook, renderHome, renderLinks, renderMember, renderNotFound, renderPage, renderPost, renderRank, renderSearch, renderWeibo } from './pages'
 import { mergeUnlockCookie, PP_COOKIE, PP_TTL_MS, verifyPostPassword } from './protect'
 import { buildRss, buildSitemap } from './rss'
@@ -15,6 +16,9 @@ import type { Env, SessionUser } from './types'
 import { isDemo } from './utils'
 
 const app = new Hono<{ Bindings: Env; Variables: { user: SessionUser | null } }>()
+
+// 外链中间页的 CSP（/go 路由专用）：无脚本需求，比前台更收紧——default-src 'none' 只留内联样式
+const CSP_GO = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
 
 // 老库缺列自动补齐（幂等），每个 isolate 只执行一次
 let schemaReady: Promise<void> | null = null
@@ -69,6 +73,33 @@ app.get('/random', async (c) => {
   }>()
   if (!row) return renderNotFound(c)
   return c.redirect(`/post/${encodeURIComponent(row.slug)}`)
+})
+
+/* ---------------- 外链中间页（/go?u=<url>，机制在 src/outlink.ts） ----------------
+ * 白名单域名（TRUSTED_OUT_DOMAINS）与同源链接 302 直跳不经过确认；其余第三方地址渲染
+ * 「即将离开本站」提醒页（免责声明 + 访客自行决定），绝不自动跳转——不构成开放重定向。
+ * 目标必须 http(s) 且 ≤2048 字符，缺失/非法一律回首页；正文外链在渲染层包装进来
+ * （sanitize opts / weiboTextHtml），直接访问 /go 只是兜底入口 */
+app.get('/go', async (c) => {
+  const raw = (c.req.query('u') || '').trim()
+  let target: URL | null = null
+  try {
+    target = raw ? new URL(raw) : null
+  } catch {
+    target = null
+  }
+  if (target && (target.protocol === 'http:' || target.protocol === 'https:') && target.href.length <= 2048) {
+    if (target.origin === new URL(c.req.url).origin || isTrustedOutHost(target.hostname)) {
+      return c.redirect(target.href)
+    }
+    const settings = await getSettings(c.env.DB)
+    c.header('Content-Security-Policy', CSP_GO)
+    c.header('X-Content-Type-Options', 'nosniff')
+    c.header('Referrer-Policy', 'no-referrer')
+    c.header('Cache-Control', 'no-store')
+    return c.html(goPageHtml(target, settings.siteName || 'BlogHao'))
+  }
+  return c.redirect('/')
 })
 
 /* ---------------- 文章解锁（表单 POST + 303 回跳，无 JS 依赖；表单由 src/protect.ts 渲染） ----------------

@@ -491,6 +491,7 @@ img { max-width: 100%; height: auto; }
   font-family: var(--md-mono); letter-spacing: 0.05em;
 }
 .wb-topic { color: var(--md-accent); }
+.wb-link { color: var(--md-accent); }
 .wb-text a.wb-topic:hover { text-decoration: underline; text-underline-offset: 3px; }
 .wb-topics { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .wb-topic-chip {
@@ -651,13 +652,7 @@ img { max-width: 100%; height: auto; }
 /* 微博+博客模式：首页微博流（头部复用 .wb-home-head，卡片复用 .wb-list 间距） */
 .wb-home-feed { margin: 22px 0 0; }
 
-/* ---------- 会员 / 排行榜（首页 rankCard 挂件 + /rank /member 页，结构在 render.ts 共享） ---------- */
-.rk-card { margin: 22px 0 0; background: var(--md-card); border: 1px solid var(--md-line); border-radius: 10px; padding: 2px 18px; }
-.rk-head { display: flex; align-items: baseline; gap: 8px; padding: 14px 0 12px; border-bottom: 1px solid var(--md-line); }
-.rk-ico { width: 16px; height: 16px; color: var(--md-accent); align-self: center; flex: 0 0 auto; }
-.rk-title { font-size: 14px; font-weight: 600; color: var(--md-ink); }
-.rk-sub { font-size: 12px; color: var(--md-sub); }
-.rk-more { margin-left: auto; font-size: 12px; color: var(--md-accent); text-decoration: none; flex: 0 0 auto; }
+/* ---------- 会员 / 排行榜（/rank /member 页，结构在 render.ts 共享） ---------- */
 .rk-list { margin: 0; padding: 0; list-style: none; }
 .rk-item { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--md-line); }
 .rk-item:last-child { border-bottom: none; }
@@ -691,7 +686,6 @@ img { max-width: 100%; height: auto; }
 .mem-points span { font-size: 11px; color: var(--md-sub); }
 .mem-email { margin: 12px 0 0; font-size: 13px; color: var(--md-sub); word-break: break-all; }
 @media (max-width: 480px) {
-  .rk-sub { display: none; }
   .mem-card { padding: 18px 14px; }
 }
 

@@ -85,6 +85,9 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 ### GET /api/member/me
 `{member: {...} | null}`，恒 200（未登录为 `null`，前端据此渲染登录表单或会员卡）；本人视角额外含 `username` / `email` / `createdAt`。会员发言走上方评论三路接口即可：带会员 Cookie 时服务端自动挂身份，`nickname`/`email`/`website` 字段被忽略。
 
+### GET /go?u=<url>（SSR 页面）
+外链中间页（机制见 `src/outlink.ts`）：白名单域名（`TRUSTED_OUT_DOMAINS`，子域名自动跟随）与本站同源地址 302 直跳；其余第三方 http(s) 地址渲染「即将离开本站」确认页（展示目标域名与完整链接、附免责声明，`noindex`，无 JS、不自动跳转，故不构成开放重定向）。目标缺失 / 非 http(s) / 超 2048 字符一律 302 回首页。正文外链在渲染层包装进来：文章 / 页面 / 关于我走 `sanitizeHtml(html, { origin })`，微博文本走 `weiboTextHtml`（客户端镜像在 site.js）——存库与 RSS / 导出保持原始 URL。
+
 ## 认证
 
 ### GET /api/auth/state

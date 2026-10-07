@@ -18,7 +18,6 @@ import {
   onThisDayCard,
   pagerHtml,
   paywallHtml,
-  rankCard,
   rankListHtml,
   shareBtn,
   siteMode,
@@ -102,10 +101,9 @@ export function home(d: HomeData): string {
     ${s.siteDescription ? `<p class="wx-masthead-desc">${esc(s.siteDescription)}</p>` : ''}
   </header>
   ${d.notice ? `<div class="wx-notice">${d.notice}</div>` : ''}
-  ${d.weiboFeed ? weiboHomeFeed({ settings: s, items: d.weiboFeed.items, total: d.weiboFeed.total, avatarHtml: avatar(s), allowComments: d.weiboFeed.allowComments, adminName: d.weiboFeed.adminName }) : ''}
+  ${d.weiboFeed ? weiboHomeFeed({ settings: s, items: d.weiboFeed.items, total: d.weiboFeed.total, avatarHtml: avatar(s), allowComments: d.weiboFeed.allowComments, adminName: d.weiboFeed.adminName, memberName: d.weiboFeed.memberName }) : ''}
   ${d.weibo ? weiboHomeEntry(d.weibo) : ''}
   ${onThisDayCard(d.onThisDay)}
-  ${rankCard(d.rank)}
   ${searchForm(d.q)}
   ${homeSortBar({ sort: d.sort, seed: d.seed, tag: d.tag, categorySlug: d.categorySlug, q: d.q })}
   <main class="wx-feed">
@@ -232,6 +230,7 @@ export function weibo(d: WeiboData): string {
     avatarHtml: avatar(s),
     allowComments: d.allowComments,
     adminName: d.adminName,
+    memberName: d.memberName,
   })
   return `<div class="wx-page">
   ${siteNav({ mode: siteMode(d.settings), memberEnabled: d.settings.membersEnabled === '1', cls: 'wx-snav', categories: d.categories, tags: d.tags, pages: d.pages, active: 'weibo' })}

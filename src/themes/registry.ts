@@ -56,11 +56,15 @@ export interface HomeData {
    * 首页微博流（仅「微博+博客」模式的首页传入）：完整微博卡片先行，文章列表跟在后面。
    * 主题侧用 weiboHomeFeed({ settings, ...weiboFeed, avatarHtml }) 渲染；没有已发布微博时为 null
    */
-  weiboFeed?: { items: WeiboItemView[]; total: number; allowComments: boolean; adminName?: string } | null
+  weiboFeed?: {
+    items: WeiboItemView[]
+    total: number
+    allowComments: boolean
+    adminName?: string
+    memberName?: string
+  } | null
   /** 历史上的今天（仅首页第一页且未筛选时传入）：往年今日的文章与微博，空数组/缺省不渲染 */
   onThisDay?: OnThisDayItemView[] | null
-  /** 首页会员排行挂件（仅首页第一页且 membersEnabled 开启时传入）：top N 榜，缺省/null 不渲染 */
-  rank?: RankEntryView[] | null
 }
 
 export interface WeiboData {
@@ -78,6 +82,8 @@ export interface WeiboData {
   allowComments: boolean
   /** 登录管理员昵称：卡片内评论表单免填昵称，以作者身份发言 */
   adminName?: string
+  /** 登录会员昵称（管理员未登录时生效）：卡片内评论表单免填昵称，以会员身份发言 */
+  memberName?: string
   /** 当前筛选的话题（?topic=），为空为全部 */
   topic?: string
   /** 已发布微博的话题聚合（话题条数据），为空不渲染话题条 */
