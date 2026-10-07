@@ -15,12 +15,11 @@ import { fileURLToPath } from 'node:url'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const PORT = 8799
 const READY_TIMEOUT_MS = 180_000
-/* Windows 上 spawn('npm') 会 ENOENT（Node 18+ 不再自动补 .cmd），必须显式用 npm.cmd；
- * node_modules/.bin/wrangler 同理（wrangler.cmd）。POSIX 维持原名 */
-const IS_WIN = process.platform === 'win32'
-const NPM_BIN = IS_WIN ? 'npm.cmd' : 'npm'
-const NPX_BIN = IS_WIN ? 'npx.cmd' : 'npx'
-const WRANGLER_BIN = path.join(ROOT, 'node_modules', '.bin', IS_WIN ? 'wrangler.cmd' : 'wrangler')
+/* 子进程统一 node 直跑底层 js 入口（wrangler 自带 bin/wrangler.js，等效 npx wrangler）：
+ * spawn 'npm'/.bin 垫片在 Windows 会 ENOENT（Node 18+ 不再自动补 .cmd），
+ * 配 shell:true 又会把带空格/引号的参数（--command 的 SQL）拆碎——node + js 路径两平台行为一致 */
+const NODE = process.execPath
+const WRANGLER_JS = path.join(ROOT, 'node_modules', 'wrangler', 'bin', 'wrangler.js')
 
 const results = []
 let dev = null
@@ -28,7 +27,7 @@ let dev = null
 function run(cmd, args, label) {
   return new Promise((resolve, reject) => {
     console.log(`\n▸ ${label}`)
-    const p = spawn(cmd, args, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], shell: IS_WIN })
+    const p = spawn(cmd, args, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] })
     let out = ''
     p.stdout.on('data', (d) => (out += d))
     p.stderr.on('data', (d) => (out += d))
@@ -47,11 +46,9 @@ function run(cmd, args, label) {
 
 async function startDevServer() {
   console.log(`\n▸ 启动 wrangler dev（端口 ${PORT}）`)
-  const bin = WRANGLER_BIN
-  dev = spawn(bin, ['dev', '--port', String(PORT), '--ip', '127.0.0.1'], {
+  dev = spawn(NODE, [WRANGLER_JS, 'dev', '--port', String(PORT), '--ip', '127.0.0.1'], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
-    shell: IS_WIN,
   })
   let out = ''
   dev.stdout.on('data', (d) => (out += d))
@@ -113,10 +110,11 @@ async function check(method, url, expectStatus, expectBody, opts = {}) {
 }
 
 try {
-  await run(NPM_BIN, ['run', 'db:init:local'], '初始化本地 D1（幂等）')
+  // 与 npm run db:init:local 同义（wrangler d1 execute DB --local --file schema.sql），直跑免 npm 中转
+  await run(NODE, [WRANGLER_JS, 'd1', 'execute', 'DB', '--local', '--file', 'schema.sql'], '初始化本地 D1（幂等）')
   await run(
-    NPX_BIN,
-    ['wrangler', 'd1', 'execute', 'DB', '--local', '--file', 'scripts/smoke.fixtures.sql'],
+    NODE,
+    [WRANGLER_JS, 'd1', 'execute', 'DB', '--local', '--file', 'scripts/smoke.fixtures.sql'],
     '写入冒烟夹具（幂等）'
   )
   await startDevServer()
@@ -172,9 +170,9 @@ try {
   await new Promise((r) => setTimeout(r, 1500))
   try {
     const out = await run(
-      NPX_BIN,
+      NODE,
       [
-        'wrangler', 'd1', 'execute', 'DB', '--local', '--json', '--command',
+        WRANGLER_JS, 'd1', 'execute', 'DB', '--local', '--json', '--command',
         "SELECT COUNT(*) AS n FROM visit_log WHERE vid = 'smoke-visitor-1'",
       ],
       '校验打点已落库（visit_log）'
@@ -496,6 +494,76 @@ try {
     results.push(['回收站：微博彻底删除', twPurge.status === 200])
     console.log(`  ${twPurge.status === 200 ? '✓' : '✗'} 回收站：微博彻底删除`)
     await check('GET', '/api/admin/trash?type=weibo', 200, undefined, { notContains: '冒烟回收站临时微博', headers: twCookie.headers })
+  }
+
+  // ── 文章访问密码（src/protect.ts）：密码墙 → 防泄漏 → 解锁 → 解除 全链路 ──
+  console.log('\n▸ 文章访问密码链路')
+  const PP_SECRET = '加密正文密语 smoke-secret-body-99031'
+  const ppCreate = await raw('POST', '/api/admin/posts', {
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({
+      title: '冒烟：加密文章',
+      content: `<p>${PP_SECRET}</p>`,
+      summary: '作者导读 smoke-summary-99031',
+      status: 'published',
+      password: 'smoke-pass-9999',
+    }),
+  })
+  const ppCreated = await ppCreate.json().catch(() => null)
+  const ppId = ppCreated && ppCreated.post && ppCreated.post.id
+  const ppSlug = ppCreated && ppCreated.post && ppCreated.post.slug
+  results.push(['加密码：建加密文章', ppCreate.status === 200 && !!ppId])
+  console.log(`  ${ppCreate.status === 200 && !!ppId ? '✓' : '✗'} 加密码：建加密文章（id ${ppId}）`)
+  if (ppId) {
+    const ppCookie = { headers: { Cookie: cookie } }
+    const ppPath = `/post/${encodeURIComponent(ppSlug)}`
+    // 后台出参：hasPassword=true，password_hash 绝不出现
+    const ppRow = await raw('GET', `/api/admin/posts/${ppId}`, ppCookie)
+    const ppRowText = await ppRow.text()
+    const ppStripOk = ppRow.status === 200 && ppRowText.includes('"hasPassword":true') && !ppRowText.includes('password_hash')
+    results.push(['加密码：后台出参剥哈希', ppStripOk])
+    console.log(`  ${ppStripOk ? '✓' : '✗'} 加密码：后台出参剥哈希`)
+    // 访客视角：密码墙在，作者摘要照常出 meta，正文一个字都不出
+    await check('GET', ppPath, 200, '本文章已加密')
+    await check('GET', ppPath, 200, 'smoke-summary-99031')
+    await check('GET', ppPath, 200, undefined, { notContains: PP_SECRET })
+    // RSS 全文不出；关键词搜索整体不命中（防内容 LIKE 探测）
+    await check('GET', '/rss.xml', 200, '冒烟：加密文章')
+    await check('GET', '/rss.xml', 200, undefined, { notContains: PP_SECRET })
+    await check('GET', `/search?q=${encodeURIComponent('smoke-secret-body')}`, 200, undefined, { notContains: '冒烟：加密文章' })
+    // 解锁失败 → 303 带 pwerr；成功 → 303 + 解锁 Cookie
+    const unlock = (pwd) =>
+      fetch(`${BASE}/post/${encodeURIComponent(ppSlug)}/unlock`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `password=${encodeURIComponent(pwd)}`,
+        signal: AbortSignal.timeout(15_000),
+      })
+    const badRes = await unlock('wrong-guess')
+    const badLoc = badRes.headers.get('location') || ''
+    const badOk = badRes.status === 303 && badLoc.includes('pwerr=1')
+    results.push(['加密码：错误密码拒绝', badOk])
+    console.log(`  ${badOk ? '✓' : '✗'} 加密码：错误密码拒绝（${badRes.status} → ${badLoc}）`)
+    const okRes = await unlock('smoke-pass-9999')
+    const ppToken = (okRes.headers.get('set-cookie') || '').split(';')[0]
+    const okOk = okRes.status === 303 && !(okRes.headers.get('location') || '').includes('pwerr') && ppToken.startsWith('bloghao_pp=')
+    results.push(['加密码：正确密码签发解锁 Cookie', okOk])
+    console.log(`  ${okOk ? '✓' : '✗'} 加密码：正确密码签发解锁 Cookie（${okRes.status}）`)
+    // 带解锁 Cookie 正文可见；管理员会话直接放行
+    await check('GET', ppPath, 200, PP_SECRET, { headers: { Cookie: ppToken } })
+    await check('GET', ppPath, 200, PP_SECRET, ppCookie)
+    // 解除加密（PUT password 空串）→ 访客无需 Cookie 直接可读
+    await raw('PUT', `/api/admin/posts/${ppId}`, {
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ password: '' }),
+    })
+    await check('GET', ppPath, 200, PP_SECRET)
+    // 清理：软删 + 彻底删除
+    const ppDel = await raw('DELETE', `/api/admin/posts/${ppId}`, ppCookie)
+    await raw('DELETE', `/api/admin/trash/post/${ppId}`, ppCookie)
+    results.push(['加密码：清理临时文章', ppDel.status === 200])
+    console.log(`  ${ppDel.status === 200 ? '✓' : '✗'} 加密码：清理临时文章`)
   }
 
 } finally {
