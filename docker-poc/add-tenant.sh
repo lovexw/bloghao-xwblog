@@ -77,7 +77,9 @@ else
 fi
 # 写成功才原地覆盖（保 inode）；失败不留半截文件
 cat "$TMP" > "$CONFIG" && rm -f "$TMP"
-chmod 600 "$CONFIG" 2>/dev/null || true
+# 真实租户配置里没有密钥（R2 密钥启用后另行收紧：宿主用户组读写即可，
+# 不能 600——容器内 node(uid 1000) 经 bind mount 直读此文件，600 会崩溃循环
+chmod 644 "$CONFIG" 2>/dev/null || true
 
 # ── 数据目录 / 提示 ───────────────────────────────────────────────────────
 if [ "$REMOVE" = 1 ]; then
@@ -121,7 +123,10 @@ if [ "$REMOVE" = 1 ]; then
   echo ""
   echo "✓ 完成。验证下线生效："
   echo "  curl -s -o /dev/null -w '%{http_code}' -H 'Host: $HOST' http://127.0.0.1:8787/api/health"
-  echo "  应返回 404（未登记域名）；数据确认不要后：rm -rf data/tenants/$HOST"
+  echo "  应返回 404（未登记域名；进程内存的租户表要容器重启才刷新，届时再复测）。" >&2
+  echo "  数据确认不要后删除：rm -rf \"\${TENANTS_DIR:-data}/$HOST\"" >&2
+  echo "  （TENANTS_DIR 未设默认 data/；compose 把它整个挂到容器 /data/tenants，" >&2
+  echo "    宿主路径以 docker inspect 的 Mounts 为准）" >&2
   exit 0
 fi
 
