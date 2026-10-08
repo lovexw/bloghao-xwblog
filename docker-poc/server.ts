@@ -289,6 +289,19 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, tenan
   }
 
   // 2) 租户路由：未登记域名直接 404，不落到任何租户
+  // 例外：反代（Caddy on_demand_tls ask）的按需签证书探活——GET /api/health?domain=<域名>，
+  // Host 头是探活方自己（127.0.0.1），进不了租户路由；只在域名确已登记时放行 200，
+  // 未登记域名 404 = Caddy 拒签证书（防用这台机的证书资源给任意域名签）
+  if (url.pathname === '/api/health' && url.searchParams.has('domain')) {
+    if (tenants.has((url.searchParams.get('domain') || '').toLowerCase())) {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ ok: true, time: Date.now() }))
+    } else {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+      res.end('unknown domain')
+    }
+    return
+  }
   const tenant = tenants.get(host)
   if (!tenant) {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
