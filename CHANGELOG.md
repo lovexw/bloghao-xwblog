@@ -47,6 +47,8 @@
 ### 新增
 
 - **Docker 自托管**（`docker-poc/`）：文章存内置 SQLite（WAL），图片存本地磁盘目录或 Cloudflare R2 桶（S3 兼容接口直连、SigV4 零依赖实现，启动自检 + `--copy-local-to-r2` 幂等迁移存量图片）；单进程按域名托管多个完全独立的博客站（库与上传物物理隔离），定时发布与北京时间 00:30 备份 / 回收站清理随容器运行；`XWLBLOG_PORT` 换端口、`XWLBLOG_BIND` 绑回环交给面板反代；数据卷属主由容器入口自动修复后降权运行；已在真实服务器全链路排练通过（验收 45 项，4核8G 舒适跑 100 站）。部署指引见 README「部署 → 方式三」与 [docker-poc/DEPLOY.md](docker-poc/DEPLOY.md)
+- **开台脚本 `add-tenant.sh`**：一条命令开一个新博客站（tenants.json 登记 → 重启 → 按 Host 健康检查），`--demo` 开演示种子站、`--remove` 下线（数据保留）；原地改写配置文件保住 inode（单文件 bind mount 换 inode 容器读不到新配置）；兼容 jq / node 双后端与新旧两种配置格式
+- **小机部署清单 [DEPLOY-MICRO.md](docker-poc/DEPLOY-MICRO.md)**：1GB 内存 VPS（如甲骨文 Always Free E2.1.Micro）跑 30~50 个博客站的完整路径——本地构建镜像上传、绑回环 + Caddy 泛域名反代、图片先本地盘后逐租户迁 R2 的节奏与容量账
 
 ### 修复
 
