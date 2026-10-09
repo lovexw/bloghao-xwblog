@@ -230,6 +230,7 @@ const IC = {
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5-6 4 12 2.5-6h5"/></svg>',
   eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></svg>',
   cloud: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4.5 4.5 0 0 1-.4-9A6 6 0 0 1 18 8.5 4 4 0 0 1 17.5 18z"/></svg>',
+  find: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6M11 8v6"/></svg>',
 }
 
 /* ---------------- 插件系统 ---------------- */
@@ -540,6 +541,7 @@ export async function mountEditor(root, postId, opts = {}) {
     <span class="ed-status-pill chip ${post.status === 'published' ? 'chip-green' : 'chip-gray'}" id="ed-pill">${post.status === 'published' ? '已发布' : '草稿'}</span>
     <span class="ed-save-state" id="ed-save-state">—</span>
     <div class="ed-top-ops">
+      <button class="btn btn-sm" id="ed-find" title="查找替换 ⌘F">${IC.find} 查找</button>
       <button class="btn btn-sm" id="ed-check" title="按微信排版规范检查正文">${IC.check} 体检</button>
       <button class="btn btn-sm" id="ed-preview">${IC.eye} 预览</button>
       <button class="btn btn-sm" id="ed-save">${IC.cloud} 存草稿</button>
@@ -1642,6 +1644,7 @@ export async function mountEditor(root, postId, opts = {}) {
     // 挂起的自动保存与本地备份定时器一并取消：路由已切走，定时器再触发只会打在已卸载的 DOM 上
     clearTimeout(saveTimer)
     clearTimeout(draftTimer)
+    findBar = null // 查找条挂在顶栏 DOM 上，随 root 一起销毁，只清状态引用
     flushSave = null
   }
 
@@ -1700,6 +1703,266 @@ export async function mountEditor(root, postId, opts = {}) {
     if (!p.slug) return toast('先写点内容再预览', true)
     window.open(`/post/${p.slug}?preview=1`, '_blank')
   })
+  /* ---------- 查找替换（富文本高亮 <mark data-find>，保存前剥除；Markdown 模式操作纯文本） ---------- */
+  let findBar = null
+  let findHits = [] // 富文本模式：命中所在的文本节点列表（顺序与高亮一致）
+  let findIdx = -1
+
+  function clearFindMarks() {
+    editor.querySelectorAll('mark[data-find]').forEach((mk) => {
+      const parent = mk.parentNode
+      while (mk.firstChild) parent.insertBefore(mk.firstChild, mk)
+      parent.removeChild(mk)
+      parent.normalize() // 合并回相邻文本节点，恢复原始 DOM 结构
+    })
+    findHits = []
+    findIdx = -1
+  }
+
+  /** 收集命中：按文本节点扫描（跳过 code/pre 内部——代码内容改字面量容易改坏语义，用户可进 Markdown 模式改） */
+  function collectFindHits(term, caseSensitive) {
+    findHits = []
+    findIdx = -1
+    if (!term) return
+    const needle = caseSensitive ? term : term.toLowerCase()
+    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) =>
+        n.parentElement.closest('pre, code, mark[data-find]')
+          ? NodeFilter.FILTER_REJECT
+          : n.nodeValue.toLowerCase().includes(needle)
+            ? NodeFilter.FILTER_ACCEPT
+            : NodeFilter.FILTER_SKIP,
+    })
+    const nodes = []
+    while (walker.nextNode()) nodes.push(walker.currentNode)
+    for (const node of nodes) {
+      const hay = caseSensitive ? node.nodeValue : node.nodeValue.toLowerCase()
+      let i = 0
+      while ((i = hay.indexOf(needle, i)) !== -1) {
+        findHits.push({ node, start: i, end: i + term.length })
+        i += term.length
+      }
+    }
+  }
+
+  /** 把第 idx 个命中包进 <mark data-find> 并滚到可见；其余命中暂不高亮（避免反复切分文本节点） */
+  function highlightHit(idx) {
+    clearFindMarks()
+    if (idx < 0 || idx >= findHits.length) return
+    const { node, start, end } = findHits[idx]
+    const range = document.createRange()
+    range.setStart(node, start)
+    range.setEnd(node, end)
+    const mk = document.createElement('mark')
+    mk.setAttribute('data-find', '')
+    try {
+      range.surroundContents(mk)
+    } catch {
+      return // 节点边界异常（理论少见），跳过不高亮
+    }
+    // surroundContents 切分了文本节点，重算后续命中的 node 引用
+    rebuildHitNodes(mk, idx)
+    mk.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
+
+  /** 高亮切分文本节点后，idx 之后的命中可能落在 mk 的前/后半段，重定位引用 */
+  function rebuildHitNodes(mark, idx) {
+    for (let i = idx + 1; i < findHits.length; i++) {
+      const h = findHits[i]
+      if (h.node !== findHits[idx].node) continue
+      const markEnd = mark.nextSibling // mark 后的剩余文本
+      const offsetInMark = h.start - findHits[idx].start
+      if (offsetInMark < mark.firstChild.nodeValue.length) {
+        h.node = mark.firstChild
+      } else if (markEnd && markEnd.nodeType === Node.TEXT_NODE) {
+        h.node = markEnd
+        h.start -= findHits[idx].end
+        h.end -= findHits[idx].end
+      }
+    }
+  }
+
+  function findStatus() {
+    const el = findBar?.querySelector('#fd-status')
+    if (el) el.textContent = findHits.length ? `${findIdx + 1} / ${findHits.length}` : '无结果'
+  }
+
+  function findNext() {
+    if (!findHits.length) return
+    findIdx = (findIdx + 1) % findHits.length
+    highlightHit(findIdx)
+    findStatus()
+  }
+
+  function findPrev() {
+    if (!findHits.length) return
+    findIdx = (findIdx - 1 + findHits.length) % findHits.length
+    highlightHit(findIdx)
+    findStatus()
+  }
+
+  function runFind() {
+    clearFindMarks()
+    const term = findBar.querySelector('#fd-find').value
+    const cs = findBar.querySelector('#fd-case').checked
+    if (!term) {
+      findHits = []
+      findStatus()
+      return
+    }
+    if (mdMode) {
+      // Markdown 模式：在 textarea 里定位选中即可
+      const hay = cs ? mdArea.value : mdArea.value.toLowerCase()
+      const needle = cs ? term : term.toLowerCase()
+      findHits = [{ node: null, start: 0, end: 0 }]
+      findIdx = -1
+      let i = 0
+      let count = 0
+      while ((i = hay.indexOf(needle, i)) !== -1) {
+        count++
+        i += term.length
+      }
+      findHits.length = count
+      findIdx = -1
+      findStatus()
+      return
+    }
+    collectFindHits(term, cs)
+    if (findHits.length) {
+      findIdx = 0
+      highlightHit(0)
+    }
+    findStatus()
+  }
+
+  function replaceOne() {
+    const term = findBar.querySelector('#fd-find').value
+    const rep = findBar.querySelector('#fd-replace').value
+    const cs = findBar.querySelector('#fd-case').checked
+    if (!term || !findHits.length) return
+    if (mdMode) {
+      const v = mdArea.value
+      const hay = cs ? v : v.toLowerCase()
+      const needle = cs ? term : term.toLowerCase()
+      const at = hay.indexOf(needle)
+      if (at === -1) return
+      mdArea.value = v.slice(0, at) + rep + v.slice(at + term.length)
+      mdArea.dispatchEvent(new Event('input')) // 走 markDirty 链
+      runFind()
+      return
+    }
+    if (findIdx < 0) findNext()
+    const h = findHits[findIdx]
+    if (!h) return
+    const node = h.node
+    node.nodeValue = node.nodeValue.slice(0, h.start) + rep + node.nodeValue.slice(h.end)
+    clearFindMarks()
+    markDirty()
+    updateCount()
+    runFind() // 重新扫描：内容变了，旧坐标作废；停在原序号继续替换下一个
+  }
+
+  function replaceAll() {
+    const term = findBar.querySelector('#fd-find').value
+    const rep = findBar.querySelector('#fd-replace').value
+    const cs = findBar.querySelector('#fd-case').checked
+    if (!term) return
+    if (mdMode) {
+      const hay = cs ? mdArea.value : mdArea.value.toLowerCase()
+      const needle = cs ? term : term.toLowerCase()
+      let n = 0
+      let i = hay.indexOf(needle)
+      let v = mdArea.value
+      while (i !== -1) {
+        n++
+        v = v.slice(0, i) + rep + v.slice(i + term.length)
+        const next = (cs ? v : v.toLowerCase()).indexOf(needle, i + rep.length)
+        i = next
+      }
+      if (!n) return
+      mdArea.value = v
+      mdArea.dispatchEvent(new Event('input'))
+      toast(`已替换 ${n} 处`)
+      runFind()
+      return
+    }
+    if (!findHits.length) return
+    const n = findHits.length
+    // 从后往前按坐标改写文本节点，坐标不失效；同节点多命中时倒序天然正确
+    const byNode = new Map()
+    for (const h of findHits) {
+      if (!byNode.has(h.node)) byNode.set(h.node, [])
+      byNode.get(h.node).push(h)
+    }
+    for (const [node, list] of byNode) {
+      let v = node.nodeValue
+      for (const h of list.sort((a, b) => b.start - a.start)) {
+        v = v.slice(0, h.start) + rep + v.slice(h.end)
+      }
+      node.nodeValue = v
+    }
+    clearFindMarks()
+    markDirty()
+    updateCount()
+    toast(`已替换 ${n} 处`)
+    runFind()
+  }
+
+  function openFindBar() {
+    if (findBar) {
+      findBar.querySelector('#fd-find').focus()
+      findBar.querySelector('#fd-find').select()
+      return
+    }
+    findBar = document.createElement('div')
+    findBar.className = 'ed-findbar'
+    findBar.innerHTML = `
+      <input class="input" id="fd-find" placeholder="查找" style="width:150px;">
+      <input class="input" id="fd-replace" placeholder="替换为" style="width:150px;">
+      <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--sub);white-space:nowrap;">
+        <input type="checkbox" id="fd-case">区分大小写</label>
+      <span id="fd-status" style="font-size:12px;color:var(--sub);white-space:nowrap;">—</span>
+      <button class="btn btn-sm" id="fd-prev" title="上一个">↑</button>
+      <button class="btn btn-sm" id="fd-next" title="下一个">↓</button>
+      <button class="btn btn-sm" id="fd-one">替换</button>
+      <button class="btn btn-sm" id="fd-all">全部</button>
+      <button class="btn btn-ghost btn-sm" id="fd-close" title="关闭">✕</button>`
+    document.querySelector('.ed-topbar').appendChild(findBar)
+    const input = findBar.querySelector('#fd-find')
+    input.addEventListener('input', runFind)
+    input.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        e.shiftKey ? findPrev() : findNext()
+      }
+    })
+    findBar.querySelector('#fd-next').addEventListener('click', findNext)
+    findBar.querySelector('#fd-prev').addEventListener('click', findPrev)
+    findBar.querySelector('#fd-one').addEventListener('click', replaceOne)
+    findBar.querySelector('#fd-all').addEventListener('click', replaceAll)
+    findBar.querySelector('#fd-case').addEventListener('change', runFind)
+    findBar.querySelector('#fd-close').addEventListener('click', closeFindBar)
+    input.focus()
+  }
+
+  function closeFindBar() {
+    clearFindMarks()
+    findBar?.remove()
+    findBar = null
+  }
+
+  document.getElementById('ed-find').addEventListener('click', openFindBar)
+  const onFindKeydown = (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+      e.preventDefault()
+      openFindBar()
+    } else if (e.key === 'Escape' && findBar && !document.querySelector('.modal-mask')) {
+      closeFindBar()
+    }
+  }
+  root.addEventListener('keydown', onFindKeydown)
+
   document.getElementById('ed-check').addEventListener('click', () => {
     if (mdMode) return toast('请先退出 Markdown 模式', true)
     const issues = runChecks(editor.innerHTML)

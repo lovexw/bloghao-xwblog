@@ -314,6 +314,15 @@ input, textarea, select { font: inherit; color: inherit; }
 .ed-top-ops { margin-left: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ed-save-state { margin-left: auto; font-size: 12px; color: var(--sub); }
 
+/* 查找替换条（挂在顶栏末尾） */
+.ed-findbar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 8px 12px; margin-top: 8px;
+  border-top: 1px dashed var(--line); font-size: 13px;
+}
+.ed-findbar .input { font-size: 13px; padding: 4px 8px; }
+.ed-editor mark[data-find] { background: #ffe28a; color: #333; border-radius: 2px; padding: 0 1px; }
+
 .ed-toolbar {
   display: flex; align-items: center; gap: 2px; flex-wrap: wrap;
   background: var(--card); border-bottom: 1px solid var(--line);
