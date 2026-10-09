@@ -472,7 +472,8 @@ function htmlToMd(html) {
       })
     } else if (t === 'hr') lines.push('---')
     else if (t === 'table') {
-      // GFM 管道表格：首行当表头；单元格内的竖线与换行转义掉防破表
+      // GFM 管道表格：首行当表头；单元格内的竖线与换行转义掉防破表。
+      // 整表合并成一个元素（行间单 \n）——lines 是用空行 join 的，表格行若逐行 push 会散成段落
       const trs = [...n.querySelectorAll('tr')]
       if (!trs.length) return
       const cells = (tr) =>
@@ -483,12 +484,12 @@ function htmlToMd(html) {
       const head = cells(trs[0])
       const colCount = head.length
       if (!colCount) return
-      lines.push('| ' + head.join(' | ') + ' |')
-      lines.push('| ' + Array.from({ length: colCount }, () => '---').join(' | ') + ' |')
+      const rows = ['| ' + head.join(' | ') + ' |', '| ' + Array.from({ length: colCount }, () => '---').join(' | ') + ' |']
       for (const tr of trs.slice(1)) {
         const row = cells(tr)
-        lines.push('| ' + Array.from({ length: colCount }, (_, i) => row[i] || ' ').join(' | ') + ' |')
+        rows.push('| ' + Array.from({ length: colCount }, (_, i) => row[i] || ' ').join(' | ') + ' |')
       }
+      lines.push(rows.join('\n'))
     }
     else if (t === 'img') lines.push(n.getAttribute('data-emoji') || `![](${n.getAttribute('src') || ''})`)
     else {
@@ -701,6 +702,36 @@ export async function mountEditor(root, postId, opts = {}) {
   pluginSlotEl = document.getElementById('ed-plugin-slot')
   saveSelectionHook = saveSelection
 
+  /* ---------- 本地草稿兜底（localStorage） ----------
+   * 服务端自动保存（1.5s）是主线，这里是最后防线：保存成功前内容只活在内存里，
+   * 弱网断线 / 崩溃 / 误关页面就全丢。键按文章 id（新文章 ed-draft-new），
+   * 写入节流 2s + 卸载前同步补写；保存成功即清。隐私加固浏览器访问 localStorage
+   * 即抛 SecurityError：存取全部吞异常，兜底失效不影响写作。 */
+  const draftKey = () => 'ed-draft-' + (post.id || 'new')
+  let draftTimer = null
+  function writeLocalDraft() {
+    clearTimeout(draftTimer)
+    try {
+      const content = mdMode ? mdArea.value : editor.innerHTML
+      if (content.length > 2 * 1024 * 1024) return // 超配额口径，静默跳过（服务端自动保存仍在）
+      localStorage.setItem(
+        draftKey(),
+        JSON.stringify({ t: titleEl.value, c: content, m: mdMode ? 'md' : 'rich', at: Date.now() })
+      )
+    } catch { /* 配额满 / 隐私模式等，备份失败不阻塞写作 */ }
+  }
+  function clearLocalDraft() {
+    try { localStorage.removeItem(draftKey()) } catch { /* ignore */ }
+    // 新文章落库后换了键，旧 'new' 键一起清掉（此刻服务端草稿已接住内容）
+    if (post.id) { try { localStorage.removeItem('ed-draft-new') } catch { /* ignore */ } }
+  }
+  // 写入节流：连续输入不刷屏 localStorage（写入是同步的，会卡输入）
+  function scheduleLocalDraft() {
+    clearTimeout(draftTimer)
+    draftTimer = setTimeout(writeLocalDraft, 2000)
+  }
+
+
   editor.innerHTML = post.content || ''
 
   /* ---------- 本地备份恢复检查：备份比服务端内容新且不同 → 弹窗让用户二选一 ----------
@@ -854,35 +885,6 @@ export async function mountEditor(root, postId, opts = {}) {
     document.getElementById('ed-read').textContent = `约 ${Math.max(1, Math.ceil(n / 400))} 分钟`
   }
 
-  /* ---------- 本地草稿兜底（localStorage） ----------
-   * 服务端自动保存（1.5s）是主线，这里是最后防线：保存成功前内容只活在内存里，
-   * 弱网断线 / 崩溃 / 误关页面就全丢。键按文章 id（新文章 ed-draft-new），
-   * 写入节流 2s + 卸载前同步补写；保存成功即清。隐私加固浏览器访问 localStorage
-   * 即抛 SecurityError：存取全部吞异常，兜底失效不影响写作。 */
-  const draftKey = () => 'ed-draft-' + (post.id || 'new')
-  let draftTimer = null
-  function writeLocalDraft() {
-    clearTimeout(draftTimer)
-    try {
-      const content = mdMode ? mdArea.value : editor.innerHTML
-      if (content.length > 2 * 1024 * 1024) return // 超配额口径，静默跳过（服务端自动保存仍在）
-      localStorage.setItem(
-        draftKey(),
-        JSON.stringify({ t: titleEl.value, c: content, m: mdMode ? 'md' : 'rich', at: Date.now() })
-      )
-    } catch { /* 配额满 / 隐私模式等，备份失败不阻塞写作 */ }
-  }
-  function clearLocalDraft() {
-    try { localStorage.removeItem(draftKey()) } catch { /* ignore */ }
-    // 新文章落库后换了键，旧 'new' 键一起清掉（此刻服务端草稿已接住内容）
-    if (post.id) { try { localStorage.removeItem('ed-draft-new') } catch { /* ignore */ } }
-  }
-  // 写入节流：连续输入不刷屏 localStorage（写入是同步的，会卡输入）
-  function scheduleLocalDraft() {
-    clearTimeout(draftTimer)
-    draftTimer = setTimeout(writeLocalDraft, 2000)
-  }
-
   function markDirty() {
     dirty = true
     dirtySeq++
@@ -895,8 +897,9 @@ export async function mountEditor(root, postId, opts = {}) {
 
   function collect(extra = {}) {
     const catVal = document.getElementById('ed-category').value
-    // 查找高亮不进存库内容：先还原成原始 DOM 再序列化
-    if (!mdMode) clearFindMarks()
+    // 查找高亮不进存库内容：序列化前剥掉 mark——只剥 DOM 不清 findHits，
+    // 自动保存（collect 的主调用方）不能毁掉用户正在进行的查找/替换状态
+    if (!mdMode) stripFindMarks()
     // 访问密码只在「有话可说」时才带上 password 键（服务端缺键即保留）：
     // 勾选且填了 = 设置/更换；取消勾选且原来加密 = 空串解除；
     // 勾选但没填 = 保持现状（新建文另由 publish() 拦下要求必填），自动保存永远不会误清密码
@@ -1890,8 +1893,16 @@ export async function mountEditor(root, postId, opts = {}) {
   flushSave = async () => {
     if (dirty) {
       await save(false)
-    } else {
-      clearLocalDraft() // 干净退出（无未保存内容）也顺手清掉本地备份
+      return
+    }
+    // 干净退出（无未保存内容）：只清「内容与当前正文一致」的备份——
+    // 一致 = 已同步，留着只会下次弹窗打扰；不一致 = 可能是用户没确认过的孤儿备份，留给下次恢复弹窗
+    try {
+      const bak = JSON.parse(localStorage.getItem(draftKey()) || 'null')
+      const cur = mdMode ? mdArea.value : editor.innerHTML
+      if (!bak || typeof bak.c !== 'string' || bak.c === cur) clearLocalDraft()
+    } catch {
+      clearLocalDraft() // 脏数据读不出来，直接清
     }
   }
   cleanupEditor = () => {
@@ -1967,14 +1978,20 @@ export async function mountEditor(root, postId, opts = {}) {
   let findIdx = -1
 
   function clearFindMarks() {
+    stripFindMarks()
+    findHits = []
+    findIdx = -1
+  }
+
+  /** 只剥 DOM 上的 mark、不动 findHits/findIdx——highlightHit 重画高亮前用它，
+   *  不能调 clearFindMarks（会清空命中数组让高亮直接 return，画不出任何标记） */
+  function stripFindMarks() {
     editor.querySelectorAll('mark[data-find]').forEach((mk) => {
       const parent = mk.parentNode
       while (mk.firstChild) parent.insertBefore(mk.firstChild, mk)
       parent.removeChild(mk)
       parent.normalize() // 合并回相邻文本节点，恢复原始 DOM 结构
     })
-    findHits = []
-    findIdx = -1
   }
 
   /** 收集命中：按文本节点扫描（跳过 code/pre 内部——代码内容改字面量容易改坏语义，用户可进 Markdown 模式改） */
@@ -2003,41 +2020,38 @@ export async function mountEditor(root, postId, opts = {}) {
     }
   }
 
-  /** 把第 idx 个命中包进 <mark data-find> 并滚到可见；其余命中暂不高亮（避免反复切分文本节点） */
+  /** 把第 idx 个命中包进 <mark data-find> 并滚到可见；其余命中暂不高亮（避免反复切分文本节点）。
+   *  splitText 方案：节点切成 [前段][mark 内文本][后段]，三段引用全部显式掌握，
+   *  不用 surroundContents——它在前段为空文本节点等场景下节点归属不可控，替换会打错位置 */
   function highlightHit(idx) {
-    clearFindMarks()
+    stripFindMarks() // 只剥旧 mark，findHits 保留
     if (idx < 0 || idx >= findHits.length) return
-    const { node, start, end } = findHits[idx]
-    const range = document.createRange()
-    range.setStart(node, start)
-    range.setEnd(node, end)
+    const hit = findHits[idx]
+    const textNode = hit.node
+    if (!textNode || textNode.nodeType !== Node.TEXT_NODE) return
+    // splitText 两次：先切尾部（tail=后段），再在原节点上切头部（markText=命中段，textNode 剩前段）
+    const tail = hit.end < textNode.nodeValue.length ? textNode.splitText(hit.end) : null
+    const markText = hit.start > 0 ? textNode.splitText(hit.start) : textNode
     const mk = document.createElement('mark')
     mk.setAttribute('data-find', '')
-    try {
-      range.surroundContents(mk)
-    } catch {
-      return // 节点边界异常（理论少见），跳过不高亮
-    }
-    // surroundContents 切分了文本节点，重算后续命中的 node 引用
-    rebuildHitNodes(mk, idx)
-    mk.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }
-
-  /** 高亮切分文本节点后，idx 之后的命中可能落在 mk 的前/后半段，重定位引用 */
-  function rebuildHitNodes(mark, idx) {
-    for (let i = idx + 1; i < findHits.length; i++) {
-      const h = findHits[i]
-      if (h.node !== findHits[idx].node) continue
-      const markEnd = mark.nextSibling // mark 后的剩余文本
-      const offsetInMark = h.start - findHits[idx].start
-      if (offsetInMark < mark.firstChild.nodeValue.length) {
-        h.node = mark.firstChild
-      } else if (markEnd && markEnd.nodeType === Node.TEXT_NODE) {
-        h.node = markEnd
-        h.start -= findHits[idx].end
-        h.end -= findHits[idx].end
+    markText.parentNode.insertBefore(mk, markText)
+    mk.appendChild(markText)
+    // 重定位所有引用原节点的命中：以坐标区间判归属（splitText 不改原引用，
+    // textNode 此刻即前段；markText/tail 是切出来的新节点，必须显式改写 h.node）
+    for (const h of findHits) {
+      if (h.node !== textNode) continue
+      if (h.start >= hit.end) {
+        h.node = tail || textNode // 后段（无 tail 说明命中到文末，后段不存在）
+        h.start -= hit.end
+        h.end -= hit.end
+      } else if (h.start >= hit.start) {
+        h.node = markText // mark 内（含 hit 自己）
+        h.start -= hit.start
+        h.end -= hit.start
       }
+      // else：完全落在前段（命中互不重叠时不存在，防御保留）
     }
+    mk.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }
 
   function findStatus() {
