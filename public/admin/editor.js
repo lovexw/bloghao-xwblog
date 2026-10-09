@@ -223,6 +223,7 @@ const IC = {
   ul: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="6" r="1" fill="currentColor"/><circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="5" cy="18" r="1" fill="currentColor"/><path d="M10 6h10M10 12h10M10 18h10"/></svg>',
   ol: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><text x="3" y="8" font-size="7" fill="currentColor" stroke="none">1.</text><text x="3" y="18" font-size="7" fill="currentColor" stroke="none">2.</text><path d="M11 6h9M11 16h9"/></svg>',
   hr: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 12h16M8 6h8M8 18h8" opacity="0.5"/></svg>',
+  table: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10M15 10v10"/></svg>',
   link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.1"/><path d="M14 10a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.1"/></svg>',
   image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m5 19 5.5-5.5L14 17l3-3 4 4"/></svg>',
   video: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m10 9.5 5 2.5-5 2.5z" fill="currentColor" stroke="none"/></svg>',
@@ -470,6 +471,25 @@ function htmlToMd(html) {
         lines.push((t === 'ul' ? '- ' : `${i++}. `) + inline(li).trim())
       })
     } else if (t === 'hr') lines.push('---')
+    else if (t === 'table') {
+      // GFM 管道表格：首行当表头；单元格内的竖线与换行转义掉防破表
+      const trs = [...n.querySelectorAll('tr')]
+      if (!trs.length) return
+      const cells = (tr) =>
+        [...tr.querySelectorAll(':scope > th, :scope > td')].map((c) => {
+          const text = inline(c).trim().replace(/\|/g, '\\|').replace(/\n/g, ' ')
+          return text || ' '
+        })
+      const head = cells(trs[0])
+      const colCount = head.length
+      if (!colCount) return
+      lines.push('| ' + head.join(' | ') + ' |')
+      lines.push('| ' + Array.from({ length: colCount }, () => '---').join(' | ') + ' |')
+      for (const tr of trs.slice(1)) {
+        const row = cells(tr)
+        lines.push('| ' + Array.from({ length: colCount }, (_, i) => row[i] || ' ').join(' | ') + ' |')
+      }
+    }
     else if (t === 'img') lines.push(n.getAttribute('data-emoji') || `![](${n.getAttribute('src') || ''})`)
     else {
       const text = inline(n).trim()
@@ -573,6 +593,7 @@ export async function mountEditor(root, postId, opts = {}) {
     <span class="ed-sep"></span>
     <button class="ed-btn" data-act="link" title="链接">${IC.link}</button>
     <button class="ed-btn" data-act="image" title="图片（可粘贴 / 拖拽）">${IC.image}</button>
+    <button class="ed-btn" data-act="table" title="表格">${IC.table}</button>
     <button class="ed-btn" data-act="video" title="视频">${IC.video}</button>
     <button class="ed-btn" data-act="clear" title="清除格式">${IC.eraser}</button>
     <button class="ed-btn" data-act="emoji" title="微信表情">😊</button>
@@ -1109,6 +1130,8 @@ export async function mountEditor(root, postId, opts = {}) {
       await linkDialog()
     } else if (act === 'image') {
       await imageDialog()
+    } else if (act === 'table') {
+      insertTable()
     } else if (act === 'video') {
       pickVideoFile()
     } else if (act === 'clear') {
@@ -1417,6 +1440,167 @@ export async function mountEditor(root, postId, opts = {}) {
     return Math.abs(Number(dataW) - (nat * pct) / 100) <= 3 ? ' selected' : ''
   }
 
+  /* ---------- 表格：插入 3x3 骨架 + 光标进表格时浮现行列操作条 ----------
+   * 前台 .rich table 与编辑器 .ed-editor table 样式均已就位，这里只管编辑体验。
+   * 操作条挂在 .ed-rich-wrap 上随滚动容器定位，点外部/离开表格即收起。 */
+  function insertTable() {
+    const head = '<thead><tr>' + Array.from({ length: 3 }, (_, c) => `<th>标题${c + 1}</th>`).join('') + '</tr></thead>'
+    const body = '<tbody>' + Array.from({ length: 2 }, () => '<tr>' + '<td><br></td>'.repeat(3) + '</tr>').join('') + '</tbody>'
+    insertHTML(`<table>${head}${body}</table><p><br></p>`)
+    // 光标放进表头第一个单元格，直接开写
+    const th = editor.querySelector('table th')
+    if (th) {
+      const sel = window.getSelection()
+      const r = document.createRange()
+      r.selectNodeContents(th)
+      r.collapse(true)
+      sel.removeAllRanges()
+      sel.addRange(r)
+    }
+  }
+
+  function currentCell() {
+    const sel = window.getSelection()
+    if (!sel || !sel.anchorNode) return null
+    let n = sel.anchorNode.nodeType === Node.ELEMENT_NODE ? sel.anchorNode : sel.anchorNode.parentElement
+    while (n && n !== editor) {
+      if (n.tagName === 'TD' || n.tagName === 'TH') return n
+      n = n.parentElement
+    }
+    return null
+  }
+
+  function cloneRow(tr, refCell, after) {
+    const copy = tr.cloneNode(true)
+    copy.querySelectorAll('td,th').forEach((c) => (c.innerHTML = '<br>'))
+    if (after) tr.after(copy)
+    else tr.before(copy)
+    placeCaretIn(copy.querySelector('td,th'))
+    markDirty()
+  }
+
+  function placeCaretIn(cell) {
+    if (!cell) return
+    const sel = window.getSelection()
+    const r = document.createRange()
+    r.selectNodeContents(cell)
+    r.collapse(true)
+    sel.removeAllRanges()
+    sel.addRange(r)
+  }
+
+  function removeRow(tr) {
+    const table = tr.closest('table')
+    tr.remove()
+    // 表格空了连壳一起删，留个空段落接住光标
+    if (table && !table.querySelector('td,th')) {
+      table.replaceWith(document.createElement('p'))
+    }
+    markDirty()
+    updateCount()
+  }
+
+  function addCol(refCell, after) {
+    const table = refCell.closest('table')
+    const idx = refCell.cellIndex
+    table.querySelectorAll('tr').forEach((tr) => {
+      // 与该行既有单元格类型保持一致（表头行加 th，正文行加 td）
+      const type = tr.children[idx] && tr.children[idx].tagName === 'TH' ? 'th' : 'td'
+      const nc = document.createElement(type)
+      nc.innerHTML = '<br>'
+      const ref = tr.children[idx]
+      if (after) ref.after(nc)
+      else ref.before(nc)
+    })
+    markDirty()
+  }
+
+  function removeCol(refCell) {
+    const table = refCell.closest('table')
+    const idx = refCell.cellIndex
+    table.querySelectorAll('tr').forEach((tr) => {
+      if (tr.children[idx]) tr.children[idx].remove()
+    })
+    if (!table.querySelector('td,th')) {
+      table.replaceWith(document.createElement('p'))
+    }
+    markDirty()
+    updateCount()
+  }
+
+  let cellBar = null
+  function showCellBar(cell) {
+    if (!cellBar) {
+      cellBar = document.createElement('div')
+      cellBar.className = 'ed-cellbar'
+      cellBar.innerHTML = `
+        <button type="button" data-op="row-before" title="在上方插入行">↑行</button>
+        <button type="button" data-op="row-after" title="在下方插入行">↓行</button>
+        <button type="button" data-op="row-del" title="删除本行">删行</button>
+        <span class="ed-cellbar-sep"></span>
+        <button type="button" data-op="col-before" title="在左侧插入列">←列</button>
+        <button type="button" data-op="col-after" title="在右侧插入列">→列</button>
+        <button type="button" data-op="col-del" title="删除本列">删列</button>
+        <span class="ed-cellbar-sep"></span>
+        <button type="button" data-op="head" title="切换首行为表头/正文">表头</button>
+        <button type="button" data-op="table-del" title="删除整个表格">删表</button>`
+      cellBar.addEventListener('mousedown', (e) => e.preventDefault()) // 不抢光标
+      cellBar.addEventListener('click', (e) => {
+        const op = e.target.closest('[data-op]')?.dataset.op
+        const cell = currentCell()
+        if (!op || !cell) return
+        const tr = cell.closest('tr')
+        if (op === 'row-before') cloneRow(tr, cell, false)
+        else if (op === 'row-after') cloneRow(tr, cell, true)
+        else if (op === 'row-del') removeRow(tr)
+        else if (op === 'col-before') addCol(cell, false)
+        else if (op === 'col-after') addCol(cell, true)
+        else if (op === 'col-del') removeCol(cell)
+        else if (op === 'head') {
+          // 首行 th ↔ td 互换
+          const first = cell.closest('table').querySelector('tr')
+          first.querySelectorAll('th,td').forEach((c) => {
+            const nc = document.createElement(c.tagName === 'TH' ? 'TD' : 'TH')
+            while (c.firstChild) nc.appendChild(c.firstChild)
+            for (const attr of [...c.attributes]) nc.setAttribute(attr.name, attr.value)
+            c.replaceWith(nc)
+          })
+          markDirty()
+        } else if (op === 'table-del') {
+          cell.closest('table').replaceWith(document.createElement('p'))
+          hideCellBar()
+          markDirty()
+          updateCount()
+        }
+        refreshToolbarState()
+      })
+      root.querySelector('.ed-rich-wrap').appendChild(cellBar)
+    }
+    // 定位到当前单元格上方（相对滚动容器）
+    const wrap = root.querySelector('.ed-rich-wrap')
+    const cr = cell.getBoundingClientRect()
+    const wr = wrap.getBoundingClientRect()
+    cellBar.style.top = cr.top - wr.top + wrap.scrollTop - 40 + 'px'
+    cellBar.style.left = Math.max(0, cr.left - wr.left) + 'px'
+    cellBar.style.display = 'flex'
+  }
+
+  function hideCellBar() {
+    if (cellBar) cellBar.style.display = 'none'
+  }
+
+  // 光标进表格显示操作条，出表格收起；点击单元格也刷新定位
+  editor.addEventListener('keyup', () => {
+    const cell = currentCell()
+    if (cell && !mdMode) showCellBar(cell)
+    else hideCellBar()
+  })
+  editor.addEventListener('mouseup', () => {
+    const cell = currentCell()
+    if (cell && !mdMode) showCellBar(cell)
+    else hideCellBar()
+  })
+
   /* ---------- 编辑区事件 ---------- */
   editor.addEventListener('input', () => {
     markDirty()
@@ -1724,6 +1908,7 @@ export async function mountEditor(root, postId, opts = {}) {
 
   /* ---------- Markdown 模式 ---------- */
   async function enterMdMode() {
+    hideCellBar() // 表格操作条随富文本消失（表格已变纯文本）
     mdArea.value = htmlToMd(editor.innerHTML)
     root.querySelector('.editor-page').classList.add('ed-mode-md')
     document.getElementById('ed-md-toggle').classList.add('is-active')

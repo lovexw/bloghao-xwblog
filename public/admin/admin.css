@@ -413,7 +413,17 @@ input, textarea, select { font: inherit; color: inherit; }
 .ed-editor hr { border: none; width: 64px; margin: 26px auto; border-top: 2px solid #ddd2bd; }
 .ed-editor a { color: #576b95; }
 .ed-editor table { border-collapse: collapse; margin-bottom: 18px; }
-.ed-editor th, .ed-editor td { border: 1px solid #e5e5e5; padding: 6px 10px; }
+.ed-editor th, .ed-editor td { border: 1px solid #e5e5e5; padding: 6px 10px; min-width: 60px; }
+.ed-editor th { background: #faf9f7; font-weight: 600; }
+/* 表格行列操作条：光标进表格浮现 */
+.ed-cellbar {
+  position: absolute; z-index: 30; display: none; gap: 2px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+  padding: 4px; box-shadow: 0 4px 16px rgba(0,0,0,0.1); font-size: 12px;
+}
+.ed-cellbar button { border: none; background: none; padding: 4px 7px; border-radius: 5px; color: var(--ink); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.ed-cellbar button:hover { background: rgba(178, 58, 41, 0.09); color: var(--accent); }
+.ed-cellbar-sep { width: 1px; height: 16px; background: var(--line); margin: 0 3px; align-self: center; }
 .ed-editor[data-drag="1"] { outline: 2px dashed rgba(178, 58, 41, 0.4); outline-offset: 6px; border-radius: 4px; }
 
 .ed-md {
