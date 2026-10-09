@@ -665,6 +665,7 @@ export async function mountEditor(root, postId, opts = {}) {
     <span id="ed-count">0 字</span>
     <span id="ed-read">约 1 分钟</span>
     <span class="spacer"></span>
+    <button class="ed-link" id="ed-focus-toggle" title="专注模式：隐藏界面只留写作区，Esc 退出">专注</button>
     <button class="ed-link" id="ed-md-toggle" title="Markdown 与富文本互转">Markdown</button>
   </div>
 </div>`
@@ -1503,6 +1504,7 @@ export async function mountEditor(root, postId, opts = {}) {
   }
   cleanupEditor = () => {
     document.removeEventListener('selectionchange', onSelectionChange)
+    document.removeEventListener('keydown', onFocusKeydown)
     window.removeEventListener('beforeunload', beforeUnload)
     // 挂起的自动保存一并取消：路由已切走，定时器再触发只会打在已卸载的 DOM 上
     clearTimeout(saveTimer)
@@ -1534,6 +1536,26 @@ export async function mountEditor(root, postId, opts = {}) {
     }
   })
   mdArea.addEventListener('input', markDirty)
+
+  /* ---------- 专注模式：隐藏顶栏/工具栏/抽屉/底栏，只留写作纸面 ----------
+   * 开关记住用户偏好；Esc 退出（弹窗的 Esc 关闭在 modal 层已 stopPropagation 不了——
+   * modal 先注册在 document 上，这里 keydown 也挂 document 但要避开弹窗打开时误退） */
+  const focusToggle = document.getElementById('ed-focus-toggle')
+  const applyFocus = (on, remember) => {
+    root.querySelector('.editor-page').classList.toggle('ed-focus', on)
+    focusToggle.classList.toggle('is-active', on)
+    focusToggle.textContent = on ? '退出专注' : '专注'
+    if (remember) { try { localStorage.setItem('ed-focus', on ? 'on' : 'off') } catch { /* 不记住偏好 */ } }
+  }
+  // 有弹窗打开时不响应 Esc（弹窗自己会关闭并 stopPropagation）
+  const onFocusKeydown = (e) => {
+    if (e.key !== 'Escape' || !root.querySelector('.editor-page.ed-focus')) return
+    if (document.querySelector('.modal-mask')) return
+    applyFocus(false, true)
+  }
+  focusToggle.addEventListener('click', () => applyFocus(!root.querySelector('.editor-page.ed-focus'), true))
+  document.addEventListener('keydown', onFocusKeydown)
+  applyFocus(window.matchMedia('(min-width: 701px)').matches && (() => { try { return localStorage.getItem('ed-focus') === 'on' } catch { return false } })(), false)
 
   /* ---------- 顶栏按钮 ---------- */
   document.getElementById('ed-save').addEventListener('click', () => save(false).catch(() => {}))

@@ -418,6 +418,19 @@ input, textarea, select { font: inherit; color: inherit; }
 .ed-link { color: var(--sub); transition: color 0.15s ease; }
 .ed-link:hover, .ed-link.is-active { color: var(--accent); }
 
+/* 专注模式：隐藏除写作纸面外的一切；纸面加宽居中，光标呼吸提示还在写作 */
+.editor-page.ed-focus .ed-topbar,
+.editor-page.ed-focus .ed-toolbar,
+.editor-page.ed-focus .ed-drawer,
+.editor-page.ed-focus .ed-bottombar { display: none; }
+.editor-page.ed-focus { background: var(--card); }
+.editor-page.ed-focus .ed-center { display: flex; justify-content: center; }
+.editor-page.ed-focus .ed-paper { max-width: 720px; width: 100%; padding-top: 12vh; }
+@media (max-width: 700px) {
+  /* 手机上地址栏/底栏占位变化大，直接铺满即可 */
+  .editor-page.ed-focus .ed-paper { padding-top: 24px; }
+}
+
 /* 元信息抽屉 */
 .ed-drawer {
   flex: 0 0 300px; width: 300px;
