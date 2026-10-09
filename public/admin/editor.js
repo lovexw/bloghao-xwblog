@@ -1183,13 +1183,23 @@ export async function mountEditor(root, postId, opts = {}) {
     const m = modal(
       `<div class="modal-head"><span>插入图片</span><button class="modal-close" data-close>×</button></div>
       <div class="modal-body upload-dialog">
-        <div class="tab-line"><button class="is-active" data-tab="up">上传到图床</button><button data-tab="url">图片地址</button></div>
+        <div class="tab-line"><button class="is-active" data-tab="up">上传到图床</button><button data-tab="url">图片地址</button><button data-tab="lib">媒体库</button></div>
         <div data-pane="up">
           <div class="upload-drop" id="up-drop">点击选择图片，或拖拽到此处<br><span style="font-size:12px;">支持 JPG / PNG / WebP / GIF，≤ 25MB</span></div>
           <div class="upload-progress" id="up-progress"><i></i></div>
         </div>
         <div data-pane="url" style="display:none;">
           <div class="auth-field"><label>图片 URL</label><input class="input" id="img-url" placeholder="https://… 或 /images/…"></div>
+        </div>
+        <div data-pane="lib" style="display:none;">
+          <div class="media-picker" id="lib-grid"><div style="color:var(--sub);font-size:13px;padding:20px;text-align:center;">加载中…</div></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;">
+            <span id="lib-page" style="font-size:12px;color:var(--sub);"></span>
+            <span style="display:flex;gap:8px;">
+              <button class="btn btn-sm" id="lib-prev" disabled>上一页</button>
+              <button class="btn btn-sm" id="lib-next" disabled>下一页</button>
+            </span>
+          </div>
         </div>
       </div>
       <div class="modal-foot"><button class="btn" data-close>取消</button><button class="btn btn-primary" id="img-ok">插入</button></div>`
@@ -1249,12 +1259,74 @@ export async function mountEditor(root, postId, opts = {}) {
       })
     )
     m.mask.querySelector('#img-ok').addEventListener('click', () => {
+      // 媒体库 tab 有选中项时优先插入选中项；否则看 URL 输入框
+      const picked = m.mask.querySelector('.media-item.is-picked')
+      if (picked) {
+        const url = picked.dataset.url
+        m.close()
+        restoreSelection()
+        probeWidth(url).then((w) => {
+          insertHTML(`<img src="${esc(url)}"${w ? ` data-w="${w}"` : ''} alt="${esc(picked.dataset.name || '')}"><p><br></p>`)
+        })
+        return
+      }
       const url = m.mask.querySelector('#img-url').value.trim()
       if (!url) return
       m.close()
       restoreSelection()
       insertHTML(`<img src="${esc(url)}" alt=""><p><br></p>`)
     })
+
+    /* 媒体库 picker：复用 /admin/uploads 分页接口；单选高亮，再点一次取消；
+     * 插入时 probeWidth 探测原始宽度补 data-w，与上传插入同口径 */
+    const grid = m.mask.querySelector('#lib-grid')
+    const pageEl = m.mask.querySelector('#lib-page')
+    const prevBtn = m.mask.querySelector('#lib-prev')
+    const nextBtn = m.mask.querySelector('#lib-next')
+    let libPage = 1
+    const loadLib = async () => {
+      grid.innerHTML = '<div style="color:var(--sub);font-size:13px;padding:20px;text-align:center;">加载中…</div>'
+      try {
+        const d = await api(`/admin/uploads?page=${libPage}`)
+        const totalPages = Math.max(1, Math.ceil(d.total / 24))
+        pageEl.textContent = d.total ? `第 ${d.page} / ${totalPages} 页 · 共 ${d.total} 个文件` : ''
+        prevBtn.disabled = d.page <= 1
+        nextBtn.disabled = d.page >= totalPages
+        if (!d.items.length) {
+          grid.innerHTML = '<div style="color:var(--sub);font-size:13px;padding:20px;text-align:center;">媒体库还是空的，先「上传到图床」</div>'
+          return
+        }
+        grid.innerHTML = d.items
+          .map(
+            (u) => `<div class="media-item" data-url="${esc(u.url)}" data-name="${esc(u.name || '')}" data-mime="${esc(u.mime)}">
+            <div class="media-thumb">${String(u.mime).startsWith('video/') ? `<video src="${esc(u.url)}" muted></video>` : `<div style="background-image:url('${esc(u.url)}');"></div>`}</div>
+            <div class="media-name" title="${esc(u.name || '')}">${esc(u.name || u.key || '')}</div>
+          </div>`
+          )
+          .join('')
+      } catch (e) {
+        grid.innerHTML = `<div style="color:var(--sub);font-size:13px;padding:20px;text-align:center;">${esc(e.message)}</div>`
+      }
+    }
+    grid.addEventListener('click', (e) => {
+      const item = e.target.closest('.media-item')
+      if (!item) return
+      // 单选语义：再点同一项取消选中（回到「用 URL 输入框」的路径）
+      const was = item.classList.contains('is-picked')
+      grid.querySelectorAll('.media-item.is-picked').forEach((x) => x.classList.remove('is-picked'))
+      if (!was) item.classList.add('is-picked')
+    })
+    prevBtn.addEventListener('click', () => {
+      if (libPage > 1) {
+        libPage--
+        loadLib()
+      }
+    })
+    nextBtn.addEventListener('click', () => {
+      libPage++
+      loadLib()
+    })
+    loadLib()
   }
 
   function pickVideoFile() {
