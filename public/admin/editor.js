@@ -1395,6 +1395,12 @@ export async function mountEditor(root, postId, opts = {}) {
 
   function imagePropsDialog(img) {
     const curW = img.getAttribute('data-w') || ''
+    // data-w（原始像素）→ 档位命中率：±3px 内算命中，回显选中态
+    const percentHit = (dataW, pct) => {
+      const nat = img.naturalWidth
+      if (!nat) return ''
+      return Math.abs(Number(dataW) - (nat * pct) / 100) <= 3 ? ' selected' : ''
+    }
     const m = modal(
       `<div class="modal-head"><span>图片设置</span><button class="modal-close" data-close>×</button></div>
       <div class="modal-body">
@@ -1431,13 +1437,6 @@ export async function mountEditor(root, postId, opts = {}) {
       markDirty()
       updateCount()
     })
-  }
-
-  // data-w（原始像素）→ 档位命中率：±3px 内算命中，回显选中态
-  function percentHit(dataW, pct) {
-    const nat = img.naturalWidth
-    if (!nat) return ''
-    return Math.abs(Number(dataW) - (nat * pct) / 100) <= 3 ? ' selected' : ''
   }
 
   /* ---------- 表格：插入 3x3 骨架 + 光标进表格时浮现行列操作条 ----------
