@@ -874,6 +874,8 @@ export async function mountEditor(root, postId, opts = {}) {
 
   function collect(extra = {}) {
     const catVal = document.getElementById('ed-category').value
+    // 查找高亮不进存库内容：先还原成原始 DOM 再序列化
+    if (!mdMode) clearFindMarks()
     // 访问密码只在「有话可说」时才带上 password 键（服务端缺键即保留）：
     // 勾选且填了 = 设置/更换；取消勾选且原来加密 = 空串解除；
     // 勾选但没填 = 保持现状（新建文另由 publish() 拦下要求必填），自动保存永远不会误清密码
