@@ -680,6 +680,43 @@ export async function mountEditor(root, postId, opts = {}) {
 
   editor.innerHTML = post.content || ''
 
+  /* ---------- 本地备份恢复检查：备份比服务端内容新且不同 → 弹窗让用户二选一 ----------
+   * 只在有差异时问（老文章正常重进不该被打扰）；恢复支持 md 备份（先进 Markdown 模式再回填） */
+  checkLocalDraft()
+  function checkLocalDraft() {
+    let bak = null
+    try { bak = JSON.parse(localStorage.getItem(draftKey()) || 'null') } catch { /* 脏数据当不存在 */ }
+    if (!bak || typeof bak.c !== 'string') return
+    const serverHtml = post.content || ''
+    const same = bak.m === 'md' ? false : bak.c === serverHtml
+    if (same || !bak.c.trim()) return
+    const when = bak.at ? new Date(bak.at).toLocaleString('zh-CN') : '未知时间'
+    const m = modal(
+      `<div class="modal-head"><span>发现未同步的本地备份</span><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body"><div style="font-size:14px;line-height:1.8;">
+        上次编辑（${esc(when)}）的内容可能没保存到服务器——停在本页时断网、崩溃或误关都会造成这种情况。
+        ${bak.m === 'md' ? '备份是 Markdown 模式的纯文本。' : ''}要恢复吗？</div></div>
+      <div class="modal-foot"><button class="btn" id="ld-drop">丢弃备份</button><button class="btn btn-primary" id="ld-restore">恢复备份</button></div>`
+    )
+    m.mask.querySelector('#ld-restore').addEventListener('click', async () => {
+      m.close()
+      if (bak.m === 'md') {
+        await enterMdMode()
+        mdArea.value = bak.c
+      } else {
+        editor.innerHTML = bak.c
+      }
+      markDirty() // 立即触发自动保存，把恢复的内容推上服务端
+      updateCount()
+      toast('本地备份已恢复，正在自动保存…')
+    })
+    m.mask.querySelector('#ld-drop').addEventListener('click', () => {
+      m.close()
+      clearLocalDraft()
+      toast('已丢弃本地备份')
+    })
+  }
+
   /* ---------- 选择保存 / 恢复 ---------- */
   function saveSelection() {
     const sel = window.getSelection()
@@ -794,10 +831,40 @@ export async function mountEditor(root, postId, opts = {}) {
     document.getElementById('ed-read').textContent = `约 ${Math.max(1, Math.ceil(n / 400))} 分钟`
   }
 
+  /* ---------- 本地草稿兜底（localStorage） ----------
+   * 服务端自动保存（1.5s）是主线，这里是最后防线：保存成功前内容只活在内存里，
+   * 弱网断线 / 崩溃 / 误关页面就全丢。键按文章 id（新文章 ed-draft-new），
+   * 写入节流 2s + 卸载前同步补写；保存成功即清。隐私加固浏览器访问 localStorage
+   * 即抛 SecurityError：存取全部吞异常，兜底失效不影响写作。 */
+  const draftKey = () => 'ed-draft-' + (post.id || 'new')
+  let draftTimer = null
+  function writeLocalDraft() {
+    clearTimeout(draftTimer)
+    try {
+      const content = mdMode ? mdArea.value : editor.innerHTML
+      if (content.length > 2 * 1024 * 1024) return // 超配额口径，静默跳过（服务端自动保存仍在）
+      localStorage.setItem(
+        draftKey(),
+        JSON.stringify({ t: titleEl.value, c: content, m: mdMode ? 'md' : 'rich', at: Date.now() })
+      )
+    } catch { /* 配额满 / 隐私模式等，备份失败不阻塞写作 */ }
+  }
+  function clearLocalDraft() {
+    try { localStorage.removeItem(draftKey()) } catch { /* ignore */ }
+    // 新文章落库后换了键，旧 'new' 键一起清掉（此刻服务端草稿已接住内容）
+    if (post.id) { try { localStorage.removeItem('ed-draft-new') } catch { /* ignore */ } }
+  }
+  // 写入节流：连续输入不刷屏 localStorage（写入是同步的，会卡输入）
+  function scheduleLocalDraft() {
+    clearTimeout(draftTimer)
+    draftTimer = setTimeout(writeLocalDraft, 2000)
+  }
+
   function markDirty() {
     dirty = true
     dirtySeq++
     saveState.textContent = '有未保存更改'
+    scheduleLocalDraft()
     clearTimeout(saveTimer)
     // catch 兜底：md 模式转换失败等异常不能变成 unhandled rejection
     saveTimer = setTimeout(() => save(false).catch(() => {}), 1500)
@@ -862,6 +929,7 @@ export async function mountEditor(root, postId, opts = {}) {
         if (dirtySeq === seqAtSave) {
           dirty = false
           clearTimeout(saveTimer)
+          clearLocalDraft()
           const t = new Date()
           saveState.textContent = `已保存 ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`
         } else {
@@ -1550,6 +1618,9 @@ export async function mountEditor(root, postId, opts = {}) {
   // 离开提醒（关闭标签页/刷新时浏览器兜底确认；SPA 内部路由由 flushEditorSave 兜底）
   const beforeUnload = (e) => {
     if (dirty) {
+      // 同步补写最后一份本地备份：beforeunload 里异步操作不可靠，setItem 是同步 API
+      clearTimeout(draftTimer)
+      writeLocalDraft()
       e.preventDefault()
       e.returnValue = ''
     }
@@ -1558,14 +1629,19 @@ export async function mountEditor(root, postId, opts = {}) {
 
   // 注册全局监听器的清理函数：下次挂载前先拆掉上一次的，防止随挂载次数累积
   flushSave = async () => {
-    if (dirty) await save(false)
+    if (dirty) {
+      await save(false)
+    } else {
+      clearLocalDraft() // 干净退出（无未保存内容）也顺手清掉本地备份
+    }
   }
   cleanupEditor = () => {
     document.removeEventListener('selectionchange', onSelectionChange)
     document.removeEventListener('keydown', onFocusKeydown)
     window.removeEventListener('beforeunload', beforeUnload)
-    // 挂起的自动保存一并取消：路由已切走，定时器再触发只会打在已卸载的 DOM 上
+    // 挂起的自动保存与本地备份定时器一并取消：路由已切走，定时器再触发只会打在已卸载的 DOM 上
     clearTimeout(saveTimer)
+    clearTimeout(draftTimer)
     flushSave = null
   }
 
