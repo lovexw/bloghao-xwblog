@@ -40,6 +40,15 @@ export interface CommentCreatedPayload {
   pending: boolean
 }
 
+export interface WeiboPublishedPayload {
+  id: number
+  content: string
+  /** 站内图片地址数组（/images/… 或外链），原样入库的 images 列 */
+  images: string[]
+  /** 触发来源：后台（含前台卡片编辑器）/ 开放 API / Telegram 机器人 / 草稿转发布 */
+  via: 'admin' | 'external' | 'telegram' | 'draft'
+}
+
 export interface ServerPlugin {
   id: string
   title: string
@@ -48,6 +57,8 @@ export interface ServerPlugin {
   author: string
   /** 文章发布（草稿/定时 → 已发布的跃迁，重复保存已发布文章不触发） */
   onPostPublished?: (p: PostPublishedPayload, ctx: HookContext) => Promise<void> | void
+  /** 微博发布（新建即发 / 草稿转发布，编辑已发布微博不触发） */
+  onWeiboPublished?: (p: WeiboPublishedPayload, ctx: HookContext) => Promise<void> | void
   /** 访客发表评论 / 留言（作者自己的回复不触发，避免同步场景里自我刷屏） */
   onCommentCreated?: (p: CommentCreatedPayload, ctx: HookContext) => Promise<void> | void
   /** 页脚注入：返回的 HTML 拼在每页 </body> 前（同步，不能访问 env） */
@@ -112,8 +123,120 @@ const footerHtmlPlugin: ServerPlugin = {
   },
 }
 
+/* ---------------- 微博同步 Buffer（X 等） ----------------
+ * Buffer 是第三方社交排程平台：免费档 3 渠道 + 每渠道 10 条队列并含 API 访问，
+ * 它替用户承担了 X API 的按量计费（2025 起 X API 无免费档，纯文字 $0.015/条、带链接 $0.200/条），
+ * 博主侧零成本拿到「发微博 → 自动同步 X」的链路。注册 https://buffer.com 连上 X 账号后，
+ * 在 publish.buffer.com/settings/api 生成 API Key。
+ *
+ * 接口为 GraphQL（https://api.buffer.com，Bearer 鉴权）：createPost 的 mode=shareNow 立即发布，
+ * assets 走 {image:{url}} 公链直传（站内 /images/ 配上 siteUrl 即可，无需 X 的媒体上传接口）。
+ * X 免费账号单帖 280 字符（URL 记 23、emoji 记 2），超出 Buffer 会报错——这里按 270 硬截断保发布。
+ */
+
+const BUFFER_API = 'https://api.buffer.com'
+
+/** X 免费档 280 字符（URL 计 23、emoji 计 2 的加权口径），留 10 字符余量 */
+const BUFFER_X_CHARS = 270
+
+/** Buffer createPost（variables 传参防拼接转义）；返回 MutationError 的 message 或 null=成功/无响应 */
+async function bufferCreatePost(
+  token: string,
+  input: Record<string, unknown>
+): Promise<string | null> {
+  try {
+    const res = await fetch(BUFFER_API, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        query:
+          'mutation CreatePost($input: CreatePostInput!) { createPost(input: $input) { ... on PostActionSuccess { post { id } } ... on MutationError { message } } }',
+        variables: { input },
+      }),
+      signal: AbortSignal.timeout(15_000),
+    })
+    const d = (await res.json().catch(() => null)) as { data?: { createPost?: { message?: string } } } | null
+    // GraphQL 恒 200，失败在 payload 里（如字符数超限）；网络/JSON 异常按成功处理不重试
+    return d?.data?.createPost?.message ?? null
+  } catch {
+    return null
+  }
+}
+
+/** 微博文本 → Buffer/X 帖文：话题 #xx# 改 #xx（X 话题语法，长度口径与站内话题提取同限 1-24 字），
+ *  超 270 码点截断（emoji 截半个也不破头） */
+export function bufferPostText(content: string): string {
+  const t = content.replace(/#([^#\n]{1,24})#/g, '#$1').trim()
+  if ([...t].length <= BUFFER_X_CHARS) return t
+  return [...t].slice(0, BUFFER_X_CHARS).join('')
+}
+
+const bufferSync: ServerPlugin = {
+  id: 'buffer-sync',
+  title: '微博同步 Buffer（X 等）',
+  description:
+    '微博发布时自动同步到 Buffer 排程的社交渠道（X / Bluesky / Threads 等），免费档 3 渠道够用。API Key 在 buffer.com 的 publish.buffer.com/settings/api 生成，渠道 ID 在「设置 → 服务端插件」一键拉取；X 免费档 280 字符，超出自动截断。',
+  version: '1.0.0',
+  author: '官方',
+  async onWeiboPublished(p, ctx) {
+    const token = (ctx.settings.bufferAccessToken || '').trim()
+    const channelId = (ctx.settings.bufferChannelId || '').trim()
+    if (!token || !channelId) return
+    const assets = p.images
+      .filter((s) => /^https?:\/\//i.test(s) || (ctx.base && s.startsWith('/images/')))
+      .slice(0, 4)
+      .map((s) => ({ image: { url: s.startsWith('/images/') ? ctx.base + s : s } }))
+    const err = await bufferCreatePost(token, {
+      channelId,
+      text: bufferPostText(p.content),
+      schedulingType: 'automatic',
+      mode: 'shareNow',
+      ...(assets.length ? { assets } : {}),
+    })
+    if (err) console.error(`[buffer-sync] createPost: ${err}`)
+  },
+}
+
+/** 后台「拉取渠道」用：channels 查询需 organizationId，先经 account 查询取第一个组织 */
+export async function listBufferChannels(
+  token: string
+): Promise<{ ok: true; channels: { id: string; service: string; displayName: string }[] } | { ok: false; error: string }> {
+  try {
+    const headers = { 'content-type': 'application/json', authorization: `Bearer ${token}` }
+    const q = JSON.stringify({
+      query: 'query GetChannels($org: OrganizationId!) { channels(input: { organizationId: $org }) { id service displayName } }',
+    })
+    const acc = await fetch(BUFFER_API, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ query: 'query GetOrg { account { organizations { id name } } }' }),
+      signal: AbortSignal.timeout(15_000),
+    })
+    const ad = (await acc.json().catch(() => null)) as {
+      data?: { account?: { organizations?: { id: string; name: string }[] } }
+      errors?: { message: string }[]
+    } | null
+    const org = ad?.data?.account?.organizations?.[0]
+    if (!org) return { ok: false, error: ad?.errors?.[0]?.message || 'API Key 无效或账号下没有组织' }
+    const res = await fetch(BUFFER_API, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ...JSON.parse(q), variables: { org: org.id } }),
+      signal: AbortSignal.timeout(15_000),
+    })
+    const cd = (await res.json().catch(() => null)) as {
+      data?: { channels?: { id: string; service: string; displayName: string }[] }
+      errors?: { message: string }[]
+    } | null
+    if (!cd?.data?.channels) return { ok: false, error: cd?.errors?.[0]?.message || '拉取渠道失败' }
+    return { ok: true, channels: cd.data.channels }
+  } catch {
+    return { ok: false, error: 'Buffer 无响应，稍后再试' }
+  }
+}
+
 /** 注册表：第三方服务端插件在此登记（顺序即后台展示顺序） */
-export const SERVER_PLUGINS: ServerPlugin[] = [tgChannel, commentWebhook, footerHtmlPlugin]
+export const SERVER_PLUGINS: ServerPlugin[] = [tgChannel, commentWebhook, bufferSync, footerHtmlPlugin]
 
 /** 后台「插件」页列表用：只出元数据，不带处理函数 */
 export function listServerPlugins(): { id: string; title: string; description: string; version: string; author: string }[] {
@@ -170,6 +293,11 @@ async function fireHook<P>(
 /** 发布事件广播：后台发布与定时到点两条路都会调；任何失败都不影响发布本身 */
 export function firePostPublished(env: Env, p: PostPublishedPayload): Promise<void> {
   return fireHook(env, (plugin) => plugin.onPostPublished, p)
+}
+
+/** 微博发布事件广播：后台、开放 API、TG 机器人与草稿转发布四条路都会调；任何失败都不影响发布本身 */
+export function fireWeiboPublished(env: Env, p: WeiboPublishedPayload): Promise<void> {
+  return fireHook(env, (plugin) => plugin.onWeiboPublished, p)
 }
 
 /** 评论事件广播：访客评论/留言三条路（文章、微博、留言板）都会调；任何失败都不影响留言本身 */

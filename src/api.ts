@@ -64,7 +64,7 @@ import { awardCommentPoints, awardPoints, normalizeMinTier } from './points'
 import { collectRoutes } from './collect'
 import { exportRoutes } from './export'
 import { adminExternalRoutes, externalRoutes, notifyAdminComment, telegramRoutes } from './external'
-import { fireCommentCreated, firePostPublished, listServerPlugins } from './hooks'
+import { fireCommentCreated, firePostPublished, fireWeiboPublished, listBufferChannels, listServerPlugins } from './hooks'
 import { SITE_MODE_VALUES, siteBase, toHomePost, type SiteMode } from './render'
 import { sanitizeHtml } from './sanitize'
 import { cleanupUnreferenced, backfillHashes, mergeDuplicate, runAudit } from './audit'
@@ -768,6 +768,10 @@ api.post('/admin/weibo', async (c) => {
     .bind(p.content, JSON.stringify(p.images), JSON.stringify(p.topics), p.status, p.status === 'published' ? now : null, now, now)
     .run()
   const row = await getWeiboById(c.env.DB, Number(res.meta.last_row_id))
+  // 广播微博发布事件（服务端插件钩子，见 src/hooks.ts）：新建即发布才算
+  if (p.status === 'published' && row) {
+    c.executionCtx.waitUntil(fireWeiboPublished(c.env, { id: row.id, content: row.content, images: weiboImageList(row), via: 'admin' }))
+  }
   return c.json({ ok: true, weibo: row ? { ...row, imageList: weiboImageList(row), topicList: weiboTopicList(row) } : null })
 })
 
@@ -788,6 +792,10 @@ api.put('/admin/weibo/:id', async (c) => {
     .bind(p.content, JSON.stringify(p.images), JSON.stringify(p.topics), p.status, pinned, publishedAt, Date.now(), id)
     .run()
   const row = await getWeiboById(c.env.DB, id)
+  // 广播微博发布事件（服务端插件钩子，见 src/hooks.ts）：仅草稿 → 发布的跃迁，编辑已发布微博不触发
+  if (p.status === 'published' && row && existing.status !== 'published') {
+    c.executionCtx.waitUntil(fireWeiboPublished(c.env, { id: row.id, content: row.content, images: weiboImageList(row), via: 'draft' }))
+  }
   return c.json({ ok: true, weibo: row ? { ...row, imageList: weiboImageList(row), topicList: weiboTopicList(row) } : null })
 })
 
@@ -822,6 +830,19 @@ api.delete('/admin/weibo/:id', async (c) => {
   // 软删进回收站（src/trash.ts）：评论保留，恢复时一并跟回；彻底删除才级联清掉
   await c.env.DB.prepare('UPDATE weibo SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').bind(Date.now(), id).run()
   return c.json({ ok: true })
+})
+
+/** 服务端插件「微博同步 Buffer」的渠道拉取：设置页一键填充渠道 ID（src/hooks.ts listBufferChannels） */
+api.post('/admin/buffer/channels', async (c) => {
+  const body = await c.req.json<{ token?: string }>().catch(() => null)
+  // token 缺省时用已保存的（打码占位符提交 = 保持原值，与 SECRET_SETTINGS 同口径）
+  const saved = (await getSettings(c.env.DB)).bufferAccessToken || ''
+  const token = (body?.token || '').trim()
+  const using = token || (saved && saved !== SECRET_MASK ? saved : '')
+  if (!using) return jsonError('先填写 Buffer API Key，再拉取渠道')
+  const r = await listBufferChannels(using)
+  if (!r.ok) return jsonError(r.error, 502)
+  return c.json({ ok: true, channels: r.channels })
 })
 
 /* ---------------- 友情链接管理 ---------------- */
@@ -1492,7 +1513,7 @@ api.delete('/admin/comments/:id', async (c) => {
 /* ---------------- 设置 ---------------- */
 // 敏感项只写不读：GET 一律打码返回（明文只在生成 Token / 保存后不再回显）；
 // PUT 收到打码占位符视为「保持原值」，这样前端整表提交不会把占位符写进库
-const SECRET_SETTINGS = ['externalToken', 'telegramBotToken', 'telegramWebhookSecret']
+const SECRET_SETTINGS = ['externalToken', 'telegramBotToken', 'telegramWebhookSecret', 'bufferAccessToken']
 const SECRET_MASK = '••••••••'
 // 布尔开关统一收口：'1'/'true' → '1'，其余一律 '0'（新增布尔键加进表即可，别再抄判断分支）
 const BOOL_SETTINGS = [

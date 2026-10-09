@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { fireCommentCreated, firePostPublished, listServerPlugins, renderFooterHtml } from '../src/hooks.ts'
+import { bufferPostText, fireCommentCreated, firePostPublished, fireWeiboPublished, listServerPlugins, renderFooterHtml } from '../src/hooks.ts'
 import { DEFAULT_SETTINGS } from '../src/db.ts'
 import type { Env, SettingsMap } from '../src/types.ts'
 
@@ -74,6 +74,75 @@ test('发布同步 TG 频道：token+频道ID 齐才发，消息带标题与链�
   } finally {
     cap.restore()
   }
+})
+
+test('微博同步 Buffer：key+渠道齐才发，mode=shareNow，站内图拼 siteUrl，可被停用', async () => {
+  const cap = captureFetch()
+  try {
+    const env = fakeEnv([
+      { key: 'bufferAccessToken', value: 'bf-tok' },
+      { key: 'bufferChannelId', value: 'chan1' },
+      { key: 'siteUrl', value: 'https://blog.example.com/' },
+    ])
+    await fireWeiboPublished(env, { id: 7, content: '随手记 #随拍#', images: ['/images/a.jpg', 'https://cdn.example.com/b.png'], via: 'admin' })
+    assert.equal(cap.calls.length, 1)
+    assert.equal(cap.calls[0].url, 'https://api.buffer.com')
+    assert.equal(cap.calls[0].init?.headers && (cap.calls[0].init.headers as Record<string, string>)['authorization'], 'Bearer bf-tok')
+    const body = JSON.parse(String(cap.calls[0].init?.body))
+    const input = body.variables.input
+    assert.equal(input.channelId, 'chan1')
+    assert.equal(input.mode, 'shareNow')
+    assert.equal(input.schedulingType, 'automatic')
+    assert.equal(input.text, '随手记 #随拍')
+    assert.deepEqual(input.assets, [
+      { image: { url: 'https://blog.example.com/images/a.jpg' } },
+      { image: { url: 'https://cdn.example.com/b.png' } },
+    ])
+    // key 或渠道未填：静默不发
+    await fireWeiboPublished(fakeEnv([{ key: 'bufferAccessToken', value: 'bf-tok' }]), { id: 1, content: 'x', images: [], via: 'admin' })
+    // 插件被停用：不发
+    await fireWeiboPublished(
+      fakeEnv([
+        { key: 'bufferAccessToken', value: 'bf-tok' },
+        { key: 'bufferChannelId', value: 'chan1' },
+        { key: 'serverPluginsDisabled', value: 'buffer-sync' },
+      ]),
+      { id: 1, content: 'x', images: [], via: 'admin' }
+    )
+    assert.equal(cap.calls.length, 1)
+  } finally {
+    cap.restore()
+  }
+})
+
+test('微博同步 Buffer：MutationError 不抛出（fire 正常 resolve），无图不带 assets', async () => {
+  const orig = globalThis.fetch
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ data: { createPost: { message: 'LinkedIn posts cannot exceed 3000 characters.' } } }), {
+      status: 200,
+    })) as typeof fetch
+  try {
+    const env = fakeEnv([
+      { key: 'bufferAccessToken', value: 'bf-tok' },
+      { key: 'bufferChannelId', value: 'chan1' },
+    ])
+    await fireWeiboPublished(env, { id: 2, content: '纯文字', images: [], via: 'draft' })
+  } finally {
+    globalThis.fetch = orig
+  }
+})
+
+test('bufferPostText：话题 #xx# 转 #xx，超 270 码点截断（emoji 不破代理对）', () => {
+  assert.equal(bufferPostText('今天天气不错 #随拍#'), '今天天气不错 #随拍')
+  // 与站内 extractWeiboTopics 同上限：≤24 字的话题转换，>24 字的 #xx# 原样保留
+  assert.equal(bufferPostText(`#${'长'.repeat(24)}#正文`), `#${'长'.repeat(24)}正文`)
+  assert.equal(bufferPostText(`#${'长'.repeat(25)}#`), `#${'长'.repeat(25)}#`)
+  const long = '好'.repeat(300)
+  const cut = bufferPostText(long)
+  assert.equal([...cut].length, 270)
+  // 270 码点边界不截断；emoji 逐码点数（😀 记 1 个码点）
+  assert.equal(bufferPostText('好'.repeat(270)), '好'.repeat(270))
+  assert.equal([...bufferPostText('😀'.repeat(280))].length, 270)
 })
 
 test('评论 webhook：合法地址才 POST JSON（含事件名与留言内容）', async () => {

@@ -2507,6 +2507,18 @@ async function viewSettings() {
           <label>页脚自定义代码（页脚自定义代码插件：注入每一页页脚的 HTML，挂件 / 徽章 / 备案图标；受 CSP 保护，外部脚本不会执行）</label>
           <textarea class="textarea" id="st-footerHtmlCode" rows="3" maxlength="5000" placeholder="<div style=&quot;text-align:center&quot;>🌙 已运行 <b>365</b> 天</div>">${esc(s.footerHtmlCode || '')}</textarea>
         </div>
+        <div class="form-item">
+          <label>Buffer API Key（微博同步 Buffer 插件：buffer.com 注册并连上 X 等社交账号后，在 publish.buffer.com/settings/api 生成；免费档 3 渠道够用）</label>
+          <input class="input" id="st-bufferAccessToken" placeholder="pli…" autocomplete="off" value="${esc(s.bufferAccessToken || '')}">
+        </div>
+        <div class="form-item">
+          <label>Buffer 渠道 ID（同步目标；先填 API Key 再点右侧「拉取渠道」选择即可）</label>
+          <div class="fav-row">
+            <input class="input" id="st-bufferChannelId" style="flex:1;min-width:200px;font-family:ui-monospace,monospace;" placeholder="如 6ac89…" value="${esc(s.bufferChannelId || '')}">
+            <button class="btn btn-sm" id="btn-buffer-channels" type="button">拉取渠道</button>
+          </div>
+          <div class="sec-desc" id="buffer-channels-status" style="margin-top:6px;">同步时机：微博「发布」时自动推一条到所选渠道（X 免费档 280 字符，超出自动截断；#话题# 会转成 X 的话题格式）</div>
+        </div>
       </div>
     </div>
 
@@ -2663,6 +2675,8 @@ async function viewSettings() {
       tgChannelChatId: g('st-tgChannelChatId').value.trim(),
       commentWebhookUrl: g('st-commentWebhookUrl').value.trim(),
       footerHtmlCode: g('st-footerHtmlCode').value,
+      bufferAccessToken: g('st-bufferAccessToken').value.trim(),
+      bufferChannelId: g('st-bufferChannelId').value.trim(),
       notifyNewComment: g('st-notifyNewComment').checked ? '1' : '0',
       rssFullText: g('st-rssFullText').checked ? '1' : '0',
       backupEnabled: g('st-backupEnabled').checked ? '1' : '0',
@@ -2746,6 +2760,31 @@ async function viewSettings() {
     }
     btn.disabled = false
     btn.textContent = '保存并一键设置 Webhook'
+  })
+
+  document.getElementById('btn-buffer-channels').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-buffer-channels')
+    const statusEl = document.getElementById('buffer-channels-status')
+    const token = document.getElementById('st-bufferAccessToken').value.trim()
+    if (!token) return toast('先填写 Buffer API Key', true)
+    btn.disabled = true
+    btn.textContent = '拉取中…'
+    try {
+      // 先落库 API Key（渠道端点用它兜底），再拉渠道列表
+      await api('/admin/settings', { method: 'PUT', body: { bufferAccessToken: token } })
+      state.settings.bufferAccessToken = '••••••••'
+      const d = await api('/admin/buffer/channels', { method: 'POST', body: {} })
+      statusEl.textContent = '拉到 ' + d.channels.length + ' 个渠道：' + d.channels.map(function (ch) { return ch.displayName + '（' + ch.service + '）' }).join('、')
+      const pick = d.channels.find(function (ch) { return ch.service === 'twitter' }) || d.channels[0]
+      if (pick) {
+        document.getElementById('st-bufferChannelId').value = pick.id
+        toast('已填入「' + pick.displayName + '」的渠道 ID，记得点上方保存')
+      }
+    } catch (e) {
+      toast(e.message, true)
+    }
+    btn.disabled = false
+    btn.textContent = '拉取渠道'
   })
 
   document.getElementById('btn-backup-now').addEventListener('click', async () => {
