@@ -1215,6 +1215,64 @@ export async function mountEditor(root, postId, opts = {}) {
     return { mask, close }
   }
 
+  /* ---------- 点击图片：改 alt 描述与显示宽度 ----------
+   * alt 是无障碍/SEO 的关键字段，上传时自动填文件名，之后只有这里有入口改；
+   * 宽度走 data-w（微信排版规范 1.4.3 的原始像素宽度口径），不写 style 防体检报固定宽度 */
+  editor.addEventListener('click', (e) => {
+    const img = e.target.closest('img')
+    // 表情小图与拖拽选区（用户在拉选文本路过图片）不弹
+    if (!img || img.classList.contains('wxq-emoji') || window.getSelection()?.toString()) return
+    e.preventDefault()
+    imagePropsDialog(img)
+  })
+
+  function imagePropsDialog(img) {
+    const curW = img.getAttribute('data-w') || ''
+    const m = modal(
+      `<div class="modal-head"><span>图片设置</span><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <div style="background:#f6f6f6;border-radius:8px;overflow:hidden;margin-bottom:14px;display:flex;align-items:center;justify-content:center;max-height:180px;">
+          <img src="${esc(img.getAttribute('src') || '')}" style="max-width:100%;max-height:180px;">
+        </div>
+        <div class="auth-field"><label>描述 alt（无障碍与 SEO，读屏软件会朗读）</label>
+          <input class="input" id="ip-alt" maxlength="200" value="${esc(img.getAttribute('alt') || '')}" placeholder="这张图讲了什么"></div>
+        <div class="auth-field"><label>显示宽度（微信排版规范：按原始像素宽度百分比）</label>
+          <select class="input" id="ip-w">
+            <option value="">100%（默认，撑满版心）</option>
+            <option value="75"${curW ? percentHit(curW, 75) : ''}>75%</option>
+            <option value="50"${curW ? percentHit(curW, 50) : ''}>50%</option>
+            <option value="35"${curW ? percentHit(curW, 35) : ''}>35%</option>
+          </select>
+          <div style="font-size:12px;color:var(--sub);margin-top:6px;">按原始宽度的百分比写入 data-w；改成 100% 即恢复撑满</div>
+        </div>
+      </div>
+      <div class="modal-foot"><button class="btn btn-danger" id="ip-del">删除图片</button><button class="btn btn-primary" id="ip-ok">应用</button></div>`
+    )
+    m.mask.querySelector('#ip-ok').addEventListener('click', () => {
+      const alt = m.mask.querySelector('#ip-alt').value.trim()
+      const w = m.mask.querySelector('#ip-w').value
+      if (alt) img.setAttribute('alt', alt)
+      else img.removeAttribute('alt')
+      if (w && img.naturalWidth) img.setAttribute('data-w', String(Math.round((img.naturalWidth * Number(w)) / 100)))
+      else img.removeAttribute('data-w')
+      m.close()
+      markDirty()
+    })
+    m.mask.querySelector('#ip-del').addEventListener('click', () => {
+      m.close()
+      img.remove()
+      markDirty()
+      updateCount()
+    })
+  }
+
+  // data-w（原始像素）→ 档位命中率：±3px 内算命中，回显选中态
+  function percentHit(dataW, pct) {
+    const nat = img.naturalWidth
+    if (!nat) return ''
+    return Math.abs(Number(dataW) - (nat * pct) / 100) <= 3 ? ' selected' : ''
+  }
+
   /* ---------- 编辑区事件 ---------- */
   editor.addEventListener('input', () => {
     markDirty()
