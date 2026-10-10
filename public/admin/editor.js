@@ -1176,31 +1176,273 @@ export async function mountEditor(root, postId, opts = {}) {
     })
   }
 
-  function linkDialog() {
+  /* ---------- 卡片 HTML 组装（服务端 src/linkmeta.ts linkCardHtml 的手工镜像，
+     两侧同改；esc 为编辑器内的属性转义） ---------- */
+  function clampCardText(s, n) {
+    const t = String(s || '').replace(/\s+/g, ' ').trim()
+    const chars = Array.from(t)
+    return chars.length > n ? chars.slice(0, n).join('') + '…' : t
+  }
+  function hostOfUrl(u) {
+    try { return new URL(u).hostname } catch { return '' }
+  }
+  function linkCardHtmlClient(input) {
+    const host = clampCardText(input.siteName, 30) || hostOfUrl(input.url)
+    const title = clampCardText(input.title, 40) || host || '打开链接'
+    const desc = clampCardText(input.description, 64)
+    const img = String(input.image || '').trim()
+    // 站内相对地址（/post/…）解析不出 host，host 位可能为空——空则不出该行
+    const hostPart = host ? `<span class="lc-host">${esc(host)}</span>` : ''
+    // 内部全用 span（块级 div 会在 <p> 内插入时把段落截断、卡片散架，与服务端同口径）
+    const textPart =
+      `<span class="lc-title">${esc(title)}</span>` +
+      (desc ? `<span class="lc-desc">${esc(desc)}</span>` : '') +
+      hostPart
+    const body = img
+      ? `<span class="lc-body"><span class="lc-text">${textPart}</span><img class="lc-img" src="${esc(img)}" alt="" loading="lazy"></span>`
+      : `<span class="lc-body"><span class="lc-text">${textPart}</span></span>`
+    return `<a class="link-card" data-link-card="link-card" href="${esc(input.url)}" target="_blank" rel="noopener noreferrer">${body}</a><p><br></p>`
+  }
+
+  async function linkDialog() {
     saveSelection()
     const selText = window.getSelection().toString()
-    const m = modal(`<div class="modal-head"><span>插入链接</span><button class="modal-close" data-close>×</button></div>
+    // Markdown 模式：插入目标只有 textarea，弹窗退化成「普通链接」单页签（卡片/文章选择是富文本能力）
+    if (mdMode) {
+      const m = modal(`<div class="modal-head"><span>插入链接</span><button class="modal-close" data-close>×</button></div>
       <div class="modal-body">
-        <div class="auth-field"><label>链接地址</label><input class="input" id="lk-url" placeholder="https://…"></div>
+        <div class="auth-field"><label>链接地址</label><input class="input" id="lk-url2" placeholder="https://…"></div>
         <div class="auth-field"><label>文字（留空则显示地址）</label><input class="input" id="lk-text" value="${esc(selText)}"></div>
       </div>
       <div class="modal-foot"><button class="btn" data-close>取消</button><button class="btn btn-primary" id="lk-ok">插入</button></div>`)
+      m.mask.querySelector('#lk-url2').focus()
+      const doMd = () => {
+        let url = m.mask.querySelector('#lk-url2').value.trim()
+        const text = m.mask.querySelector('#lk-text').value.trim()
+        if (!url) return
+        if (!/^(https?:\/\/|mailto:|#|\/)/i.test(url)) url = 'https://' + url
+        m.close()
+        insertToken(mdArea, `[${text || url}](${url})`)
+        markDirty()
+      }
+      m.mask.querySelector('#lk-ok').addEventListener('click', doMd)
+      m.mask.addEventListener('keydown', (e) => {
+        if (e.isComposing || e.keyCode === 229) return
+        if (e.key === 'Enter') doMd()
+      })
+      return
+    }
+    const m = modal(`<div class="modal-head"><span>插入链接</span><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body upload-dialog">
+        <div class="tab-line"><button class="is-active" data-tab="card">网址卡片</button><button data-tab="plain">普通链接</button><button data-tab="post">站内文章</button></div>
+        <div data-pane="card">
+          <div class="auth-field"><label>链接地址</label><input class="input" id="lk-url" placeholder="https://…"></div>
+          <div id="lk-meta" style="display:none;">
+            <div class="lk-meta-row">
+              ${'' /* 预览由抓取结果回填 */}
+            </div>
+          </div>
+          <div style="font-size:12px;color:var(--sub);margin-top:6px;">自动抓取标题、摘要与配图生成卡片；抓不到时用域名占位。想用普通的蓝色超链接请切「普通链接」。</div>
+        </div>
+        <div data-pane="plain" style="display:none;">
+          <div class="auth-field"><label>链接地址</label><input class="input" id="lk-url2" placeholder="https://…"></div>
+          <div class="auth-field"><label>文字（留空则显示地址）</label><input class="input" id="lk-text" value="${esc(selText)}"></div>
+        </div>
+        <div data-pane="post" style="display:none;">
+          <input class="input" id="lk-q" placeholder="搜索文章标题，留空看最新发布">
+          <div class="lk-post-list" id="lk-posts"><div style="color:var(--sub);font-size:13px;padding:20px;text-align:center;">加载中…</div></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;">
+            <span id="lk-page" style="font-size:12px;color:var(--sub);"></span>
+            <span style="display:flex;gap:8px;">
+              <button class="btn btn-sm" id="lk-prev" disabled>上一页</button>
+              <button class="btn btn-sm" id="lk-next" disabled>下一页</button>
+            </span>
+          </div>
+          <div style="font-size:12px;color:var(--sub);margin-top:8px;">选择文章后可选插入样式；仅列已发布文章，加密文会带锁标记。</div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <label id="lk-style" style="display:none;align-items:center;gap:6px;font-size:13px;color:var(--sub);cursor:pointer;margin-right:auto;">
+          <input type="radio" name="lk-style" value="card" checked>卡片
+          <input type="radio" name="lk-style" value="link" style="margin-left:8px;">超链接
+        </label>
+        <button class="btn" data-close>取消</button><button class="btn btn-primary" id="lk-ok">插入</button>
+      </div>`)
     m.mask.querySelector('#lk-url').focus()
+
+    /* ---- 页签 1：网址卡片 ---- */
+    const metaState = { fetched: '', meta: null, loading: false } // 抓取结果缓存：预览与插入共用，不重复打接口
+    const metaBox = m.mask.querySelector('#lk-meta')
+    let metaTimer = null
+    async function fetchCardMeta(url) {
+      metaState.loading = true
+      metaBox.style.display = ''
+      metaBox.innerHTML = '<div style="font-size:12px;color:var(--sub);padding:8px 0;">正在抓取页面信息…</div>'
+      try {
+        const d = await api('/admin/tools/linkmeta', { method: 'POST', body: { url } })
+        if (metaState.fetched !== url) return // 用户又改了地址，过期结果不回填
+        metaState.meta = d.meta || {}
+        const meta = metaState.meta
+        const img = meta.image ? `<img class="lk-meta-img" src="${esc(meta.image)}" alt="">` : ''
+        const title = meta.title || hostOfUrl(url) || url
+        const desc = meta.description ? `<div class="lk-meta-desc">${esc(clampCardText(meta.description, 64))}</div>` : ''
+        metaBox.innerHTML =
+          `<div style="font-size:12px;color:var(--sub);margin-bottom:6px;">将生成以下卡片：</div>` +
+          `<div class="lk-meta-card"><div class="lk-meta-text"><div class="lk-meta-title">${esc(clampCardText(title, 40))}</div>${desc}</div>${img}</div>`
+      } catch (e) {
+        if (metaState.fetched === url) {
+          metaState.meta = null
+          metaBox.innerHTML = `<div style="font-size:12px;color:var(--sub);padding:8px 0;">抓取失败（${esc(e.message || '网络错误')}），将用域名占位生成卡片。</div>`
+        }
+      } finally {
+        metaState.loading = false
+      }
+    }
+    m.mask.querySelector('#lk-url').addEventListener('input', (e) => {
+      const url = e.target.value.trim()
+      metaState.fetched = url
+      metaState.meta = null
+      clearTimeout(metaTimer)
+      if (!url) { metaBox.style.display = 'none'; metaBox.innerHTML = ''; return }
+      metaTimer = setTimeout(() => fetchCardMeta(url), 500)
+    })
+
+    /* ---- 页签 3：站内文章 ---- */
+    let postPage = 1
+    let postTotalPages = 1
+    let postQ = ''
+    let selectedPost = null
+    const postList = m.mask.querySelector('#lk-posts')
+    async function loadPosts() {
+      postList.innerHTML = '<div style="color:var(--sub);font-size:13px;padding:20px;text-align:center;">加载中…</div>'
+      try {
+        const d = await api(`/admin/posts/lookup?page=${postPage}${postQ ? `&q=${encodeURIComponent(postQ)}` : ''}`)
+        postTotalPages = d.totalPages || 1
+        if (!d.items.length) {
+          postList.innerHTML = '<div style="color:var(--sub);font-size:13px;padding:20px;text-align:center;">没有匹配的文章</div>'
+        } else {
+          postList.innerHTML = d.items
+            .map(
+              (p) => `<div class="lk-post-item${selectedPost && selectedPost.id === p.id ? ' is-active' : ''}" data-id="${p.id}" data-slug="${esc(p.slug)}" data-title="${esc(p.title)}" data-cover="${esc(p.cover)}" data-summary="${esc(p.summary)}" data-pw="${p.hasPassword ? 1 : 0}" data-tier="${esc(p.minTier)}">
+              <div class="lk-post-title">${esc(p.title)}${p.hasPassword ? ' 🔒' : ''}${p.minTier && p.minTier !== 'all' ? ' · 会员' : ''}</div>
+              ${p.cover ? `<img class="lk-post-cover" src="${esc(p.cover)}" alt="" loading="lazy">` : ''}
+            </div>`
+            )
+            .join('')
+        }
+        m.mask.querySelector('#lk-page').textContent = d.total ? `共 ${d.total} 篇 · ${d.page}/${postTotalPages} 页` : ''
+        m.mask.querySelector('#lk-prev').disabled = postPage <= 1
+        m.mask.querySelector('#lk-next').disabled = postPage >= postTotalPages
+      } catch (e) {
+        postList.innerHTML = `<div style="color:var(--sub);font-size:13px;padding:20px;text-align:center;">${esc(e.message || '加载失败')}</div>`
+      }
+    }
+    let qTimer = null
+    m.mask.querySelector('#lk-q').addEventListener('input', (e) => {
+      clearTimeout(qTimer)
+      qTimer = setTimeout(() => {
+        postQ = e.target.value.trim()
+        postPage = 1
+        loadPosts()
+      }, 300)
+    })
+    m.mask.querySelector('#lk-prev').addEventListener('click', () => { if (postPage > 1) { postPage--; loadPosts() } })
+    m.mask.querySelector('#lk-next').addEventListener('click', () => { if (postPage < postTotalPages) { postPage++; loadPosts() } })
+    postList.addEventListener('click', (e) => {
+      const item = e.target.closest('.lk-post-item')
+      if (!item) return
+      selectedPost = {
+        slug: item.dataset.slug,
+        title: item.dataset.title,
+        cover: item.dataset.cover,
+        summary: item.dataset.summary,
+        pw: item.dataset.pw === '1',
+        tier: item.dataset.tier,
+      }
+      postList.querySelectorAll('.lk-post-item').forEach((el) => el.classList.remove('is-active'))
+      item.classList.add('is-active')
+      // 站内文打开样式选择（默认卡片）
+      m.mask.querySelector('#lk-style').style.display = 'flex'
+    })
+    loadPosts()
+
+    /* ---- 页签切换 ---- */
+    m.mask.querySelectorAll('.tab-line button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        m.mask.querySelectorAll('.tab-line button').forEach((b) => b.classList.remove('is-active'))
+        btn.classList.add('is-active')
+        const tab = btn.dataset.tab
+        m.mask.querySelectorAll('[data-pane]').forEach((p) => { p.style.display = p.dataset.pane === tab ? '' : 'none' })
+        // 站内文章页签显示样式选择，其余隐藏
+        m.mask.querySelector('#lk-style').style.display = tab === 'post' && selectedPost ? 'flex' : 'none'
+        if (tab === 'card') m.mask.querySelector('#lk-url').focus()
+        else if (tab === 'plain') m.mask.querySelector('#lk-url2').focus()
+        else m.mask.querySelector('#lk-q').focus()
+      })
+    })
+
+    /* ---- 插入 ---- */
     const ok = m.mask.querySelector('#lk-ok')
-    const doInsert = () => {
-      let url = m.mask.querySelector('#lk-url').value.trim()
-      const text = m.mask.querySelector('#lk-text').value.trim()
-      if (!url) return
-      if (!/^(https?:\/\/|mailto:|#|\/)/i.test(url)) url = 'https://' + url
+    const doInsert = async () => {
+      const activeTab = m.mask.querySelector('.tab-line .is-active').dataset.tab
+      if (activeTab === 'card') {
+        let url = m.mask.querySelector('#lk-url').value.trim()
+        if (!url) return
+        if (!/^(https?:\/\/|mailto:|#|\/)/i.test(url)) url = 'https://' + url
+        // 预览抓成功过的结果直接用（metaState 缓存）；没等到就插入则用域名占位
+        let meta = metaState.fetched === url ? metaState.meta || null : null
+        if (metaState.loading && metaState.fetched === url) {
+          toast('正在抓取页面信息，稍等片刻再插入可得完整卡片；已先用占位插入', true)
+        }
+        const title = (meta && meta.title) || hostOfUrl(url) || url
+        m.close()
+        restoreSelection()
+        insertHTML(
+          linkCardHtmlClient({
+            url,
+            title,
+            description: meta ? meta.description : '',
+            image: meta ? meta.image : '',
+            siteName: meta ? meta.siteName : '',
+          })
+        )
+        return
+      }
+      if (activeTab === 'plain') {
+        let url = m.mask.querySelector('#lk-url2').value.trim()
+        const text = m.mask.querySelector('#lk-text').value.trim()
+        if (!url) return
+        if (!/^(https?:\/\/|mailto:|#|\/)/i.test(url)) url = 'https://' + url
+        m.close()
+        restoreSelection()
+        insertHTML(`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(text || url)}</a>&nbsp;`)
+        return
+      }
+      // 站内文章
+      if (!selectedPost) { toast('请先选择一篇文章', true); return }
+      const style = m.mask.querySelector('input[name="lk-style"]:checked').value
+      const p = selectedPost
       m.close()
       restoreSelection()
-      insertHTML(`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(text || url)}</a>&nbsp;`)
+      if (style === 'link') {
+        insertHTML(`<a href="/post/${esc(p.slug)}" target="_blank" rel="noopener noreferrer">${esc(p.title)}</a>&nbsp;`)
+      } else {
+        const desc = p.summary || (p.pw ? '加密文章，输入密码后阅读' : '来自本站的往期文章')
+        insertHTML(linkCardHtmlClient({ url: `/post/${p.slug}`, title: p.title, description: desc, image: p.cover }))
+      }
     }
     ok.addEventListener('click', doInsert)
     m.mask.addEventListener('keydown', (e) => {
       // 输入法组词回车（确认候选词）不触发插入
       if (e.isComposing || e.keyCode === 229) return
-      if (e.key === 'Enter') doInsert()
+      if (e.key === 'Enter') {
+        const t = e.target
+        // 站内文章列表里的回车不劫持（radio/翻页按钮焦点）
+        if (t.id === 'lk-url' || t.id === 'lk-url2' || t.id === 'lk-text') {
+          e.preventDefault()
+          doInsert()
+        }
+      }
     })
   }
 

@@ -72,6 +72,7 @@ import { imageExtOf, MAX_REMOTE_IMAGES, MAX_UPLOAD_BYTES, saveUpload, sniffImage
 import { hashPostPassword } from './protect'
 import { listTrash, restorePostStatus, trashTable, type TrashTable } from './trash'
 import { classifyBrowser, classifyDevice, cleanPath, cleanRef, cleanTitle, cleanVid, getVisitStats, recordVisit } from './stats'
+import { fetchLinkMeta } from './linkmeta'
 import { THEMES } from './themes/registry'
 import type { CommentRow, Env, MemberRow, MemberTier, PostRow, SessionUser } from './types'
 import { clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extractWeiboTopics, fmtDateCN, isDemo, isValidQQ, jsonItemLikePattern, nicknameCooldown, normalizeLinkUrl, slugify } from './utils'
@@ -612,6 +613,29 @@ api.post('/admin/posts', async (c) => {
   }
   const categoryId = row ? await getPostCategoryId(c.env.DB, row.id) : null
   return c.json({ ok: true, post: row ? { ...postAdminView(row), tagList: parseTags(row), categoryId } : null })
+})
+
+/** 站内文章选择器（编辑器「插入站内文章」）：轻出参——只给标题/slug/摘要/封面/时间，
+ *  无正文无口令；q 走 likePattern 模糊匹配标题（与后台列表搜索同口径） */
+api.get('/admin/posts/lookup', async (c) => {
+  const q = (c.req.query('q') || '').trim().slice(0, 50)
+  const page = clampInt(c.req.query('page'), 1, 1000, 1)
+  const r = await listPosts(c.env.DB, { status: 'published', q: q || undefined, page, limit: 8 })
+  return c.json({
+    items: r.items.map((p) => ({
+      id: p.id,
+      slug: p.slug,
+      title: p.title,
+      summary: (p.summary || '').slice(0, 80),
+      cover: p.cover || '',
+      published_at: p.published_at,
+      hasPassword: !!p.password_hash,
+      minTier: normalizeMinTier(p.min_tier),
+    })),
+    total: r.total,
+    page: r.page,
+    totalPages: r.totalPages,
+  })
 })
 
 api.get('/admin/posts/:id', async (c) => {
@@ -1678,6 +1702,19 @@ api.post('/admin/tools/md', async (c) => {
   // 与正文接口同口径按 UTF-8 字节计（length 是 UTF-16 码元数，全 emoji 输入会虚增 3-4 倍余量）
   if (new TextEncoder().encode(md).length > MAX_CONTENT_BYTES) return jsonError('内容过长')
   return c.json({ html: mdToHtml(md) })
+})
+
+/** 链接卡元数据抓取（编辑器「插入链接」卡片风格）：只抓 http(s) 公网页面，
+ *  抓不到/解析不到返回空字段，编辑器据已有字段组卡（title 缺失时用域名兜底）。
+ *  用户输入的 URL 按用户输入频控；fetch 本身限长限时（src/linkmeta.ts） */
+api.post('/admin/tools/linkmeta', async (c) => {
+  const body = await c.req.json<{ url?: string }>().catch(() => null)
+  const url = String(body?.url ?? '').trim().slice(0, 2048)
+  if (!url) return jsonError('请填写链接地址')
+  const ip = clientIp(c.req.raw)
+  if (!rateLimit(`linkmeta:${ip}`, 10, 60_000)) return jsonError('操作太频繁，请稍后再试', 429)
+  const meta = await fetchLinkMeta(url)
+  return c.json({ meta })
 })
 
 /** 粘贴净化配套：外链图（公众号 mmbiz.qpic.cn 等有防盗链/随时失效的风险）转存站内图床并改写 src。

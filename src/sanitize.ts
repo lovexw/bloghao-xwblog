@@ -48,8 +48,9 @@ const ALLOWED_TAGS = new Set([
 
 /** 所有标签都可用的属性。
  *  不放行 id：正文在评论区之前，<img id="comment-form"> 之类的 DOM clobbering
- *  会让 site.js 的 getElementById 命中正文元素，评论区功能瘫痪（锚点锚 id 同理不可靠） */
-const GLOBAL_ATTRS = new Set(['class', 'data-w', 'data-ignore-width', 'data-no-dark', 'data-ignore-dm'])
+ *  会让 site.js 的 getElementById 命中正文元素，评论区功能瘫痪（锚点锚 id 同理不可靠）
+ *  data-link-card 是编辑器「链接卡片」的结构标记（src/linkmeta.ts），纯样式钩子 */
+const GLOBAL_ATTRS = new Set(['class', 'data-w', 'data-ignore-width', 'data-no-dark', 'data-ignore-dm', 'data-link-card'])
 
 const TAG_ATTRS: Record<string, Set<string>> = {
   a: new Set(['href', 'target', 'title']),
@@ -169,6 +170,9 @@ function sanitizeAttrs(tag: string, raw: string, origin?: string): string {
     }
     if (name === 'data-w') {
       if (!/^\d{1,5}$/.test(v)) continue
+    }
+    if (name === 'data-link-card') {
+      if (v !== '' && v !== 'link-card') continue // 固定值标记，别的值一律剥
     }
     out += ` ${name}="${escAttr(v)}"`
   }

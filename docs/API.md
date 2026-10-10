@@ -152,6 +152,7 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 | --- | --- | --- |
 | GET | `/api/admin/posts?status=all\|published\|scheduled\|draft&q=关键词&page=1&limit=20` | 列表（不含 content；元素附 `tagList`、`categoryName`） |
 | POST | `/api/admin/posts` | 新建 |
+| GET | `/api/admin/posts/lookup?q=关键词&page=1` | 站内文章选择器（编辑器「插入链接 → 站内文章」）：仅已发布，轻出参 `{items:[{id, slug, title, summary, cover, published_at, hasPassword, minTier}], total, page, totalPages}`，无正文无口令；**注册在 `/:id` 之前**（否则 lookup 被 id 参数吞掉） |
 | GET | `/api/admin/posts/:id` | 详情（含 content、categoryId） |
 | PUT | `/api/admin/posts/:id` | 更新（autosave 用；已发布时间不会被草稿保存抹掉）。**缺键即保留**：Body 里没出现的字段（content/tags/categoryId/title 等）一律沿用旧值——列表页状态切换只发 `{status}` 不会误清正文；显式传空串/空数组/`null` 才是清空 |
 | POST | `/api/admin/posts/:id/pin` | Body `{pinned:true/false}` |
@@ -286,6 +287,7 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 | GET / PUT | `/api/admin/settings` | 可写键：`siteName, siteDescription, siteUrl, footerText, avatarUrl, faviconUrl, ogImageDefault, theme, allowComments, moderateComments, notifyNewComment, rssFullText, backupEnabled, postsPerPage, about（legacy，已由「页面」承载）, pluginsDisabled, siteGrayscale, siteClosed, siteClosedMessage, membersEnabled（会员体系总开关）, rankTopN（/rank 展示条数 1-50）, externalToken, telegramBotToken, telegramAllowFrom, telegramWebhookSecret`；`theme` 必须是已注册主题 id；`avatarUrl`/`faviconUrl`/`ogImageDefault` 只接受站内 `/images/` 与 `http(s)` 外链；`pluginsDisabled` 为逗号分隔的插件 manifest id（仅字母/数字/`_`/`-`）；`siteGrayscale`/`siteClosed` 为 `1`/`0` 开关（闭站时公开页面与公开 API 一律 503，白名单见 src/closed.ts，已登录管理员不受影响）；`siteClosedMessage` ≤1000 字；`externalToken`/`telegramBotToken`/`telegramWebhookSecret` 为敏感项，GET 与 PUT 的响应一律打码（`••••••••`），明文只在生成时返回一次，PUT 收到打码占位符视为保持原值 |
 | PUT | `/api/admin/password` | Body `{oldPassword, newPassword}`（8-64 位） |
 | POST | `/api/admin/tools/md` | Body `{md}` → `{html}`，Markdown 渲染 |
+| POST | `/api/admin/tools/linkmeta` | Body `{url}` → `{meta:{title, description, image, siteName}}`，编辑器「网址卡片」抓取目标页 og 元数据；只抓 http(s) 公网地址（私有网段/非常规端口拒绝，限长限时），抓不到时字段为空（前端用域名占位组卡）。限频 10 次/分钟/IP |
 | POST | `/api/admin/tools/sanitize` | Body `{html}` → `{html}`，白名单净化（粘贴用） |
 
 ### 采集（公众号文章）
@@ -354,4 +356,4 @@ Telegram Bot API 的 Webhook 接收端，由 Telegram 服务器调用（校验 `
 - 唯一例外：`<meta data-og-image="/images/…">` 原样保留（编辑器生成的 OG 分享卡图标记，仅限站内路径）
 - 链接仅允许 `http(s) / mailto / 站内相对 / #锚点`（校验前剥离 tab/换行，`jav&#9;ascript:` 之类混淆无法绕过）；`data:`/`javascript:` 一律拒绝
 - 内联样式仅保留排版属性（颜色/字号/行高/间距/边框/对齐等）；`url()` 只接受站内 `/` 开头路径；`!important` 被剥除
-- 规范属性 `data-w / data-ignore-width / data-no-dark / data-ignore-dm` 原样保留
+- 规范属性 `data-w / data-ignore-width / data-no-dark / data-ignore-dm` 原样保留；`data-link-card="link-card"` 为编辑器「链接卡片」结构标记（src/linkmeta.ts），只认该固定值，其余值剥除
