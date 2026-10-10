@@ -14,5 +14,13 @@
     "description": "粘贴公众号链接，服务端抓正文、转存配图并生成草稿",
     "version": "1.0.0",
     "author": "BlogHao"
+  },
+  {
+    "id": "douban-media",
+    "file": "douban-media.js",
+    "title": "插入书影音卡片",
+    "description": "搜书影音名字取豆瓣封面评分（可配自建中转），组卡片插进正文",
+    "version": "0.1.0",
+    "author": "lovexw"
   }
 ]

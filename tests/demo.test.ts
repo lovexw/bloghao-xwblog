@@ -204,6 +204,16 @@ test('种子计划：访客统计 60 天有脉搏——今天有数据、天数�
   // 文章页打点占比可观，热门页排行有内容
   assert.ok(plan.visits.filter((v) => v.path.startsWith('/post/')).length > plan.visits.length * 0.3)
 })
+test('种子计划：北京零点后第一分钟，今天的访问不落前一天（clamp 跨天守卫）', () => {
+  // 北京 2026-10-11 00:00:30 = UTC 2026-10-10T16:00:30Z：now-60s 仍在前一天
+  const midnightish = Date.parse('2026-10-10T16:00:30Z')
+  const plan = buildDemoPlan(midnightish)
+  const days = new Set(plan.visits.map((v) => v.day))
+  assert.equal(days.size, 60, '60 天一天不少')
+  const today = new Date(midnightish + 8 * 3_600_000).toISOString().slice(0, 10)
+  assert.ok(plan.visits.some((v) => v.day === today), '今天要有访问（今日 PV 不开天窗）')
+  for (const v of plan.visits) assert.ok(v.ts <= midnightish, '访问不能落在未来')
+})
 
 test('种子图：SVG 合法、确定性、体积克制、无脚本', () => {
   const imgs = demoImages()

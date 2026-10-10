@@ -73,6 +73,7 @@ import { hashPostPassword } from './protect'
 import { listTrash, restorePostStatus, trashTable, type TrashTable } from './trash'
 import { classifyBrowser, classifyDevice, cleanPath, cleanRef, cleanTitle, cleanVid, getVisitStats, recordVisit } from './stats'
 import { fetchLinkMeta } from './linkmeta'
+import { buildCardHtml, fetchDoubanDetail, probeRelay, sanitizeMediaItem, searchMedia, subjectIdFromUrl, validateRelay } from './douban'
 import { THEMES } from './themes/registry'
 import type { CommentRow, Env, MemberRow, MemberTier, PostRow, SessionUser } from './types'
 import { clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extractWeiboTopics, fmtDateCN, isDemo, isValidQQ, jsonItemLikePattern, nicknameCooldown, normalizeLinkUrl, slugify } from './utils'
@@ -1725,6 +1726,68 @@ api.post('/admin/tools/linkmeta', async (c) => {
   if (!rateLimit(`linkmeta:${ip}`, 10, 60_000)) return jsonError('操作太频繁，请稍后再试', 429)
   const meta = await fetchLinkMeta(url)
   return c.json({ meta })
+})
+
+/** 书影音组卡用的中转基地址（豆瓣封面改写走 /img）；配置不完整回 null（封面省略） */
+function validateRelayBase(relay: string, relayToken: string): string | null {
+  return validateRelay(relay, relayToken)?.base ?? null
+}
+
+/** 书影音卡片（第三方编辑器插件 douban-media 的数据面），见 src/douban.ts 与 douban-relay/。
+ *  中转地址/令牌由插件随请求携带（存插件自己的 localStorage，不进 settings），
+ *  本端点只认代码构造的豆瓣地址（粘贴链接仅提取条目 id 重组），不构成开放代理；
+ *  插件停用即端点 404（与编辑器侧开关一致），限频同 linkmeta */
+api.post('/admin/tools/douban', async (c) => {
+  const settings = await getSettings(c.env.DB)
+  const disabled = cleanDisabledPlugins(String(settings.pluginsDisabled ?? ''))
+  if (disabled === null || disabled.split(',').includes('douban-media')) return jsonError('书影音插件已停用', 404)
+  const body = await c.req
+    .json<{
+      action?: string
+      type?: string
+      q?: string
+      id?: string
+      url?: string
+      relay?: string
+      relayToken?: string
+      tmdbKey?: string
+      item?: unknown
+    }>()
+    .catch(() => null)
+  const action = String(body?.action ?? '')
+  const type = String(body?.type ?? '')
+  if (!['search', 'detail', 'card', 'test'].includes(action)) return jsonError('未知操作')
+  if (action !== 'test' && action !== 'card' && !['book', 'movie', 'music'].includes(type)) return jsonError('未知类型')
+  const ip = clientIp(c.req.raw)
+  if (!rateLimit(`douban:${ip}`, 10, 60_000)) return jsonError('操作太频繁，请稍后再试', 429)
+  // 外部携带的中转配置收敛长度；TMDB key 是 32 位十六进制（douban.ts 内再校验）
+  const relay = String(body?.relay ?? '').trim().slice(0, 2048)
+  const relayToken = String(body?.relayToken ?? '').trim().slice(0, 256)
+  const tmdbKey = String(body?.tmdbKey ?? '').trim().slice(0, 64)
+  try {
+    if (action === 'test') return c.json(await probeRelay(relay, relayToken))
+    if (action === 'search') {
+      const q = String(body?.q ?? '').trim().slice(0, 80)
+      if (!q) return jsonError('请输入书名 / 影名 / 曲名')
+      return c.json(await searchMedia({ type: type as 'book' | 'movie' | 'music', q, relay, relayToken, tmdbKey }))
+    }
+    // detail：条目 id 优先（搜索结果点选），也接受粘贴的豆瓣链接（只提取数字 id）；
+    // blocked 时插件用搜索结果走 card 动作补卡。relayBase 供组卡把豆瓣封面
+    // 改写进中转 /img（豆瓣 CDN 防盗链，直连必挂）
+    if (action === 'detail') {
+      const id = /^\d{1,14}$/.test(String(body?.id ?? '')) ? String(body?.id) : subjectIdFromUrl(String(body?.url ?? ''))
+      if (!id) return jsonError('缺少条目 id（或粘贴的链接不含豆瓣 subject）')
+      const relayBase = validateRelayBase(relay, relayToken)
+      const r = await fetchDoubanDetail({ type: type as 'book' | 'movie' | 'music', id, relay, relayToken })
+      return c.json({ item: r.item, blocked: r.blocked, card: r.item ? buildCardHtml(r.item, { relayBase }) : null })
+    }
+    // card：详情被风控时的补卡路径——插件回传搜索结果条目，服务端校验重建后组卡
+    const item = sanitizeMediaItem(body?.item)
+    if (!item) return jsonError('条目数据不完整')
+    return c.json({ card: buildCardHtml(item, { relayBase: validateRelayBase(relay, relayToken) }) })
+  } catch {
+    return jsonError('抓取失败，请稍后再试', 502)
+  }
 })
 
 /** 粘贴净化配套：外链图（公众号 mmbiz.qpic.cn 等有防盗链/随时失效的风险）转存站内图床并改写 src。

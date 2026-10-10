@@ -639,7 +639,8 @@ export function buildVisitRows(now: number, rng: () => number, slugs?: { slug: s
     const spike = d === 30 ? 1.45 : d === 3 ? 1.3 : 1
     const isToday = d === 0
     const elapsed = isToday ? Math.min(0.95, ((now + 8 * 3_600_000) % 86_400_000) / 86_400_000) : 1
-    const pv = Math.round((26 + 34 * rng()) * weekdayFactor * growth * spike * elapsed)
+    // 今天的 PV 有下限：北京时间零点后 elapsed≈0，纯乘法会四舍五入成 0，后台「今日 PV」开天窗
+    const pv = Math.max(isToday ? 3 : 0, Math.round((26 + 34 * rng()) * weekdayFactor * growth * spike * elapsed))
     for (let i = 0; i < pv; i++) {
       // 访问时间偏向白天与晚间（北京时间 8-24 点），今天的不能越过 now
       const hourBias = pickWeighted(rng, [
@@ -647,6 +648,12 @@ export function buildVisitRows(now: number, rng: () => number, slugs?: { slug: s
       ])
       let ts = daysAgoAt(now, d, hourBias, Math.floor(rng() * 60))
       if (isToday && ts > now - 60_000) ts = now - 60_000 - Math.floor(rng() * 3_600_000 * elapsed)
+      if (isToday) {
+        // 北京零点后第一分钟里 now-60_000 仍在前一天：今天的访问必须钳回今日零点后，
+        // 否则这 3 条全落昨天——60 天少一天、后台「今日 PV」开天窗
+        const bjDayStart = now - ((now + 8 * 3_600_000) % 86_400_000)
+        if (ts < bjDayStart) ts = bjDayStart + Math.floor(rng() * Math.max(1, now - bjDayStart))
+      }
       const target = pickWeighted(rng, VISIT_PATHS)
       const isPost = target === '__post__'
       const post = published[Math.floor(rng() * published.length)]

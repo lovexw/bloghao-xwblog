@@ -22,3 +22,6 @@ scripts/emlog-migrate/download-results.json
 # ZCode 工作区（本地审计笔记 / 计划等）
 .zcode/
 .zcodeignore
+
+# 璞嗙摚涓浆鐨勬湰鍦扮紦瀛樹笌 Cookie(douban-relay/)
+douban-relay/data/
