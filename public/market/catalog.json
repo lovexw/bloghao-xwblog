@@ -48,13 +48,13 @@
       "id": "wechat-collect",
       "name": "采集公众号文章",
       "description": "粘贴公众号链接，服务端抓正文、转存配图并生成草稿",
-      "link": "https://github.com/lovexw/bloghao/blob/main/docs/PLUGINS.md"
+      "link": "https://github.com/bloghao/bloghao/blob/main/docs/PLUGINS.md"
     },
     {
       "id": "hello-sign",
       "name": "文末小尾巴",
       "description": "在正文末尾插入一段「— 完 —」签名区，演示插件 API 用法",
-      "link": "https://github.com/lovexw/bloghao/blob/main/docs/PLUGINS.md"
+      "link": "https://github.com/bloghao/bloghao/blob/main/docs/PLUGINS.md"
     }
   ]
 }

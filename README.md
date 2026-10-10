@@ -10,9 +10,9 @@
 
 **演示体验站：[https://demo.bloghao.com](https://demo.bloghao.com)** —— 动手部署前可以先去转一圈：预置全年仿真数据、会员 / 付费墙 / 加密文章全开着，随便折腾，每 2 小时自动重置；后台账号 `demo` / `demo1234`，打开登录页就已自动填好（机制见 [docs/DEMO.md](docs/DEMO.md)）。
 
-[![Version](https://img.shields.io/github/package-json/v/lovexw/bloghao?color=1a73e8)](https://github.com/lovexw/bloghao/blob/main/CHANGELOG.md) [![License](https://img.shields.io/badge/License-MIT-07c160) ![Cloudflare](https://img.shields.io/badge/Cloudflare-Workers%20%C2%B7%20D1%20%C2%B7%20R2-F38020) ![No Framework](https://img.shields.io/badge/%E5%89%8D%E5%90%8E%E7%AB%AF-%E6%97%A0%E6%A1%86%E6%9E%B6%E4%BE%9D%E8%B5%96-1a1a1a)](https://github.com/lovexw/bloghao)
+[![Version](https://img.shields.io/github/package-json/v/bloghao/bloghao?color=1a73e8)](https://github.com/bloghao/bloghao/blob/main/CHANGELOG.md) [![License](https://img.shields.io/badge/License-MIT-07c160) ![Cloudflare](https://img.shields.io/badge/Cloudflare-Workers%20%C2%B7%20D1%20%C2%B7%20R2-F38020) ![No Framework](https://img.shields.io/badge/%E5%89%8D%E5%90%8E%E7%AB%AF-%E6%97%A0%E6%A1%86%E6%9E%B6%E4%BE%9D%E8%B5%96-1a1a1a)](https://github.com/bloghao/bloghao)
 
-<a href="https://deploy.workers.cloudflare.com/?url=https://github.com/lovexw/bloghao"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare" height="36"></a>
+<a href="https://deploy.workers.cloudflare.com/?url=https://github.com/bloghao/bloghao"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare" height="36"></a>
 
 </div>
 
@@ -83,7 +83,7 @@
 
 **方式一：一键部署（推荐）**——点上面（或下面）的按钮，授权 GitHub 后给 Worker / 数据库 / 图床起好名字，Cloudflare 自动完成剩下的：复制一份仓库到你的账号 → 开通 D1 数据库与 R2 图床并回填配置 → 构建部署上线 → 接管 push 自动部署。全程不碰命令行。
 
-<a href="https://deploy.workers.cloudflare.com/?url=https://github.com/lovexw/bloghao"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare" height="36"></a>
+<a href="https://deploy.workers.cloudflare.com/?url=https://github.com/bloghao/bloghao"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare" height="36"></a>
 
 > 若账号还没用过 R2，会被要求先添加支付方式——免费额度内不扣费，只是验证。
 
@@ -93,7 +93,7 @@
 
 ```bash
 # 1. 克隆并安装
-git clone https://github.com/lovexw/bloghao.git
+git clone https://github.com/bloghao/bloghao.git
 cd bloghao && npm install
 npx wrangler login
 
@@ -127,7 +127,7 @@ npm run deploy
 业务代码零改动地跑进一个 Node 容器：文章存内置 SQLite（单文件 WAL），图片存本地磁盘目录，也可以继续用 Cloudflare R2 桶（零出口流量费）。单进程按域名同时托管多个完全独立的博客站，Cloudflare 退回只做 DNS + CDN。
 
 ```bash
-git clone https://github.com/lovexw/bloghao.git
+git clone https://github.com/bloghao/bloghao.git
 cd bloghao/docker-poc
 docker compose up --build -d     # 镜像约 70MB（node:26-alpine），数据落在 ./data/<域名>/
 ```
@@ -233,7 +233,7 @@ npm run deploy    # schema 有更新时再执行一次 npx wrangler d1 execute D
 
 ## 🤝 相关仓库
 
-- **官方仓库**：[lovexw/bloghao](https://github.com/lovexw/bloghao)（本仓库）——2.0 起整合作者实例线的全部增强，欢迎提 Issue / PR；官网源码在仓库内 `website/` 目录（**[bloghao.com](https://bloghao.com)**，Cloudflare Pages 部署，官网「博客号目录」上榜请提 Issue）
+- **官方仓库**：[bloghao/bloghao](https://github.com/bloghao/bloghao)（本仓库）——2.0 起整合作者实例线的全部增强，欢迎提 Issue / PR；官网源码在仓库内 `website/` 目录（**[bloghao.com](https://bloghao.com)**，Cloudflare Pages 部署，官网「博客号目录」上榜请提 Issue）
 - **作者实例**：[lovexw/bloghao-xwblog](https://github.com/lovexw/bloghao-xwblog)——[blog.xiaowuleyi.com](https://blog.xiaowuleyi.com) 的源仓库，官方仓库的滚动开发线（迭代先行于此，稳定后清洗发布至官方仓库），提交信息沿用 `theme:` / `mobile:` / `feat:` / `docs:` 前缀的中文风格
 
 ## 📄 License

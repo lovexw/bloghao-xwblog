@@ -12,7 +12,7 @@
 
 ## 给博客号站长：三步接入
 
-1. **联系官方**（[GitHub Issues](https://github.com/lovexw/bloghao/issues) 或社区群）提供你的站点地址，审核通过后拿到一枚 **32 位站点 Token**
+1. **联系官方**（[GitHub Issues](https://github.com/bloghao/bloghao/issues) 或社区群）提供你的站点地址，审核通过后拿到一枚 **32 位站点 Token**
 2. **后台填配置**：「设置 → 服务端插件」→ 广场站点 Token 粘贴进去，保存（广场地址保持默认 `https://plaza.bloghao.com`，自建 hub 才改）
 3. **开启插件**：「插件」页 → 服务端插件 → **广场同步（bloghao.com）** 打开
 

@@ -885,7 +885,7 @@ api.post('/admin/buffer/channels', async (c) => {
 
 /* ---------------- 友情链接管理 ---------------- */
 const LINK_ICON_MAX_BYTES = 300 * 1024
-const ICON_FETCH_UA = 'Mozilla/5.0 (compatible; BlogHaoBot/1.0; +https://github.com/lovexw/bloghao)'
+const ICON_FETCH_UA = 'Mozilla/5.0 (compatible; BlogHaoBot/1.0; +https://github.com/bloghao/bloghao)'
 
 /** 校验友链图标地址：只收站内 /images/ 与 http(s) 外链，防 javascript: 注入 */
 function normalizeLinkIcon(input: unknown): string {

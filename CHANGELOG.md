@@ -1,6 +1,6 @@
 # 更新日志
 
-面向「博客号 BlogHao」部署用户的版本说明，每次官方发布（`lovexw/bloghao` 打 tag）时回填。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号语义见 [docs/RELEASING.md](docs/RELEASING.md)「版本号」一节。
+面向「博客号 BlogHao」部署用户的版本说明，每次官方发布（`bloghao/bloghao` 打 tag）时回填。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号语义见 [docs/RELEASING.md](docs/RELEASING.md)「版本号」一节。
 
 > 升级方式：同步本仓库最新代码后重新部署即可，D1 结构自动增量迁移；个别需要手动动作的条目以「⚠️ 升级注意」标出。开发线的完整迭代细节见各仓库 git log——这里是给部署用户的要点。
 
@@ -71,6 +71,6 @@
 - 运维省心：媒体库体检（未引用 / 重复文件扫描清理）、回收站（删除 30 天可找回）、一键灰度 / 闭站、定时备份与告警
 - 五套主题全部适配移动端；官方演示站每 2 小时自动重置体验
 
-[Unreleased]: https://github.com/lovexw/bloghao/compare/v2.1.0...HEAD
-[2.1.0]: https://github.com/lovexw/bloghao/compare/v2.0.0...v2.1.0
-[2.0.0]: https://github.com/lovexw/bloghao/releases/tag/v2.0.0
+[Unreleased]: https://github.com/bloghao/bloghao/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/bloghao/bloghao/compare/v2.0.0...v2.1.0
+[2.0.0]: https://github.com/bloghao/bloghao/releases/tag/v2.0.0
