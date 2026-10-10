@@ -16,6 +16,8 @@ import path from 'node:path'
 import { randomToken, hashPassword, safeEqual, rateLimit } from '../src/auth'
 
 const CONTROL_PASSWORD = process.env.CONTROL_PASSWORD || ''
+/** 登录账户名（默认 admin）：带用户名的登录表单方便浏览器密码管理器记住整套凭据 */
+const CONTROL_USERNAME = (process.env.CONTROL_USERNAME || 'admin').toLowerCase()
 const SESSION_TTL_MS = 12 * 60 * 60_000 // 12 小时
 const SESSION_COOKIE = 'xw_control_session'
 
@@ -171,7 +173,7 @@ function tenantDir(host: string): string {
   return path.join(process.env.TENANTS_DIR || 'data/tenants', host)
 }
 
-function statLine(host: string, cfg: TenantConfig, live: boolean): string {
+function tenantMeta(host: string, cfg: TenantConfig, live: boolean): string {
   const size = fmtBytes(dirSize(tenantDir(host)))
   const mode = cfg.demo ? '演示种子' : '真实站'
   const storage = cfg.storage === 'r2' ? 'R2' : '本地盘'
@@ -182,8 +184,7 @@ function statLine(host: string, cfg: TenantConfig, live: boolean): string {
       return '—'
     }
   })()
-  const state = !live ? (cfg.disabled ? '已停用' : '未加载') : '运行中'
-  return `${mode} · ${storage} · ${size} · ${created} · ${state}`
+  return `${mode} · ${storage} · ${size} · ${created} 创建`
 }
 
 // ── HTML 渲染（纯表单，无 JS 无内联事件）──────────────────────────────────
@@ -191,7 +192,7 @@ function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string)
 }
 
-function page(title: string, body: string, flash = ''): string {
+function page(title: string, body: string, flash = '', authed = false): string {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -200,42 +201,211 @@ function page(title: string, body: string, flash = ''): string {
 <meta name="robots" content="noindex, nofollow">
 <title>${esc(title)} · 控制面</title>
 <style>
-  :root { color-scheme: light; }
-  * { box-sizing: border-box; }
-  body { font: 15px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; background: #f5f5f4; color: #1c1917; }
-  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  .sub { color: #78716c; font-size: 13px; margin-bottom: 20px; }
-  .card { background: #fff; border: 1px solid #e7e5e4; border-radius: 10px; padding: 16px 20px; margin-bottom: 16px; }
+  /* ===== 控制面 —— 与官网 bloghao.com 同源「纸墨朱砂」设计语言 ===== */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    color-scheme: light;
+    --accent: #b23a29;
+    --accent-dark: #962e1e;
+    --accent-soft: rgba(178, 58, 41, 0.08);
+    --bg: #faf8f4;
+    --tint: #f4efe7;
+    --card: #ffffff;
+    --ink: #211d19;
+    --sub: #6e675e;
+    --line: #e8e1d6;
+    --radius: 18px;
+    --shadow: 0 10px 40px rgba(32, 29, 26, 0.08);
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", system-ui, sans-serif;
+    background: var(--bg); color: var(--ink); line-height: 1.7;
+    -webkit-text-size-adjust: 100%;
+  }
+  /* 页面底纹：官网 hero 同款朱砂晕染 */
+  body::before {
+    content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background:
+      radial-gradient(ellipse 60% 45% at 18% 0%, rgba(178, 58, 41, 0.08), transparent),
+      radial-gradient(ellipse 50% 40% at 85% 8%, rgba(178, 58, 41, 0.05), transparent),
+      linear-gradient(180deg, #f6efe7 0%, var(--bg) 78%);
+  }
+  /* 顶栏：官网导航同款毛玻璃 */
+  .topbar {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(250, 248, 244, 0.85);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--line);
+  }
+  .topbar-inner {
+    max-width: 1080px; margin: 0 auto; padding: 0 24px; height: 62px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .brand { display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 16px; color: var(--ink); text-decoration: none; }
+  .brand-icon {
+    width: 26px; height: 26px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--accent), #c25440);
+    color: #fff; font-size: 13px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 12px rgba(178, 58, 41, 0.3);
+  }
+  .brand-en { color: var(--sub); font-weight: 600; font-size: 12.5px; }
+  .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    border-radius: 999px; padding: 4px 13px; font-size: 12.5px; font-weight: 600;
+    white-space: nowrap;
+  }
+  .pill.ok { background: rgba(34, 128, 84, 0.09); color: #1e6b47; }
+  .pill.ok::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #22a06b; box-shadow: 0 0 0 3px rgba(34, 160, 107, 0.18); }
+  .pill.off { background: #fdf0ee; color: var(--accent-dark); }
+  .pill.off::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+  .pill.demo { background: rgba(176, 127, 29, 0.1); color: #8a6215; }
+  .pill.wait { background: var(--tint); color: var(--sub); }
+
+  main { max-width: 1080px; margin: 0 auto; padding: 30px 24px 72px; }
+  .page-head { margin-bottom: 22px; }
+  h1 { font-size: 24px; font-weight: 800; letter-spacing: 0.01em; }
+  .sub { color: var(--sub); font-size: 13.5px; margin-top: 4px; }
+  h2 { font-size: 16.5px; font-weight: 700; margin: 0 0 12px; letter-spacing: 0.01em; }
+  h2 .muted { font-weight: 400; font-size: 12.5px; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 22px 24px; margin-bottom: 18px;
+    transition: box-shadow 0.25s ease, border-color 0.25s ease;
+  }
+  .card:hover { box-shadow: var(--shadow); border-color: rgba(178, 58, 41, 0.22); }
+  .card-flat { padding: 0; overflow: hidden; }
+  .card-flat > h2 { padding: 16px 22px 0; }
+
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #f0efee; vertical-align: top; }
-  th { color: #78716c; font-weight: 500; font-size: 13px; }
-  td.mono { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
-  .btn { display: inline-block; border: 1px solid #d6d3d1; background: #fff; color: #1c1917; border-radius: 8px; padding: 6px 14px; font-size: 14px; cursor: pointer; text-decoration: none; }
-  .btn:hover { background: #f5f5f4; }
-  .btn.primary { background: #1c1917; border-color: #1c1917; color: #fff; }
-  .btn.danger { color: #b91c1c; border-color: #fecaca; }
-  .btn.danger:hover { background: #fef2f2; }
-  form.inline { display: inline; }
-  input[type=text], input[type=password] { border: 1px solid #d6d3d1; border-radius: 8px; padding: 8px 12px; font-size: 16px; width: 100%; }
-  label { display: block; font-size: 13px; color: #78716c; margin: 10px 0 4px; }
-  .flash { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; border-radius: 10px; padding: 12px 16px; margin-bottom: 16px; font-size: 14px; word-break: break-all; }
-  .flash.err { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
-  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
-  .row > div { flex: 1; min-width: 200px; }
-  .muted { color: #a8a29e; font-size: 12px; }
-  .pill { display: inline-block; border-radius: 999px; padding: 1px 10px; font-size: 12px; }
-  .pill.ok { background: #ecfdf5; color: #065f46; }
-  .pill.off { background: #fef2f2; color: #991b1b; }
-  .pill.demo { background: #fffbeb; color: #92400e; }
-  code { background: #f5f5f4; border-radius: 6px; padding: 1px 6px; font-size: 13px; }
-  @media (max-width: 640px) { th, td { padding: 6px 6px; } .hide-sm { display: none; } }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid #f0ebe2; vertical-align: middle; }
+  tr:last-child > td { border-bottom: none; }
+  th { color: var(--sub); font-weight: 600; font-size: 12.5px; letter-spacing: 0.02em; }
+  tbody tr { transition: background 0.15s ease; }
+  tbody tr:hover { background: #fcfaf6; }
+  td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+  .tenant-meta { color: var(--sub); font-size: 12.5px; line-height: 1.55; }
+  td.actions { text-align: right; white-space: nowrap; }
+  td.actions form { display: inline-block; margin-left: 6px; }
+  .table-wrap { overflow-x: auto; }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 7px 16px; border-radius: 999px;
+    font-size: 13.5px; font-weight: 600; font-family: inherit;
+    border: 1.5px solid var(--line); background: var(--card); color: var(--ink);
+    transition: all 0.2s ease; cursor: pointer; text-decoration: none; line-height: 1.5;
+    white-space: nowrap;
+  }
+  .btn:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(32, 29, 26, 0.1); border-color: #d6cec2; }
+  .btn:active { transform: none; box-shadow: none; }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 6px 20px rgba(178, 58, 41, 0.32); }
+  .btn-primary:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
+  .btn-danger { color: var(--accent-dark); border-color: rgba(178, 58, 41, 0.35); }
+  .btn-danger:hover { background: #fdf0ee; border-color: var(--accent); box-shadow: 0 6px 18px rgba(178, 58, 41, 0.15); }
+  .btn-lg { padding: 11px 26px; font-size: 15px; }
+
+  label { display: block; font-size: 13px; font-weight: 600; color: #4a443c; margin: 0 0 6px; }
+  input[type=text], input[type=password] {
+    border: 1.5px solid var(--line); border-radius: 12px; padding: 10px 14px;
+    font-size: 16px; font-family: inherit; width: 100%; background: #fff; color: var(--ink);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  input[type=text]:focus, input[type=password]:focus {
+    outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 4px rgba(178, 58, 41, 0.12);
+  }
+  input[type=checkbox] { width: auto; accent-color: var(--accent); }
+  .check-label { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+  .row > div { flex: 1; min-width: 220px; }
+  .row > div.fixed { flex: 0 0 auto; min-width: 0; }
+
+  .flash {
+    display: flex; gap: 10px; align-items: flex-start;
+    background: rgba(34, 128, 84, 0.07); border: 1px solid rgba(34, 160, 107, 0.35); color: #1e6b47;
+    border-radius: 14px; padding: 13px 18px; margin-bottom: 18px; font-size: 14px; word-break: break-all;
+    animation: slide-in 0.35s ease;
+  }
+  .flash.err { background: #fdf0ee; border-color: rgba(178, 58, 41, 0.35); color: var(--accent-dark); }
+  .flash code.big { font-size: 17px; font-weight: 700; padding: 2px 10px; }
+  @keyframes slide-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+
+  .muted { color: var(--sub); font-size: 12.5px; }
+  .fade { animation: fade-in 0.5s ease both; }
+  .fade-1 { animation-delay: 0.05s; } .fade-2 { animation-delay: 0.12s; } .fade-3 { animation-delay: 0.19s; }
+  @keyframes fade-in { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    .flash, .fade, .fade-1, .fade-2, .fade-3 { animation: none; }
+    .btn:hover, .card:hover { transform: none; }
+  }
+
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--accent-soft); color: #8f2f1f; border-radius: 5px; padding: 1px 6px; font-size: 0.92em; }
+  .stat-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .stat {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px 18px;
+  }
+  .stat b { display: block; font-size: 20px; font-weight: 800; letter-spacing: 0.01em; }
+  .stat span { font-size: 12.5px; color: var(--sub); }
+  .stat.accent b { color: var(--accent); }
+
+  /* 登录页：官网 hero 同款居中卡片 + 朱砂光晕 */
+  .login-wrap { min-height: calc(100vh - 62px); display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .login-card {
+    width: 100%; max-width: 400px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 22px;
+    padding: 36px 34px 30px; box-shadow: var(--shadow);
+    animation: fade-in 0.5s ease both;
+  }
+  .login-logo { width: 52px; height: 52px; border-radius: 15px; margin: 0 auto 16px;
+    background: linear-gradient(135deg, var(--accent), #c25440);
+    color: #fff; font-size: 24px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 10px 26px rgba(178, 58, 41, 0.35);
+  }
+  .login-card h1 { text-align: center; font-size: 21px; }
+  .login-card .sub { text-align: center; margin-bottom: 24px; }
+  .login-card label { margin-top: 14px; }
+  .login-card .btn { width: 100%; margin-top: 22px; padding: 12px 22px; font-size: 15px; }
+  .login-tip { text-align: center; margin-top: 16px; }
+
+  .empty { text-align: center; color: var(--sub); font-size: 13.5px; padding: 28px 0; }
+  .logout-form { margin: 0; }
+
+  @media (max-width: 640px) {
+    .topbar-inner, main { padding-left: 16px; padding-right: 16px; }
+    .brand-en { display: none; }
+    .brand { font-size: 15px; }
+    .topbar-inner { height: 56px; gap: 8px; }
+    .topbar-right { gap: 8px; }
+    .topbar .pill { padding: 3px 10px; font-size: 11.5px; }
+    .topbar .btn { padding: 5px 12px; font-size: 12.5px; }
+    .hide-sm { display: none; }
+    /* 移动端表格转卡片式堆叠：不横向滚动，按钮 nowrap 不折行 */
+    .table-wrap { overflow-x: visible; }
+    table, tbody, tr, td { display: block; }
+    thead { display: none; }
+    tr { padding: 13px 0; border-bottom: 1px solid #f0ebe2; }
+    tr:last-child { border-bottom: none; }
+    td { padding: 3px 0; border: none; }
+    td.mono { font-size: 13.5px; font-weight: 600; }
+    td.actions { text-align: left; white-space: normal; }
+    td.actions form { display: inline-block; margin: 8px 8px 0 0; }
+    .card { padding: 18px 16px; }
+  }
 </style>
 </head>
 <body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/"><span class="brand-icon">博</span>博客号控制台 <span class="brand-en">BlogHao Ops</span></a>
+    <div class="topbar-right">${authed ? sessionBadgeHtml() + logoutHtml() : ''}</div>
+  </div>
+</header>
 <main>
-<h1>${esc(title)}</h1>
-<p class="sub">${esc(opsSubtitle())}</p>
 ${flash ? `<div class="flash${flash.startsWith('✗') ? ' err' : ''}">${flash.startsWith('✓!') ? flash.slice(2) : esc(flash)}</div>` : ''}
 ${body}
 </main>
@@ -243,29 +413,40 @@ ${body}
 </html>`
 }
 
-let startedAt = 0
-function opsSubtitle(): string {
-  const days = ((Date.now() - startedAt) / 86400_000).toFixed(1)
-  const mem = process.memoryUsage().rss
-  return `进程 RSS ${fmtBytes(mem)} · 已运行 ${days} 天${cfEnabled() ? ' · DNS 自动记录已启用' : ' · DNS 需手动添加'}`
+/** 顶栏右侧：已登录显示 DNS 状态胶囊 + 退出按钮；未登录（登录页）什么都不出 */
+function sessionBadgeHtml(): string {
+  return `<span class="pill ${cfEnabled() ? 'ok' : 'off'}">${cfEnabled() ? 'DNS 自动记录' : 'DNS 手动模式'}</span>`
 }
+
+function logoutHtml(): string {
+  return `<form class="logout-form" method="post" action="/logout"><button class="btn" type="submit">退出登录</button></form>`
+}
+
+let startedAt = 0
 
 function loginPage(msg = ''): string {
   return page(
-    '控制面登录',
-    `<div class="card">
+    '控制台登录',
+    `<div class="login-wrap">
+<div class="login-card">
+  <div class="login-logo">博</div>
+  <h1>博客号控制台</h1>
+  <p class="sub">xwblog 多租户自托管管理面板</p>
   <form method="post" action="/login">
-    <label for="password">主密码（CONTROL_PASSWORD）</label>
-    <input type="password" id="password" name="password" autofocus autocomplete="current-password" required>
-    <p><button class="btn primary" type="submit">登录</button></p>
-    ${msg ? `<p class="muted">${esc(msg)}</p>` : ''}
+    <label for="username">账户名</label>
+    <input type="text" id="username" name="username" value="${esc(CONTROL_USERNAME === 'admin' ? 'admin' : '')}" placeholder="账户名" autofocus autocomplete="username" autocapitalize="none" spellcheck="false" required>
+    <label for="password">密码</label>
+    <input type="password" id="password" name="password" placeholder="密码" autocomplete="current-password" required>
+    <button class="btn btn-primary" type="submit">登 录</button>
+    ${msg ? `<p class="muted login-tip">${esc(msg)}</p>` : ''}
   </form>
+</div>
 </div>`,
   )
 }
 
 function dashboard(deps: ControlDeps, flash = ''): string {
-  return page('控制面', dashboardBody(deps), flash)
+  return page('控制台', dashboardBody(deps), flash, true)
 }
 
 function dashboardBody(deps: ControlDeps): string {
@@ -274,21 +455,21 @@ function dashboardBody(deps: ControlDeps): string {
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([host, cfg]) => {
       const live = deps.tenants.has(host)
-      const info = statLine(host, cfg, live)
-      const pill = live ? '<span class="pill ok">运行中</span>' : cfg.disabled ? '<span class="pill off">已停用</span>' : '<span class="pill demo">未加载</span>'
+      const meta = tenantMeta(host, cfg, live)
+      const pill = live ? '<span class="pill ok">运行中</span>' : cfg.disabled ? '<span class="pill off">已停用</span>' : '<span class="pill wait">未加载</span>'
       const actions = [
-        live ? `<form class="inline" method="post" action="/disable"><input type="hidden" name="host" value="${esc(host)}"><button class="btn" type="submit">停用</button></form>` : '',
-        cfg.disabled ? `<form class="inline" method="post" action="/enable"><input type="hidden" name="host" value="${esc(host)}"><button class="btn" type="submit">启用</button></form>` : '',
-        `<form class="inline" method="post" action="/reset"><input type="hidden" name="host" value="${esc(host)}"><button class="btn" type="submit">重置管理员密码</button></form>`,
-        `<form class="inline" method="get" action="/delete"><input type="hidden" name="host" value="${esc(host)}"><button class="btn danger" type="submit">删除…</button></form>`,
+        live ? `<form method="post" action="/disable"><input type="hidden" name="host" value="${esc(host)}"><button class="btn" type="submit">停用</button></form>` : '',
+        cfg.disabled ? `<form method="post" action="/enable"><input type="hidden" name="host" value="${esc(host)}"><button class="btn" type="submit">启用</button></form>` : '',
+        `<form method="post" action="/reset"><input type="hidden" name="host" value="${esc(host)}"><button class="btn" type="submit">重置密码</button></form>`,
+        `<form method="get" action="/delete"><input type="hidden" name="host" value="${esc(host)}"><button class="btn btn-danger" type="submit">删除…</button></form>`,
       ]
         .filter(Boolean)
-        .join(' ')
+        .join('')
       return `<tr>
   <td class="mono">${esc(host)}</td>
-  <td>${info}</td>
+  <td class="tenant-meta hide-sm">${esc(meta)}</td>
   <td>${pill}</td>
-  <td>${actions}</td>
+  <td class="actions">${actions}</td>
 </tr>`
     })
     .join('')
@@ -297,7 +478,9 @@ function dashboardBody(deps: ControlDeps): string {
     .map((l) => `<tr><td class="mono hide-sm">${esc(l.ts.slice(0, 16).replace('T', ' '))}</td><td>${esc(l.action)}</td><td class="mono">${esc(l.detail)}</td></tr>`)
     .join('')
 
-  const totalSize = Object.keys(cfgAll.tenants).reduce((n, h) => n + dirSize(tenantDir(h)), 0)
+  const tenantKeys = Object.keys(cfgAll.tenants)
+  const liveCount = tenantKeys.filter((h) => deps.tenants.has(h)).length
+  const totalSize = tenantKeys.reduce((n, h) => n + dirSize(tenantDir(h)), 0)
   let diskTotal = 0
   let diskFree = 0
   try {
@@ -307,40 +490,63 @@ function dashboardBody(deps: ControlDeps): string {
   } catch {
     /* statfs 不可用时略过 */
   }
+  const days = ((Date.now() - startedAt) / 86400_000).toFixed(1)
+  const mem = fmtBytes(process.memoryUsage().rss)
 
   return `
-<div class="card">
-  <h2 style="font-size:16px;margin:0 0 10px">开通新网站</h2>
+<div class="page-head fade">
+  <h1>控制台</h1>
+  <p class="sub">xwblog 多租户自托管管理面板 · 开通即自动建 DNS 与证书</p>
+</div>
+
+<div class="stat-strip fade fade-1">
+  <div class="stat accent"><b>${liveCount}<span style="font-size:13px;font-weight:600;color:var(--sub)"> / ${tenantKeys.length}</span></b><span>运行中 / 租户总数</span></div>
+  <div class="stat"><b>${fmtBytes(totalSize)}</b><span>数据占用${diskTotal ? ` · 可用 ${fmtBytes(diskFree)}` : ''}</span></div>
+  <div class="stat"><b>${days}<span style="font-size:13px;font-weight:600;color:var(--sub)"> 天</span></b><span>进程运行 · RSS ${esc(mem)}</span></div>
+  <div class="stat"><b style="font-size:15px;line-height:30px">${cfEnabled() ? '已启用' : '未配置'}</b><span>DNS 自动记录（Cloudflare）</span></div>
+</div>
+
+<div class="card fade fade-2">
+  <h2>开通新网站</h2>
   <form method="post" action="/create">
     <div class="row">
       <div>
-        <label for="host">域名（DNS ${cfEnabled() ? '将自动创建，橙云代理' : '需手动指向本机，Cloudflare 橙云'}）</label>
+        <label for="host">域名</label>
         <input type="text" id="host" name="host" placeholder="例如 someone.bloghao.com" required>
       </div>
-      <div style="flex:0;min-width:120px">
-        <label><input type="checkbox" name="demo" value="1" style="width:auto"> 演示种子站</label>
+      <div class="fixed">
+        <label class="check-label"><input type="checkbox" name="demo" value="1"> 演示种子站</label>
       </div>
-      <div style="flex:0">
-        <button class="btn primary" type="submit">开通</button>
+      <div class="fixed">
+        <button class="btn btn-primary" type="submit">开通</button>
       </div>
     </div>
+    <p class="muted" style="margin-top:10px">${cfEnabled() ? 'DNS 将自动创建（橙云代理），证书首次访问自动签发' : '未配置 CF_API_TOKEN：需手动添加 DNS 记录指向本机'}</p>
   </form>
 </div>
 
-<div class="card">
-  <h2 style="font-size:16px;margin:0 0 10px">租户（${Object.keys(cfgAll.tenants).length}）<span class="muted" style="font-weight:400">· 磁盘合计 ${fmtBytes(totalSize)}${diskTotal ? ` / 可用 ${fmtBytes(diskFree)}` : ''}</span></h2>
+<div class="card card-flat fade fade-2">
+  <h2>租户（${tenantKeys.length}）<span class="muted">· 数据合计 ${fmtBytes(totalSize)}</span></h2>
+  <div class="table-wrap">
   <table>
-    <tr><th>域名</th><th>信息</th><th>状态</th><th>操作</th></tr>
-    ${rows}
+    <thead><tr><th>域名</th><th class="hide-sm">信息</th><th>状态</th><th style="text-align:right">操作</th></tr></thead>
+    <tbody>
+    ${rows || '<tr><td colspan="4" class="empty">还没有租户，用上面表单开通第一个网站吧。</td></tr>'}
+    </tbody>
   </table>
+  </div>
 </div>
 
-<div class="card">
-  <h2 style="font-size:16px;margin:0 0 10px">操作日志</h2>
+<div class="card card-flat fade fade-3">
+  <h2>操作日志<span class="muted"> · 最近 20 条（时间为 UTC）</span></h2>
+  <div class="table-wrap">
   <table>
-    <tr><th class="hide-sm">时间（UTC）</th><th>动作</th><th>详情</th></tr>
-    ${logs || '<tr><td colspan="3" class="muted">暂无</td></tr>'}
+    <thead><tr><th class="hide-sm">时间</th><th>动作</th><th>详情</th></tr></thead>
+    <tbody>
+    ${logs || '<tr><td colspan="3" class="empty">暂无操作记录。</td></tr>'}
+    </tbody>
   </table>
+  </div>
 </div>`
 }
 
@@ -394,15 +600,18 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
   const path = url.pathname
   startedAt ||= Date.now() - Number(process.uptime() * 1000)
 
-  // 登录：限流 10 次 / 10 分钟（复用 src/auth.ts 的进程内限流桶）
+  // 登录：账户名 + 密码 双字段，限流 10 次 / 10 分钟（复用 src/auth.ts 的进程内限流桶）
   if (method === 'POST' && path === '/login') {
     if (!rateLimit(`control-login:${deps.host}`, 10, 10 * 60_000)) {
       return sendHtml(res, loginPage('尝试次数过多，请 10 分钟后再试。'), 429)
     }
     const body = await readBody(req)
-    if (!safeEqual(body.get('password') || '', CONTROL_PASSWORD)) {
+    const user = body.get('username') || ''
+    const pass = body.get('password') || ''
+    // 账户名/密码都走常时比较，避免组合枚举侧信道
+    if (!safeEqual(user.toLowerCase(), CONTROL_USERNAME) || !safeEqual(pass, CONTROL_PASSWORD)) {
       deps.log('登录失败')
-      return sendHtml(res, loginPage('密码不对。'), 403)
+      return sendHtml(res, loginPage('账户名或密码不对。'), 403)
     }
     const token = issueSession()
     opsLog('登录', '控制面登录成功')
@@ -425,7 +634,7 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
   }
 
   if (method === 'POST' && !originOk(req, url)) {
-    return sendHtml(res, page('拒绝', '<div class="card">跨站请求被拒绝。</div>'), 403)
+    return sendHtml(res, page('拒绝', '<div class="card">跨站请求被拒绝。</div>', '', true), 403)
   }
 
   const form = method === 'POST' ? await readBody(req) : null
@@ -523,17 +732,20 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
       page(
         '删除确认',
         `<div class="card">
-  <p>即将<b>彻底删除</b> <code>${esc(target)}</code> 的配置、数据库与全部图片，且不可恢复。</p>
+  <h2>⚠️ 彻底删除 <code>${esc(target)}</code>？</h2>
+  <p class="tenant-meta" style="font-size:13.5px;margin-bottom:14px">将删除该站点的配置、数据库与全部图片，<b>不可恢复</b>。DNS 记录${cfEnabled() ? '会一并清除' : '需手动清理'}。</p>
   <form method="post" action="/delete">
     <input type="hidden" name="host" value="${esc(target)}">
     <label for="confirm">输入完整域名以确认</label>
     <input type="text" id="confirm" name="confirm" placeholder="${esc(target)}" required>
-    <p><button class="btn danger" type="submit">永久删除</button> <a class="btn" href="/">取消</a></p>
+    <p style="margin-top:16px"><button class="btn btn-danger" type="submit">永久删除</button> <a class="btn" href="/">取消</a></p>
   </form>
 </div>`,
+        '',
+        true,
       ),
     )
   }
 
-  return sendHtml(res, page('404', '<div class="card">没有这个页面。</div>'), 404)
+  return sendHtml(res, page('404', '<div class="card">没有这个页面。</div>', '', true), 404)
 }
