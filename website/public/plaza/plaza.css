@@ -110,12 +110,20 @@
   padding: 1px 8px;
   font-size: 0.72rem;
 }
+/* 认证徽章：X 式锯齿圆章（纯图标，颜色 #1d9bf0 与 X 认证同源）。
+   尺寸跟所在文字走（em），在站点名旁是小蓝章，不抢视觉但一眼认得出 */
 .plaza-badge {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
   color: #1d9bf0;
   font-size: 0.78rem;
+}
+.plaza-badge-icon {
+  width: 1em;
+  height: 1em;
+  display: block;
+  /* 徽章底色与印章边缘都由 SVG path 承担，这里只负责基线微调 */
+  transform: translateY(0.5px);
 }
 
 .plaza-side { display: grid; gap: 16px; position: sticky; top: 84px; }

@@ -7,6 +7,12 @@
   var sitesEl = document.getElementById('plaza-sites')
   var state = { kind: '' }
 
+  // 认证徽章：X 式锯齿圆章 + 对勾（纯 SVG，图标本身已示意，不再配文字；颜色跟 X 用同款天蓝 #1d9bf0）
+  var BADGE_SVG =
+    '<svg class="plaza-badge-icon" viewBox="0 0 24 24" role="img" aria-label="已认证" focusable="false">' +
+    '<path fill="#1d9bf0" d="M12 1.75c.5 0 .97.22 1.29.6l1.4 1.68 2.14-.5a1.66 1.66 0 0 1 1.94 1.13l.63 2.1 2.06.77c.85.32 1.28 1.27.96 2.12l-.77 2.06.5 2.14a1.66 1.66 0 0 1-1.13 1.94l-2.1.63-.77 2.06a1.66 1.66 0 0 1-2.12.96l-2.06-.77-2.14.5a1.66 1.66 0 0 1-1.94-1.13l-.63-2.1-2.06-.77a1.66 1.66 0 0 1-.96-2.12l.77-2.06-.5-2.14A1.66 1.66 0 0 1 4.6 6.61l2.1-.63.77-2.06A1.66 1.66 0 0 1 9.59 2.96l2.06.77 1.06-.98A1.66 1.66 0 0 1 12 1.75Z"/>' +
+    '<path fill="#fff" d="m10.8 15.3-2.9-2.9 1.3-1.3 1.6 1.6 4.2-4.2 1.3 1.3-5.5 5.5Z"/></svg>'
+
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (ch) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
@@ -39,7 +45,7 @@
         (it.summary && it.summary !== it.title ? '<p class="plaza-card-summary">' + esc(it.summary) + '</p>' : '') +
         '<div class="plaza-card-meta">' +
         '<a class="plaza-site-link" href="' + esc(it.siteUrl) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()">' + esc(it.siteName) + '</a>' +
-        (it.siteVerified ? '<span class="plaza-badge" title="站点已通过所有权验证">✔︎ 认证</span>' : '') +
+        (it.siteVerified ? '<span class="plaza-badge" title="站点已通过所有权验证">' + BADGE_SVG + '</span>' : '') +
         '<span class="plaza-kind-chip">' + (it.kind === 'post' ? '📝 文章' : '💭 微博') + '</span>' +
         '<span>' + fmtDate(it.publishedAt) + '</span>' +
         '</div></div></a>'
@@ -69,7 +75,7 @@
       html +=
         '<li>' +
         '<a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.name) + '</a>' +
-        (s.verified ? '<span class="plaza-badge" title="站点已通过所有权验证">✔︎</span>' : '') +
+        (s.verified ? '<span class="plaza-badge" title="站点已通过所有权验证">' + BADGE_SVG + '</span>' : '') +
         '<span class="plaza-sites-count">' + (s.items - 0) + ' 条</span>' +
         '</li>'
     }
