@@ -36,6 +36,35 @@ const SITE_DIR = (process.env.SITE_DIR || '').replace(/\/+$/, '')
 const GH_REPO = process.env.SITE_REPO || 'bloghao/bloghao'
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || ''
 
+/**
+ * 广场 hub 统计（可选）：PLAZA_HUB_URL + PLAZA_ADMIN_TOKEN 都配置后，
+ * 仪表盘显示「广场 hub」卡片（接入站点 / 内容量 / feed≈广场页访问 / ingest 上报）。
+ * 两个 env 缺任一即卡片整体不存在；hub 是独立 Worker（协议见 docs/PLAZA.md）
+ */
+const PLAZA_HUB_URL = (process.env.PLAZA_HUB_URL || '').trim().replace(/\/+$/, '')
+const PLAZA_ADMIN_TOKEN = process.env.PLAZA_ADMIN_TOKEN || ''
+
+interface PlazaStats {
+  sites?: { total?: number; active?: number; verified?: number }
+  items?: { total?: number; posts?: number; weibo?: number; last24h?: number }
+  today?: { day?: string; feed?: number; sites?: number; ingest?: number; items?: number }
+  total?: { feed?: number; sites?: number; ingest?: number; items?: number }
+}
+
+/** 拉 hub 全局统计（管理端点）：失败返回 null，卡片降级显示不可达，绝不拖垮仪表盘 */
+async function fetchPlazaStats(): Promise<PlazaStats | null> {
+  try {
+    const res = await fetch(`${PLAZA_HUB_URL}/api/admin/stats`, {
+      headers: { Authorization: `Bearer ${PLAZA_ADMIN_TOKEN}` },
+      signal: AbortSignal.timeout(4_000),
+    })
+    if (!res.ok) return null
+    return (await res.json()) as PlazaStats
+  } catch {
+    return null
+  }
+}
+
 interface Tenant {
   host: string
   env: Record<string, unknown>
@@ -293,6 +322,11 @@ function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string)
 }
 
+/** 统计出参兜底：null/undefined/NaN 一律归 0（hub 老版本 / 空库都按 0 展示） */
+function num(v: unknown): string {
+  return String(Number(v) || 0)
+}
+
 function page(title: string, body: string, flash = '', authed = false): string {
   return `<!doctype html>
 <html lang="zh-CN">
@@ -546,11 +580,13 @@ function loginPage(msg = ''): string {
   )
 }
 
-function dashboard(deps: ControlDeps, flash = ''): string {
-  return page('控制台', dashboardBody(deps), flash, true)
+async function dashboard(deps: ControlDeps, flash = ''): Promise<string> {
+  // 广场统计按需拉取（4s 超时）：hub 不可达时卡片降级，不影响其余面板
+  const plazaStats = PLAZA_HUB_URL && PLAZA_ADMIN_TOKEN ? await fetchPlazaStats() : null
+  return page('控制台', dashboardBody(deps, plazaStats), flash, true)
 }
 
-function dashboardBody(deps: ControlDeps): string {
+function dashboardBody(deps: ControlDeps, plazaStats: PlazaStats | null): string {
   const cfgAll = deps.readTenantsConfig()
   const rows = Object.entries(cfgAll.tenants)
     .sort((a, b) => a[0].localeCompare(b[0]))
@@ -618,6 +654,25 @@ ${
       : '版本未记录（点右侧按钮完成首次同步）'
   }</p>
   <form method="post" action="/website-sync"><button class="btn btn-primary" type="submit">同步 GitHub 最新版本</button></form>
+</div>`
+    : ''
+}
+
+${
+  PLAZA_HUB_URL && PLAZA_ADMIN_TOKEN
+    ? `<div class="card fade fade-2">
+  <h2>广场 hub <span class="muted">· ${esc(PLAZA_HUB_URL).replace(/^https?:\/\//, '')} · <a href="https://bloghao.com/plaza/" style="color:var(--accent)">查看广场 ↗</a></span></h2>
+  ${
+    plazaStats
+      ? `<div class="stat-strip" style="margin-bottom:8px">
+    <div class="stat accent"><b>${num(plazaStats.sites?.active)}<span style="font-size:13px;font-weight:600;color:var(--sub)"> / ${num(plazaStats.sites?.total)}</span></b><span>活跃 / 接入站点 · 认证 ${num(plazaStats.sites?.verified)}</span></div>
+    <div class="stat"><b>${num(plazaStats.items?.total)}</b><span>广场内容（文章 ${num(plazaStats.items?.posts)} · 微博 ${num(plazaStats.items?.weibo)}）</span></div>
+    <div class="stat"><b>${num(plazaStats.today?.feed)}</b><span>今日 feed 拉取 ≈ 广场页访问</span></div>
+    <div class="stat"><b>${num(plazaStats.today?.ingest)}<span style="font-size:13px;font-weight:600;color:var(--sub)"> / ${num(plazaStats.total?.ingest)}</span></b><span>今日 / 累计上报 · 今日 ${num(plazaStats.today?.items)} 条</span></div>
+  </div>
+  <p class="muted">统计来自 hub /api/admin/stats（北京日口径）；24 小时新增内容 ${num(plazaStats.items?.last24h)} 条。</p>`
+      : '<p class="tenant-meta">hub 暂时不可达，统计稍后自动恢复。</p>'
+  }
 </div>`
     : ''
 }
@@ -746,7 +801,7 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
   }
 
   if (method === 'GET' && path === '/') {
-    return sendHtml(res, sessionOk(req) ? dashboard(deps) : loginPage())
+    return sendHtml(res, sessionOk(req) ? await dashboard(deps) : loginPage())
   }
 
   if (method === 'POST' && !originOk(req, url)) {
@@ -766,10 +821,10 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
 
   if (method === 'POST' && path === '/create') {
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) {
-      return sendHtml(res, dashboard(deps, '✗ 域名形态不合法（小写字母数字与连字符，至少两段）'))
+      return sendHtml(res, await dashboard(deps, '✗ 域名形态不合法（小写字母数字与连字符，至少两段）'))
     }
     const cfgAll = deps.readTenantsConfig()
-    if (cfgAll.tenants[host]) return sendHtml(res, dashboard(deps, `✗ ${host} 已存在`))
+    if (cfgAll.tenants[host]) return sendHtml(res, await dashboard(deps, `✗ ${host} 已存在`))
     const demo = form?.get('demo') === '1'
     try {
       cfgAll.tenants[host] = demo ? { demo: true } : {}
@@ -781,7 +836,7 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
       const cfgAll2 = deps.readTenantsConfig()
       delete cfgAll2.tenants[host]
       deps.writeTenantsConfig(cfgAll2)
-      return sendHtml(res, dashboard(deps, `✗ 开通失败：${String(e)}`))
+      return sendHtml(res, await dashboard(deps, `✗ 开通失败：${String(e)}`))
     }
     let flash = `✓ ${host} 已开通`
     if (cfEnabled()) {
@@ -793,7 +848,7 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
       flash += '；请手动添加 DNS：A 记录指向本机（Cloudflare 橙云）'
     }
     opsLog('开通', host + (demo ? '（演示种子）' : ''))
-    return sendHtml(res, dashboard(deps, flash))
+    return sendHtml(res, await dashboard(deps, flash))
   }
 
   if (method === 'POST' && path === '/disable' && host) {
@@ -804,7 +859,7 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
       deps.tenants.delete(host) // 路由摘除；库与目录原样保留
       opsLog('停用', host)
     }
-    return sendHtml(res, dashboard(deps, `✓ ${host} 已停用（数据保留，可随时启用）`))
+    return sendHtml(res, await dashboard(deps, `✓ ${host} 已停用（数据保留，可随时启用）`))
   }
 
   if (method === 'POST' && path === '/enable' && host) {
@@ -816,12 +871,12 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
       deps.tenants.set(host, await deps.createTenantFor(host, cfg, cfgAll.r2))
       opsLog('启用', host)
     }
-    return sendHtml(res, dashboard(deps, `✓ ${host} 已启用`))
+    return sendHtml(res, await dashboard(deps, `✓ ${host} 已启用`))
   }
 
   if (method === 'POST' && path === '/delete' && host) {
     if (form?.get('confirm') !== host) {
-      return sendHtml(res, dashboard(deps, '✗ 确认域名不匹配，未删除'))
+      return sendHtml(res, await dashboard(deps, '✗ 确认域名不匹配，未删除'))
     }
     const cfgAll = deps.readTenantsConfig()
     if (cfgAll.tenants[host]) {
@@ -832,22 +887,22 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
       opsLog('删除', host)
       if (cfEnabled()) await dnsDelete(host)
     }
-    return sendHtml(res, dashboard(deps, `✓ ${host} 已彻底删除（配置 + 数据目录${cfEnabled() ? ' + DNS 记录' : ''}）`))
+    return sendHtml(res, await dashboard(deps, `✓ ${host} 已彻底删除（配置 + 数据目录${cfEnabled() ? ' + DNS 记录' : ''}）`))
   }
 
   if (method === 'POST' && path === '/reset' && host) {
     const flash = await resetAdminPassword(host)
-    return sendHtml(res, dashboard(deps, flash))
+    return sendHtml(res, await dashboard(deps, flash))
   }
 
   // 官网同步：拉 GitHub 最新 tarball 替换 SITE_DIR；SITE_DIR 未配置时端点不存在
   if (method === 'POST' && path === '/website-sync') {
     if (!SITE_DIR) return sendHtml(res, page('404', '<div class="card">没有这个页面。</div>', '', true), 404)
-    if (syncBusy) return sendHtml(res, dashboard(deps, '✗ 已有同步在进行中，请稍候'))
+    if (syncBusy) return sendHtml(res, await dashboard(deps, '✗ 已有同步在进行中，请稍候'))
     syncBusy = true
     try {
       const flash = await websiteSync()
-      return sendHtml(res, dashboard(deps, flash))
+      return sendHtml(res, await dashboard(deps, flash))
     } finally {
       syncBusy = false
     }

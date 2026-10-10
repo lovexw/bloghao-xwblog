@@ -16,6 +16,7 @@ import {
   parseRssItems,
   rssDateToMs,
   scoreFeed,
+  statsDay,
   validateIngest,
   verifyPlazaSignature,
   type PlazaFeedEntry,
@@ -46,6 +47,24 @@ const app = new Hono<{ Bindings: Env }>()
 /** 公开 API 统一 CORS：官网前台 fetch 用（无 Cookie 面开放 CORS 无风险；管理端点不在此列） */
 app.use('/api/feed', cors())
 app.use('/api/sites', cors())
+
+/* ---------------- 调用统计（每日一行，供 ops 控制面 /api/admin/stats 出全局数据） ---------------- */
+
+const STATS_FIELDS = ['feed_hits', 'sites_hits', 'ingest_hits', 'ingest_items'] as const
+type StatsField = (typeof STATS_FIELDS)[number]
+
+/** 计数 +1（n 用于 ingest 的 accepted 批量入账）：统计失败静默，绝不阻塞主流程 */
+async function bumpStats(db: Env['DB'], field: StatsField, n = 1): Promise<void> {
+  if (!STATS_FIELDS.includes(field)) return // hasOwnProperty 口径：字段只来自本文件白名单
+  try {
+    await db
+      .prepare(`INSERT INTO stats (day, ${field}) VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET ${field} = ${field} + ?`)
+      .bind(statsDay(), n, n)
+      .run()
+  } catch {
+    /* 库异常吞掉：少计一次无所谓，别影响 feed/ingest 本身 */
+  }
+}
 
 /** 管理面鉴权：Bearer PLAZA_ADMIN_TOKEN（hub 站长单管理员，与目录人工审核同一信任模型） */
 async function adminAuth(c: Context<{ Bindings: Env }>, next: () => Promise<void>) {
@@ -107,6 +126,7 @@ app.get('/api/feed', async (c) => {
     })),
     limit
   )
+  await bumpStats(c.env.DB, 'feed_hits')
   return c.json({ feed })
 })
 
@@ -118,6 +138,7 @@ app.get('/api/sites', async (c) => {
             (SELECT COUNT(*) FROM items i WHERE i.site_id = s.id) AS items
      FROM sites s WHERE s.disabled = 0 ORDER BY s.verified DESC, s.created_at ASC LIMIT 200`
   ).all()
+  await bumpStats(c.env.DB, 'sites_hits')
   return c.json({ sites: results ?? [] })
 })
 
@@ -170,10 +191,63 @@ app.post('/api/ingest', async (c) => {
   }
   // 活跃心跳：后台站点列表按它看「谁还在推」；180 天无心跳 cron 自动休眠
   await c.env.DB.prepare('UPDATE sites SET last_seen_at = ? WHERE id = ?').bind(Date.now(), site.id).run()
+  await bumpStats(c.env.DB, 'ingest_hits')
+  if (accepted > 0) await bumpStats(c.env.DB, 'ingest_items', accepted)
   return c.json({ ok: true, accepted })
 })
 
 /* ---------------- 管理面 ---------------- */
+
+/** 全局统计（ops 控制面消费）：站点 / 内容 / 今日与累计调用 / 近 14 天趋势。
+ *  单位口径：feed_hits ≈ 广场页访问量（页面加载即拉 feed）；ingest = 站点上报次数 */
+app.get('/api/admin/stats', async (c) => {
+  const num = (v: unknown): number => Number(v) || 0
+  const since24h = Date.now() - 86_400_000
+  const one = async (sql: string, ...bind: (string | number)[]): Promise<Record<string, unknown>> => {
+    try {
+      return ((await c.env.DB.prepare(sql).bind(...bind).first()) ?? {}) as Record<string, unknown>
+    } catch {
+      return {}
+    }
+  }
+  const [sites, items, today, total, daily] = await Promise.all([
+    one(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN disabled = 0 THEN 1 ELSE 0 END) AS active,
+              SUM(CASE WHEN verified = 1 THEN 1 ELSE 0 END) AS verified
+       FROM sites`
+    ),
+    one(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN kind = 'post' THEN 1 ELSE 0 END) AS posts,
+              SUM(CASE WHEN kind = 'weibo' THEN 1 ELSE 0 END) AS weibo,
+              SUM(CASE WHEN synced_at >= ? THEN 1 ELSE 0 END) AS last24h
+       FROM items`,
+      since24h
+    ),
+    one(
+      `SELECT feed_hits AS feed, sites_hits AS sites, ingest_hits AS ingest, ingest_items AS items
+       FROM stats WHERE day = ?`,
+      statsDay()
+    ),
+    one(
+      `SELECT SUM(feed_hits) AS feed, SUM(sites_hits) AS sites, SUM(ingest_hits) AS ingest, SUM(ingest_items) AS items
+       FROM stats`
+    ),
+    c.env.DB
+      .prepare(`SELECT day, feed_hits AS feed, ingest_hits AS ingest, ingest_items AS items FROM stats ORDER BY day DESC LIMIT 14`)
+      .all()
+      .then((r) => (r.results ?? []).reverse())
+      .catch(() => []),
+  ])
+  return c.json({
+    sites: { total: num(sites.total), active: num(sites.active), verified: num(sites.verified) },
+    items: { total: num(items.total), posts: num(items.posts), weibo: num(items.weibo), last24h: num(items.last24h) },
+    today: { day: statsDay(), feed: num(today.feed), sites: num(today.sites), ingest: num(today.ingest), items: num(today.items) },
+    total: { feed: num(total.feed), sites: num(total.sites), ingest: num(total.ingest), items: num(total.items) },
+    daily,
+  })
+})
 
 /** 注册站点：token 明文只在创建返回这一次（与内核 SECRET_SETTINGS 同口径），丢了就 rotate */
 app.post('/api/admin/sites', async (c) => {

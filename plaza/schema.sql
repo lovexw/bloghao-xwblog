@@ -33,3 +33,13 @@ CREATE TABLE IF NOT EXISTS items (
 );
 CREATE INDEX IF NOT EXISTS idx_items_site ON items(site_id);
 CREATE INDEX IF NOT EXISTS idx_items_pub ON items(published_at);
+
+-- 调用统计（每日一行，北京日口径）：公开面拉取与上报计数，供 ops 控制面出全局数据。
+-- 按天一行增长（几百站量级一年 365 行），无清理压力；统计失败不阻塞主流程（代码侧吞错）
+CREATE TABLE IF NOT EXISTS stats (
+  day TEXT PRIMARY KEY,                 -- 北京日期 YYYY-MM-DD（与内核时间口径一致：UTC+8）
+  feed_hits INTEGER NOT NULL DEFAULT 0, -- /api/feed 拉取次数 ≈ 广场页访问量（页面加载即拉）
+  sites_hits INTEGER NOT NULL DEFAULT 0,-- /api/sites 名录拉取次数
+  ingest_hits INTEGER NOT NULL DEFAULT 0,-- /api/ingest 成功上报次数（签名通过后计）
+  ingest_items INTEGER NOT NULL DEFAULT 0-- 成功入库条数（accepted 合计）
+);

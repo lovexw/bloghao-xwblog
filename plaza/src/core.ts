@@ -235,3 +235,9 @@ export function rssDateToMs(s: string, now = Date.now()): number {
   const t = Date.parse(s)
   return Number.isFinite(t) && t > 0 ? t : now
 }
+
+/** 统计日 key：北京时间日期 YYYY-MM-DD（与内核时间纪律同口径：+8h 后取 UTC 分量；
+ *  plaza 是独立模块不 import src/utils，这里按同一算法本地实现，tests 有镜像用例守着） */
+export function statsDay(now = Date.now()): string {
+  return new Date(now + 8 * 3600_000).toISOString().slice(0, 10)
+}

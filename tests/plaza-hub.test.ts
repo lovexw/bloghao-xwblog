@@ -229,3 +229,12 @@ test('rssDateToMs：RFC822 与 ISO8601 都能吃，垃圾回退 now', () => {
   assert.equal(rssDateToMs('昨天', now), now)
   assert.equal(rssDateToMs('', now), now)
 })
+
+test('statsDay：北京日口径（+8h 取 UTC 分量，0-8 点不算前一天）', async () => {
+  const { statsDay } = await import('../plaza/src/core.ts')
+  // 2026-10-11 02:00 +08:00 = 前一日 18:00 UTC —— 北京日应为 10-11 而非 10-10
+  assert.equal(statsDay(Date.UTC(2026, 9, 10, 18, 0, 0)), '2026-10-11')
+  assert.equal(statsDay(Date.UTC(2026, 9, 10, 15, 59, 0)), '2026-10-10')
+  assert.equal(statsDay(Date.UTC(2026, 9, 10, 16, 0, 0)), '2026-10-11')
+  assert.match(statsDay(), /^\d{4}-\d{2}-\d{2}$/)
+})

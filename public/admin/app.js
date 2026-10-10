@@ -2537,8 +2537,8 @@ async function viewSettings() {
           <div class="sec-desc" id="buffer-channels-status" style="margin-top:6px;">同步时机：微博「发布」时自动推一条到所选渠道（X 免费档 280 字符，超出自动截断；#话题# 会转成 X 的话题格式）</div>
         </div>
         <div class="form-item">
-          <label>广场地址（广场同步插件：文章与微博发布时同步到官网广场 bloghao.com/plaza；一般不用改，自建 hub 才填自己的地址）</label>
-          <input class="input" id="st-plazaEndpoint" placeholder="https://plaza.bloghao.com" value="${esc(s.plazaEndpoint || '')}">
+          <label>广场地址（广场同步插件：文章与微博发布时同步到官网广场 bloghao.com/plaza；留空 = 官方 hub，自建 hub 才填自己的地址）</label>
+          <input class="input" id="st-plazaEndpoint" placeholder="留空 = 官方 hub（https://plaza.bloghao.com）" value="${esc(s.plazaEndpoint || '')}">
         </div>
         <div class="form-item">
           <label>广场站点 Token（在广场 hub 注册站点后发放，见 docs/PLAZA.md；未填 = 不同步）</label>
