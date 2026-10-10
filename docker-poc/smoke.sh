@@ -121,6 +121,8 @@ check "控制面登录成功 303" 303 "$(curl -s -o /dev/null -w '%{http_code}' 
 check "控制面错账户名 403" 403 "$(curl -s -o /dev/null -w '%{http_code}' --resolve "ops.localhost:${PORT}:127.0.0.1" -d 'username=nobody&password=ctrl-pass-123' http://ops.localhost:${PORT}/login)"
 check "控制面错密码 403"   403 "$(curl -s -o /dev/null -w '%{http_code}' --resolve "ops.localhost:${PORT}:127.0.0.1" -d 'username=admin&password=wrong' http://ops.localhost:${PORT}/login)"
 check "控制面登录后仪表盘 200" 200 "$(curl -s -o /dev/null -w '%{http_code}' --resolve "ops.localhost:${PORT}:127.0.0.1" -b "$CJAR" http://ops.localhost:${PORT}/)"
+check "未配置 SITE_DIR 时仪表盘无官网卡片" 1 "$(cctrl -b "$CJAR" http://ops.localhost:${PORT}/ | { grep -c '同步 GitHub 最新版本' || true; } | awk '{print ($1==0)?1:0}')"
+check "未配置 SITE_DIR 时官网同步端点 404" 404 "$(curl -s -o /dev/null -w '%{http_code}' --resolve "ops.localhost:${PORT}:127.0.0.1" -b "$CJAR" -X POST http://ops.localhost:${PORT}/website-sync)"
 check "跨站 Origin 提交被拒 403" 403 "$(curl -s -o /dev/null -w '%{http_code}' --resolve "ops.localhost:${PORT}:127.0.0.1" -b "$CJAR" -H 'Origin: https://evil.example' -d 'host=new.localhost' http://ops.localhost:${PORT}/create)"
 
 # 开站 → 热加载立即生效（免重启）

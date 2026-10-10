@@ -13,6 +13,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { execFile as execFileCb } from 'node:child_process'
 import { randomToken, hashPassword, safeEqual, rateLimit } from '../src/auth'
 
 const CONTROL_PASSWORD = process.env.CONTROL_PASSWORD || ''
@@ -24,6 +25,16 @@ const SESSION_COOKIE = 'xw_control_session'
 /** DNS 自动化（可选）：容器注入 CF_API_TOKEN + CF_ZONE_ID 后，开站自动建记录（橙云） */
 const CF_API_TOKEN = process.env.CF_API_TOKEN || ''
 const CF_ZONE_ID = process.env.CF_ZONE_ID || ''
+
+/**
+ * 官网同步（可选）：把官方仓库 website/public/ 的静态官网纳入控制面托管——
+ * 容器挂载宿主机站点目录（SITE_DIR，如 /var/www/bloghao:/site）后，
+ * 「同步」= 拉 GitHub tarball → tar 解压 → 校验 → 替换站点目录，成功/失败经 flash 返回。
+ * 未设 SITE_DIR 时功能整体不存在（卡片不渲染、端点 404），无官网部署的形态不受影响
+ */
+const SITE_DIR = (process.env.SITE_DIR || '').replace(/\/+$/, '')
+const GH_REPO = process.env.SITE_REPO || 'bloghao/bloghao'
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || ''
 
 interface Tenant {
   host: string
@@ -134,6 +145,96 @@ async function dnsDelete(host: string): Promise<string> {
 
 function cfEnabled(): boolean {
   return Boolean(CF_API_TOKEN && CF_ZONE_ID)
+}
+
+// ── 官网同步（GitHub tarball → 站点目录）─────────────────────────────────
+interface SiteMeta {
+  sha: string
+  subject: string
+  syncedAt: string
+}
+
+function readSiteMeta(): SiteMeta | null {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(SITE_DIR, '.deploy-meta.json'), 'utf8')) as SiteMeta
+  } catch {
+    return null
+  }
+}
+
+function ghHeaders(): Record<string, string> {
+  const h: Record<string, string> = { 'User-Agent': 'xwblog-control-plane', Accept: 'application/vnd.github+json' }
+  if (GITHUB_TOKEN) h.Authorization = `Bearer ${GITHUB_TOKEN}`
+  return h
+}
+
+function execFile(file: string, args: string[], timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFileCb(file, args, { timeout: timeoutMs }, (err) => (err ? reject(err) : resolve()))
+  })
+}
+
+let syncBusy = false
+
+/**
+ * 同步官网到 SITE_DIR。安全边界：目标仓库与 URL 全部来自常量/返回值校验（无用户输入），
+ * SHA 形态白名单校验后才拼进 tarball 地址；tar 参数固定无注入面。
+ * 流程：commits/main 拿 sha → 与已部署 meta 比对（相同免拉）→ 下载 tarball →
+ * tar 解压到 /tmp → 校验 index.html → 清空站点目录（保留 meta）→ 复制新内容 → 写回 meta。
+ * 「清空→复制」之间是唯一非原子窗口（静态文件 1.4MB 级，毫秒计），期间失败重试即可恢复；
+ * 解压与校验全部通过后才动站点目录，旧站要么完整要么新站完整。
+ */
+async function websiteSync(): Promise<string> {
+  const api = `https://api.github.com/repos/${GH_REPO}`
+  let sha = ''
+  let subject = ''
+  try {
+    const res = await fetch(`${api}/commits/main`, { headers: ghHeaders(), signal: AbortSignal.timeout(20_000) })
+    if (!res.ok) return `✗ 查询 GitHub 最新提交失败：HTTP ${res.status}`
+    const j = (await res.json()) as { sha?: string; commit?: { message?: string } }
+    sha = j.sha || ''
+    subject = (j.commit?.message || '').split('\n')[0] || ''
+  } catch (e) {
+    return `✗ 连不上 GitHub：${String(e).slice(0, 120)}`
+  }
+  if (!/^[0-9a-f]{7,40}$/.test(sha)) return '✗ GitHub 返回的提交 SHA 形态异常'
+  const cur = readSiteMeta()
+  if (cur?.sha === sha) return `✓ 官网已是最新（${cur.sha.slice(0, 7)}），无需同步`
+
+  const stamp = Date.now()
+  const tgz = `/tmp/site-${stamp}.tgz`
+  const staging = `/tmp/site-src-${stamp}`
+  try {
+    const res = await fetch(`${api}/tarball/${sha}`, { headers: ghHeaders(), signal: AbortSignal.timeout(120_000) })
+    if (!res.ok) return `✗ 下载源码包失败：HTTP ${res.status}`
+    fs.writeFileSync(tgz, Buffer.from(await res.arrayBuffer()))
+
+    fs.mkdirSync(staging, { recursive: true })
+    await execFile('tar', ['-xzf', tgz, '-C', staging], 60_000)
+    const roots = fs.readdirSync(staging)
+    const publicDir = roots.length ? path.join(staging, roots[0], 'website', 'public') : ''
+    if (!publicDir || !fs.existsSync(path.join(publicDir, 'index.html'))) {
+      return '✗ 源码包里找不到 website/public/index.html（仓库结构变了？）'
+    }
+
+    for (const entry of fs.readdirSync(SITE_DIR)) {
+      if (entry === '.deploy-meta.json') continue
+      fs.rmSync(path.join(SITE_DIR, entry), { recursive: true, force: true })
+    }
+    fs.cpSync(publicDir, SITE_DIR, { recursive: true })
+    fs.writeFileSync(
+      path.join(SITE_DIR, '.deploy-meta.json'),
+      JSON.stringify({ sha, subject, syncedAt: new Date().toISOString() } satisfies SiteMeta, null, 2) + '\n',
+    )
+    opsLog('官网同步', `${sha.slice(0, 7)} ${subject.slice(0, 60)}`)
+    // '✓!' 前缀 = flash 含可信 HTML（page() 对它跳过 esc），sha/subject 已按需处理
+    return `✓!✓ 官网已同步到 <code>${sha.slice(0, 7)}</code> · ${esc(subject.slice(0, 40)) || '（无提交标题）'}`
+  } catch (e) {
+    return `✗ 同步失败：${String(e).slice(0, 160)}`
+  } finally {
+    fs.rmSync(tgz, { force: true })
+    fs.rmSync(staging, { recursive: true, force: true })
+  }
 }
 
 // ── 租户详情 ─────────────────────────────────────────────────────────────
@@ -492,6 +593,7 @@ function dashboardBody(deps: ControlDeps): string {
   }
   const days = ((Date.now() - startedAt) / 86400_000).toFixed(1)
   const mem = fmtBytes(process.memoryUsage().rss)
+  const siteMeta = SITE_DIR ? readSiteMeta() : null
 
   return `
 <div class="page-head fade">
@@ -505,6 +607,20 @@ function dashboardBody(deps: ControlDeps): string {
   <div class="stat"><b>${days}<span style="font-size:13px;font-weight:600;color:var(--sub)"> 天</span></b><span>进程运行 · RSS ${esc(mem)}</span></div>
   <div class="stat"><b style="font-size:15px;line-height:30px">${cfEnabled() ? '已启用' : '未配置'}</b><span>DNS 自动记录（Cloudflare）</span></div>
 </div>
+
+${
+  SITE_DIR
+    ? `<div class="card fade fade-1">
+  <h2>官网 bloghao.com <span class="muted">· ${esc(GH_REPO)}</span></h2>
+  <p class="tenant-meta" style="margin-bottom:12px">当前部署：${
+    siteMeta
+      ? `<code>${esc(siteMeta.sha.slice(0, 7))}</code> · ${esc(siteMeta.subject.slice(0, 40)) || '（无提交标题）'} · ${esc(siteMeta.syncedAt.slice(0, 10))} 同步（UTC）`
+      : '版本未记录（点右侧按钮完成首次同步）'
+  }</p>
+  <form method="post" action="/website-sync"><button class="btn btn-primary" type="submit">同步 GitHub 最新版本</button></form>
+</div>`
+    : ''
+}
 
 <div class="card fade fade-2">
   <h2>开通新网站</h2>
@@ -722,6 +838,19 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
   if (method === 'POST' && path === '/reset' && host) {
     const flash = await resetAdminPassword(host)
     return sendHtml(res, dashboard(deps, flash))
+  }
+
+  // 官网同步：拉 GitHub 最新 tarball 替换 SITE_DIR；SITE_DIR 未配置时端点不存在
+  if (method === 'POST' && path === '/website-sync') {
+    if (!SITE_DIR) return sendHtml(res, page('404', '<div class="card">没有这个页面。</div>', '', true), 404)
+    if (syncBusy) return sendHtml(res, dashboard(deps, '✗ 已有同步在进行中，请稍候'))
+    syncBusy = true
+    try {
+      const flash = await websiteSync()
+      return sendHtml(res, dashboard(deps, flash))
+    } finally {
+      syncBusy = false
+    }
   }
 
   // 删除确认页（dashboard 的「删除…」先到这里，输入域名二次确认才真删）
