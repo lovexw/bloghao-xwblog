@@ -255,6 +255,15 @@ async function shellView(active, contentHTML) {
   if (!state.user) return
   // 路由已切走（或已登出）时放弃本次渲染，防慢响应把旧页面盖回来
   if (active !== pendingRoute) return
+  // 英文测试版（English 0.1）后台提醒：运行中常驻公示；异常回退时换红色警示条（机制见 src/i18n.ts）
+  const s = state.settings || {}
+  let editionBanner = ''
+  if (s.edition === 'en') {
+    editionBanner =
+      s.editionEnStatus === 'fallback'
+        ? `<div style="background:var(--warn,#b45309);color:#fff;font-size:13px;line-height:1.7;padding:9px 16px;">⚠️ <b>英文测试版出现异常，已自动回退中文版</b>（${s.editionEnAt ? new Date(Number(s.editionEnAt)).toLocaleString() + '：' : ''}${esc(s.editionEnError || '未知错误')}）。可在「设置 → 语言版本」重新开启。</div>`
+        : `<div style="background:#1d4ed8;color:#fff;font-size:13px;line-height:1.7;padding:9px 16px;">🧪 <b>英文测试版 English 0.1 正在前台运行（仅供测试）</b>：前台界面为英文并显示测试版横幅，文章与微博正文保持原文；如出现异常会自动回退中文版。可在「设置 → 语言版本」关闭。</div>`
+  }
   // 隐私加固浏览器（Safari 锁定模式等）访问 localStorage 即抛 SecurityError：偏好存取吞异常，降级默认值
   const prefGet = (k) => { try { return localStorage.getItem(k) } catch { return null } }
   const sideMini = prefGet('admin-side') === 'mini'
@@ -275,7 +284,7 @@ async function shellView(active, contentHTML) {
         <button class="side-logout" id="btn-logout">退出</button>
       </div>
     </aside>
-    <main class="main">${contentHTML}</main>
+    <main class="main">${editionBanner}${contentHTML}</main>
     <div class="sheet-mask" id="sheet-mask">
       <div class="side-sheet" role="dialog" aria-label="全部菜单">
         <div class="side-sheet-head"><span>全部菜单</span><button class="side-sheet-close" id="btn-sheet-close" type="button">✕</button></div>
@@ -2416,6 +2425,14 @@ async function viewSettings() {
     </div>
 
     <div class="panel" style="padding:20px;">
+      <div class="form-section"><h3>语言版本（英文测试版 English 0.1）</h3><div class="sec-desc">前台界面语言：文章与微博正文保持原文，仅界面文案切换。英文版渲染出现异常时会自动回退中文版，并在后台顶部提醒；重新开启即重置异常状态</div>
+        <label class="mode-row"><input type="radio" name="st-edition" value="zh"><span class="mode-text"><b>中文（默认）</b><i>前台保持中文界面</i></span></label>
+        <label class="mode-row"><input type="radio" name="st-edition" value="en"><span class="mode-text"><b>English 0.1（英文测试版）</b><i>前台界面切换为英文并在页面顶部公示测试版横幅；测试期间搜索引擎不收录（noindex），出问题自动回退中文版</i></span></label>
+        ${s.edition === 'en' && s.editionEnStatus === 'fallback' ? `<div class="switch-sub" style="color:var(--warn);">⚠️ 上次英文版出现异常已自动回退中文版${s.editionEnAt ? '（' + new Date(Number(s.editionEnAt)).toLocaleString() + '）' : ''}：${esc(s.editionEnError || '未知错误')}。重新选择英文版并保存即可重试。</div>` : ''}
+      </div>
+    </div>
+
+    <div class="panel" style="padding:20px;">
       <div class="form-section"><h3>站点状态</h3><div class="sec-desc">特殊时刻的全站开关：两个都是可逆的，随时保存随时恢复</div>
         <div class="switch-row">
           <div><div class="switch-label">灰度模式</div><div class="switch-sub">全站去色显示（黑白），用于哀悼、纪念等特殊时刻；后台不受影响</div></div>
@@ -2657,6 +2674,10 @@ async function viewSettings() {
   document.querySelector(`input[name="st-siteModeOrder"][value="${orderVal}"]`).checked = true
   syncOrderRow()
 
+  // 语言版本单选回填（英文测试版 English 0.1，键见 src/db.ts DEFAULT_SETTINGS）
+  const savedEdition = s.edition === 'en' ? 'en' : 'zh'
+  document.querySelector(`input[name="st-edition"][value="${savedEdition}"]`).checked = true
+
   document.getElementById('btn-save').addEventListener('click', async (e) => {
     const g = (id) => document.getElementById(id)
     const btn = e.currentTarget
@@ -2671,6 +2692,7 @@ async function viewSettings() {
       ogImageDefault: g('st-ogImageDefault').value.trim(),
       // 主题不在这里改（皮肤页专职）；body 里不带 theme 键，服务端对缺键即保留
       siteMode: modeGroup() === 'both' ? modeOrder() : modeGroup(),
+      edition: (document.querySelector('input[name="st-edition"]:checked') || { value: 'zh' }).value,
       allowComments: g('st-allowComments').checked ? '1' : '0',
       moderateComments: g('st-moderateComments').checked ? '1' : '0',
       postsPerPage: g('st-postsPerPage').value || '10',

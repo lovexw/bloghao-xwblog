@@ -1644,6 +1644,16 @@ api.put('/admin/settings', async (c) => {
       patch[key] = String(clampInt(v, 1, 50, 10))
       continue
     }
+    if (key === 'edition') {
+      // 英文测试版（English 0.1）开关：二值白名单；重新开启即重置回退状态与错误记录
+      patch[key] = v === 'en' ? 'en' : 'zh'
+      if (patch[key] === 'en') {
+        patch.editionEnStatus = 'active'
+        patch.editionEnError = ''
+        patch.editionEnAt = ''
+      }
+      continue
+    }
     patch[key] = v.slice(0, 500)
   }
   // 演示站不允许闭站：有人开了开关，整个重置周期内所有体验者都会看到 503

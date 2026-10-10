@@ -92,25 +92,27 @@ export async function mergeUnlockCookie(existing: string | null, postId: number,
 }
 
 /** 加密文章在解锁前的 meta / JSON-LD 描述：作者摘要照常展示（作者主动公开的导读），否则用固定话术 */
-export function protectedDescription(summary: string): string {
-  return summary || PP_NOTICE
+export function protectedDescription(summary: string, en = false): string {
+  if (summary) return summary
+  return en ? 'This post is locked — enter the password to read the full text.' : PP_NOTICE
 }
 
 /** 解锁前文章页的正文替换：服务端直出的密码表单（纯 HTML form POST + 303 回跳，无 JS 依赖） */
-export function passwordFormHtml(slug: string, o: { error?: 'wrong' | 'slow' } = {}): string {
+export function passwordFormHtml(slug: string, o: { error?: 'wrong' | 'slow'; en?: boolean } = {}): string {
+  const en = !!o.en
   const err =
     o.error === 'slow'
-      ? '<p class="pp-err">尝试次数过多，请 10 分钟后再试。</p>'
+      ? `<p class="pp-err">${en ? 'Too many attempts — try again in 10 minutes.' : '尝试次数过多，请 10 分钟后再试。'}</p>`
       : o.error === 'wrong'
-        ? '<p class="pp-err">密码不对，再试试。</p>'
+        ? `<p class="pp-err">${en ? 'Wrong password — try again.' : '密码不对，再试试。'}</p>`
         : ''
   return `<div class="pp-box">
 <form class="pp-form" method="post" action="/post/${encodeURIComponent(slug)}/unlock">
-  <p class="pp-title">🔒 本文章已加密</p>
-  <p class="pp-tip">作者为本篇文章设置了访问密码，输入密码即可阅读全文，解锁状态保留 30 天。</p>
+  <p class="pp-title">🔒 ${en ? 'This post is locked' : '本文章已加密'}</p>
+  <p class="pp-tip">${en ? 'The author has protected this post with a password. Enter it to read the full text — the unlock lasts 30 days.' : '作者为本篇文章设置了访问密码，输入密码即可阅读全文，解锁状态保留 30 天。'}</p>
   <div class="pp-row">
-    <input class="pp-input" type="password" name="password" maxlength="64" required placeholder="访问密码" aria-label="访问密码" autocomplete="off">
-    <button class="pp-btn" type="submit">解锁</button>
+    <input class="pp-input" type="password" name="password" maxlength="64" required placeholder="${en ? 'Password' : '访问密码'}" aria-label="${en ? 'Password' : '访问密码'}" autocomplete="off">
+    <button class="pp-btn" type="submit">${en ? 'Unlock' : '解锁'}</button>
   </div>
   ${err}
 </form>

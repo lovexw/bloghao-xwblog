@@ -1,10 +1,11 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { scheduledBackup } from './backup'
 import { runScheduledPublish } from './scheduler'
 import { api } from './api'
 import { siteClosedResponse } from './closed'
 import { clientIp, getCookie, rateLimit } from './auth'
 import { ensureSchema, getPostBySlug, getSettings, listCategories, listPublishedTags, listPosts, listSitemapPages, listSitemapPosts } from './db'
+import { isEn, recordEditionFailure } from './i18n'
 import { goPageHtml, isTrustedOutHost } from './outlink'
 import { renderAbout, renderArchive, renderCategory, renderGuestbook, renderHome, renderLinks, renderMember, renderNotFound, renderPage, renderPost, renderRank, renderSearch, renderWeibo } from './pages'
 import { mergeUnlockCookie, PP_COOKIE, PP_TTL_MS, verifyPostPassword } from './protect'
@@ -51,20 +52,38 @@ app.use('*', async (c, next) => {
 
 app.route('/api', api)
 
+/* ---------------- 英文测试版守卫（English 0.1，机制见 src/i18n.ts） ----------------
+ * 英文版渲染抛错时：落库 editionEnStatus=fallback（下一次 getSettings 起 isEn=false，全站自动
+ * 回到中文版）并当场用中文重渲染同一请求——访客无感，后台横幅提醒 + 记录错误摘要，人工重新开启 */
+type PublicHandler = (c: Context<{ Bindings: Env; Variables: { user: SessionUser | null } }>) => Promise<Response>
+function enGuard(h: PublicHandler): PublicHandler {
+  return async (c) => {
+    const settings = await getSettings(c.env.DB)
+    if (!isEn(settings)) return h(c)
+    try {
+      return await h(c)
+    } catch (err) {
+      console.error('[en-edition] render failed, falling back to zh:', err)
+      await recordEditionFailure(c.env.DB, err)
+      return h(c)
+    }
+  }
+}
+
 /* ---------------- 公开页面（SSR + 主题渲染） ---------------- */
-app.get('/', renderHome)
-app.get('/tag/:tag', renderHome)
-app.get('/category/:slug', renderCategory)
-app.get('/post/:slug', renderPost)
-app.get('/page/:slug', renderPage)
-app.get('/about', renderAbout)
-app.get('/archives', renderArchive)
-app.get('/guestbook', renderGuestbook)
-app.get('/weibo', (c) => renderWeibo(c))
-app.get('/links', renderLinks)
-app.get('/member', renderMember)
-app.get('/rank', renderRank)
-app.get('/search', renderSearch)
+app.get('/', enGuard(renderHome))
+app.get('/tag/:tag', enGuard(renderHome))
+app.get('/category/:slug', enGuard(renderCategory))
+app.get('/post/:slug', enGuard(renderPost))
+app.get('/page/:slug', enGuard(renderPage))
+app.get('/about', enGuard(renderAbout))
+app.get('/archives', enGuard(renderArchive))
+app.get('/guestbook', enGuard(renderGuestbook))
+app.get('/weibo', enGuard((c) => renderWeibo(c)))
+app.get('/links', enGuard(renderLinks))
+app.get('/member', enGuard(renderMember))
+app.get('/rank', enGuard(renderRank))
+app.get('/search', enGuard(renderSearch))
 
 // 随机来一篇：从已发布文章里随机挑一篇跳过去（加密文章不进随机池——落上去就是一堵密码墙）
 app.get('/random', async (c) => {
@@ -97,7 +116,7 @@ app.get('/go', async (c) => {
     c.header('X-Content-Type-Options', 'nosniff')
     c.header('Referrer-Policy', 'no-referrer')
     c.header('Cache-Control', 'no-store')
-    return c.html(goPageHtml(target, settings.siteName || 'BlogHao'))
+    return c.html(goPageHtml(target, settings.siteName || 'BlogHao', isEn(settings)))
   }
   return c.redirect('/')
 })

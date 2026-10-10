@@ -376,8 +376,9 @@ test('site.js 微博评论头像镜像：会员图 / 作者站点头像 / 游客
   const seg = src.slice(src.indexOf('function renderWeiboComments'), src.indexOf('function loadWeiboComments'))
   assert.ok(seg.includes('function renderWeiboComments') && seg.includes('adminAvatar'), 'site.js 切片失败：镜像段不在预期位置')
   // esc 注入服务端实现（两端语义一致）；fmtTime / wxqReplace 与头像位无关，stub 掉
-  const factory = new Function('esc', 'fmtTime', 'wxqReplace', seg + '\n;return renderWeiboComments')
-  const render = factory(esc, (t: number) => String(t), (s: string) => s)
+  // EN / T 是英文测试版的前台文案开关（site.js 顶部定义，切片外的依赖）：镜像段按中文路径注入
+  const factory = new Function('esc', 'fmtTime', 'wxqReplace', 'EN', 'T', seg + '\n;return renderWeiboComments')
+  const render = factory(esc, (t: number) => String(t), (s: string) => s, false, (zh: string) => zh)
   const listEl = { innerHTML: '' }
   const rows = [
     { id: 1, parent_id: 0, is_admin: 0, nickname: '会员甲', content: '内容', created_at: TS, member_avatar: '/images/u/202610/a.png' },

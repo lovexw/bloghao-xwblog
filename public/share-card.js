@@ -6,6 +6,10 @@
  * 支持 navigator.share 带文件的设备（iOS/安卓）唤起系统分享面板直发朋友圈，
  * 支持 Clipboard API 的浏览器（桌面 Chrome/Edge/Safari 16+/Firefox 127+）可「复制图片」直接粘贴。 */
 
+/* 英文测试版（English 0.1）：SSR 在 <html data-edition="en"> 上标记，分享面板文案随语言切换 */
+const EN = document.documentElement.getAttribute('data-edition') === 'en'
+const T = (zh, en) => (EN ? en : zh)
+
 const S = 2 // 输出倍率：逻辑 640 宽 × 2 = 1280px 成品
 const W = 640
 const PAD = 40 // 画布到卡片边距
@@ -419,15 +423,15 @@ function ensureModal() {
   const overlay = document.createElement('div')
   overlay.className = 'sc-overlay'
   overlay.innerHTML =
-    '<div class="sc-panel" role="dialog" aria-label="分享卡片">' +
-    '<div class="sc-head"><span class="sc-title">分享卡片</span><button type="button" class="sc-close" aria-label="关闭">×</button></div>' +
+    '<div class="sc-panel" role="dialog" aria-label="' + T('分享卡片', 'Share card') + '">' +
+    '<div class="sc-head"><span class="sc-title">' + T('分享卡片', 'Share card') + '</span><button type="button" class="sc-close" aria-label="' + T('关闭', 'Close') + '">×</button></div>' +
     '<div class="sc-body"><div class="sc-spin" aria-hidden="true"></div></div>' +
-    '<p class="sc-tip">手机长按图片可保存或转发</p>' +
+    '<p class="sc-tip">' + T('手机长按图片可保存或转发', 'Press and hold the image to save or share it') + '</p>' +
     '<div class="sc-foot">' +
-    '<button type="button" class="sc-btn sc-btn-alt" data-act="link" hidden>复制链接</button>' +
-    '<button type="button" class="sc-btn sc-btn-alt" data-act="copy" hidden>复制图片</button>' +
-    '<button type="button" class="sc-btn sc-btn-alt" data-act="share" hidden>分享给朋友</button>' +
-    '<button type="button" class="sc-btn sc-btn-main" data-act="save" disabled>生成中…</button>' +
+    '<button type="button" class="sc-btn sc-btn-alt" data-act="link" hidden>' + T('复制链接', 'Copy link') + '</button>' +
+    '<button type="button" class="sc-btn sc-btn-alt" data-act="copy" hidden>' + T('复制图片', 'Copy image') + '</button>' +
+    '<button type="button" class="sc-btn sc-btn-alt" data-act="share" hidden>' + T('分享给朋友', 'Share') + '</button>' +
+    '<button type="button" class="sc-btn sc-btn-main" data-act="save" disabled>' + T('生成中…', 'Generating…') + '</button>' +
     '</div>' +
     '</div>'
   document.body.appendChild(overlay)
@@ -447,7 +451,7 @@ function ensureModal() {
     if (!state) return
     // 能带图带图（直发聊天/朋友圈，文章标题做文案）；带不动图时分享纯链接（文章）
     if (state.file && navigator.canShare && navigator.canShare({ files: [state.file] })) {
-      navigator.share({ files: [state.file], title: state.title || state.site + '的微博', text: state.text }).catch(function () {})
+      navigator.share({ files: [state.file], title: state.title || (EN ? state.site + "'s note" : state.site + '的微博'), text: state.text }).catch(function () {})
       return
     }
     if (state.link) navigator.share({ title: state.title || state.site, text: state.text, url: state.link }).catch(function () {})
@@ -459,20 +463,20 @@ function ensureModal() {
     const note = function (msg) {
       btn.textContent = msg
       setTimeout(function () {
-        btn.textContent = '复制图片'
+        btn.textContent = T('复制图片', 'Copy image')
       }, 1600)
     }
     try {
       navigator.clipboard.write([new ClipboardItem({ 'image/png': state.file })]).then(
         function () {
-          note('已复制 ✓')
+          note(T('已复制 ✓', 'Copied ✓'))
         },
         function () {
-          note('复制失败')
+          note(T('复制失败', 'Copy failed'))
         }
       )
     } catch (e) {
-      note('复制失败')
+      note(T('复制失败', 'Copy failed'))
     }
   })
   // 复制链接（文章模式）：Clipboard API 优先，老浏览器退回 execCommand
@@ -482,7 +486,7 @@ function ensureModal() {
     const note = function (msg) {
       btn.textContent = msg
       setTimeout(function () {
-        btn.textContent = '复制链接'
+        btn.textContent = T('复制链接', 'Copy link')
       }, 1600)
     }
     const fallbackCopy = function () {
@@ -502,14 +506,14 @@ function ensureModal() {
     try {
       navigator.clipboard.writeText(state.link).then(
         function () {
-          note('已复制 ✓')
+          note(T('已复制 ✓', 'Copied ✓'))
         },
         function () {
-          note(fallbackCopy() ? '已复制 ✓' : '复制失败')
+          note(fallbackCopy() ? T('已复制 ✓', 'Copied ✓') : T('复制失败', 'Copy failed'))
         }
       )
     } catch (e) {
-      note(fallbackCopy() ? '已复制 ✓' : '复制失败')
+      note(fallbackCopy() ? T('已复制 ✓', 'Copied ✓') : T('复制失败', 'Copy failed'))
     }
   })
 
@@ -530,13 +534,13 @@ function close() {
 export async function openShareCard(card) {
   const d = collect(card)
   const m = ensureModal()
-  m.title.textContent = '分享卡片'
+  m.title.textContent = T('分享卡片', 'Share card')
   m.foot.classList.remove('is-grid')
   m.link.hidden = true
-  m.tip.textContent = '手机长按图片可保存或转发'
+  m.tip.textContent = T('手机长按图片可保存或转发', 'Press and hold the image to save or share it')
   m.body.innerHTML = '<div class="sc-spin" aria-hidden="true"></div>'
   m.save.disabled = true
-  m.save.textContent = '生成中…'
+  m.save.textContent = T('生成中…', 'Generating…')
   m.share.hidden = true
   m.copy.hidden = true
   if (state) {
@@ -568,7 +572,7 @@ export async function openShareCard(card) {
       img.alt = '微博分享卡片'
       m.body.appendChild(img)
       m.save.disabled = false
-      m.save.textContent = '保存图片'
+      m.save.textContent = T('保存图片', 'Save image')
       m.share.hidden = !(navigator.canShare && navigator.canShare({ files: [file] }))
       m.copy.hidden = !(navigator.clipboard && window.ClipboardItem)
       resolve()
@@ -797,7 +801,7 @@ function renderArticleCard(d, av, cover) {
     ctx.font = F_CAP
     ctx.fillStyle = SUB
     ctx.textAlign = 'center'
-    ctx.fillText('扫码阅读', qx + qrBox / 2, footTop + qrBox + 12)
+    ctx.fillText(T('扫码阅读', 'Scan to read'), qx + qrBox / 2, footTop + qrBox + 12)
     ctx.textAlign = 'left'
   }
 
@@ -808,13 +812,13 @@ function renderArticleCard(d, av, cover) {
 export async function openArticleShare(btn) {
   const d = collectArticle(btn)
   const m = ensureModal()
-  m.title.textContent = '分享文章'
+  m.title.textContent = T('分享文章', 'Share post')
   m.foot.classList.add('is-grid')
   m.link.hidden = false
-  m.tip.textContent = '手机长按图片可保存转发，扫码可打开本文'
+  m.tip.textContent = T('手机长按图片可保存转发，扫码可打开本文', 'Press and hold to save or share; scan the code to open this post')
   m.body.innerHTML = '<div class="sc-spin" aria-hidden="true"></div>'
   m.save.disabled = true
-  m.save.textContent = '生成中…'
+  m.save.textContent = T('生成中…', 'Generating…')
   m.share.hidden = true
   m.copy.hidden = true
   if (state) {
@@ -843,7 +847,7 @@ export async function openArticleShare(btn) {
       img.alt = '文章分享卡片'
       m.body.appendChild(img)
       m.save.disabled = false
-      m.save.textContent = '保存图片'
+      m.save.textContent = T('保存图片', 'Save image')
       m.share.hidden = !navigator.share
       m.copy.hidden = !(navigator.clipboard && window.ClipboardItem)
       resolve()

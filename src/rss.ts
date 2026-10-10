@@ -1,10 +1,12 @@
 import type { PostRow, SettingsMap } from './types'
+import { isEn } from './i18n'
 import { siteMode } from './render'
 import { sanitizeHtml } from './sanitize'
 import { esc, fmtDate, teaserHtml } from './utils'
 import { cdata, rfc822, xmlEsc } from './xml'
 
 export function buildRss(settings: SettingsMap, posts: PostRow[], siteUrl: string): string {
+  const en = isEn(settings)
   const fullText = settings.rssFullText !== '0'
   const items = posts
     .map((p) => {
@@ -18,7 +20,9 @@ export function buildRss(settings: SettingsMap, posts: PostRow[], siteUrl: strin
           ? `\n      <content:encoded>${cdata(
               memberLocked
                 ? teaserHtml(sanitizeHtml(p.content)) +
-                  '<p>—— 本文为会员专属内容，剩余部分请到站点登录会员后阅读。</p>'
+                  (en
+                    ? '<p>— The rest of this post is members-only. Log in as a member on the site to keep reading.</p>'
+                    : '<p>—— 本文为会员专属内容，剩余部分请到站点登录会员后阅读。</p>')
                 : sanitizeHtml(p.content)
             )}</content:encoded>`
           : ''
@@ -37,7 +41,7 @@ export function buildRss(settings: SettingsMap, posts: PostRow[], siteUrl: strin
     <title>${xmlEsc(settings.siteName)}</title>
     <link>${xmlEsc(siteUrl)}</link>
     <description>${xmlEsc(settings.siteDescription)}</description>
-    <language>zh-CN</language>
+    <language>${en ? 'en' : 'zh-CN'}</language>
     <atom:link href="${xmlEsc(siteUrl)}/rss.xml" rel="self" type="application/rss+xml"/>
 ${items}
   </channel>

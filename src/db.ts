@@ -75,6 +75,13 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   membersEnabled: '0',
   // 排行榜展示条数上限（/rank 页与首页挂件共用，1-50）
   rankTopN: '10',
+  // 英文测试版（内部代号 English 0.1，见 src/i18n.ts）：edition 是后台可切的语言版本；
+  // editionEnStatus 是运行状态（active 正常 / fallback 渲染异常已自动回退中文，重新开启时重置）
+  edition: 'zh',
+  editionEnStatus: 'active',
+  // 英文版最近一次异常的错误摘要与发生时间（后台横幅展示，仅记录，渲染层不读）
+  editionEnError: '',
+  editionEnAt: '',
 }
 
 export async function getSettings(db: D1Database): Promise<SettingsMap> {

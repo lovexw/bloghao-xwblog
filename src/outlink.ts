@@ -163,8 +163,68 @@ export function wrapAnchorHref(rawHref: string, origin?: string): string | null 
 
 /** /go 中间页：脱离主题的极简独立页（同闭站页口径），无 JS——「继续访问」就是普通链接。
  *  必带 noindex；URL 与域名全部过 esc，目标 URL 来自查询串，任何字符都进不了标记结构 */
-export function goPageHtml(target: URL, siteName: string): string {
+export function goPageHtml(target: URL, siteName: string, en = false): string {
   const site = siteName || 'BlogHao'
+  if (en) {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>External link notice - ${esc(site)}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{color-scheme:light dark}
+body{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  background:#f4f4f5;color:#52525b}
+.card{max-width:520px;width:100%;background:#fff;border:1px solid #e4e4e7;border-radius:16px;
+  padding:32px 28px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.badge{width:44px;height:44px;border:1.5px solid #f59e0b;border-radius:50%;display:flex;
+  align-items:center;justify-content:center;color:#f59e0b;margin-bottom:18px}
+h1{font-size:19px;font-weight:600;color:#18181b;margin-bottom:10px}
+p{font-size:14px;line-height:1.8}
+.host{display:inline-block;max-width:100%;margin:14px 0 4px;padding:4px 12px;border-radius:999px;
+  background:#fef3c7;color:#92400e;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;
+  word-break:break-all}
+.url{margin:12px 0 0;padding:10px 12px;border:1px dashed #d4d4d8;border-radius:8px;background:#fafafa;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.6;
+  word-break:break-all;color:#71717a;user-select:all}
+.warn{margin-top:18px;padding:12px 14px;border-radius:8px;background:#fafafa;border:1px solid #e4e4e7;
+  font-size:13px;line-height:1.9;color:#71717a}
+.actions{display:flex;gap:12px;margin-top:24px;flex-wrap:wrap}
+.btn{flex:1;min-width:140px;text-align:center;padding:11px 18px;border-radius:999px;font-size:14px;
+  text-decoration:none;font-weight:500}
+.btn-go{background:#b23a29;color:#fff}
+.btn-back{border:1px solid #d4d4d8;color:#52525b}
+.hint{margin-top:16px;font-size:12px;color:#a1a1aa;text-align:center}
+@media (prefers-color-scheme:dark){
+  body{background:#18181b;color:#a1a1aa}
+  .card{background:#1d1d21;border-color:#2e2e33}
+  h1{color:#f4f4f5}
+  .url{background:#26262b;border-color:#3f3f46;color:#a1a1aa}
+  .warn{background:#26262b;border-color:#3f3f46;color:#a1a1aa}
+  .btn-back{border-color:#3f3f46;color:#d4d4d8}
+}
+</style>
+</head>
+<body>
+<div class="card">
+<div class="badge" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4m0 4h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg></div>
+<h1>You are leaving this site</h1>
+<p>The link you clicked points to a third-party website: <span class="host">${esc(target.hostname)}</span></p>
+<div class="url">${esc(target.href)}</div>
+<div class="warn"><b>Disclaimer</b>: this link does not belong to this site. The third-party website's content, privacy policy and security are unrelated to this site, and this site makes no guarantee about them. Verify the information yourself, watch out for phishing and scams, and never enter this site's password or sensitive personal information on an unfamiliar website.</div>
+<div class="actions">
+<a class="btn btn-go" href="${esc(target.href)}" rel="nofollow noopener noreferrer" target="_blank">Continue</a>
+<a class="btn btn-back" href="/">Back to Home</a>
+</div>
+<p class="hint">Opens in a new window; use your browser's Back button to return to this page</p>
+</div>
+</body>
+</html>`
+  }
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>

@@ -162,6 +162,8 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 
 ## 结构速查
 
+- `src/i18n.ts`：英文测试版（内部代号 **English 0.1**，settings `edition` + `editionEnStatus` 两键）——词典 `tr(en, zh)`（**整串精确匹配，只翻系统内置文案，站长自填内容原样透传**）、英文日期四件套（`fmtDateEn/fmtDateEnShort/fmtDateTimeEn/weiboTimeEn`，与 fmtDate 同北京时间口径）、`enBetaBannerHtml` 公示横幅、`recordEditionFailure` 回退落库（tests/i18n.test.ts 直接导入）。**中文路径必须字节级不变**：`isEn(settings)`（edition=en 且 status≠fallback）为 false 时所有输出与历史版本完全一致，改共享构建器加英文分支时先跑 tests/themes.test.ts + tests/i18n.test.ts；公开页守卫在 index.ts `enGuard`——英文版渲染抛错即落库 status=fallback（全站自动回中文版）并当场用中文重渲染同一请求，后台横幅提醒，重新开启时 api.ts 重置状态；前台 JS 文案由 `<html data-edition="en">` 驱动（site.js / share-card.js 各有一份 T() 小词典，**改服务端文案记得同步客户端镜像**）
+
 - `src/linkmeta.ts`：链接卡片（编辑器「插入链接 → 网址卡片 / 站内文章卡片」）——`fetchLinkMeta` 抓目标页 og 元数据（**SSRF 防线：`fetchableUrl` 只放行 http(s) 公网地址**，私有网段 / 非常规端口拒绝、限长限时、抓不到静默空对象退化占位卡）+ `linkCardHtml` 纯函数组卡（tests/linkmeta.test.ts 直接导入）；卡片是 `a.link-card[data-link-card="link-card"]` 结构化 HTML，存库靠 sanitize 白名单的 `data-link-card` 固定值标记，前台样式在六主题 `.rich .link-card` 段、编辑器内镜像在 admin.css（**改卡片结构两侧同步，标题/摘要截断口径 40/64 字**）；配套端点 `POST /api/admin/tools/linkmeta`（限频 10/分/IP）与 `GET /api/admin/posts/lookup`（轻出参，注册在 `/:id` 之前）
 
 - `src/themes/`：六套主题（wechat 默认 / paper / midnight / minimal / journal / bitcoin）+ `registry.ts` 注册表（十类页面参数是导出的命名类型 `HomeData`/`PostData`/…，新增主题或字段只改 registry 一处；六主题 × 十页面渲染回归在 tests/themes.test.ts，改主题先跑）；`siteNav` 支持可选 `compact` 布局（主条收窄五项 + 会员药丸右置，仅 wechat 传），页脚链接组走 `footLinksFor(s)` 动态生成（排行榜随 membersEnabled 门控）
