@@ -152,6 +152,42 @@ test('scoreFeed：按分排序、limit 收口、出参带站点信息', () => {
   assert.equal(scoreFeed([], 10).length, 0)
 })
 
+test('feed 路由接线：SQL 扁平行必须按 { item, … } 契约包一层再进 scoreFeed（路由曾直接展开喂入必 500）', async () => {
+  // 守法与 index.ts /api/feed 同款：SQL 行 → 组装 → scoreFeed；直接 {...r, siteVerified} 会在
+  // scoreFeed 内 c.item.kind 处抛 TypeError（tests 只能测 core 纯函数，此处镜像接线口径）
+  const { scoreFeed: fn } = await import('../plaza/src/core.ts')
+  const row = {
+    kind: 'post' as const,
+    ref: 'wired',
+    title: '接线正确',
+    summary: '',
+    url: 'https://x.com/post/wired',
+    image: '',
+    publishedAt: 1_800_000_000_000,
+    siteId: 1,
+    siteName: '示例站',
+    siteUrl: 'https://x.com',
+    siteVerified: 1,
+    siteWeight: 2,
+  }
+  const feed = fn(
+    [row].map((r) => ({
+      item: { kind: r.kind, ref: r.ref, title: r.title, summary: r.summary, url: r.url, image: r.image, publishedAt: r.publishedAt },
+      siteId: r.siteId,
+      siteName: r.siteName,
+      siteUrl: r.siteUrl,
+      siteVerified: r.siteVerified === 1,
+      siteWeight: r.siteWeight,
+    })),
+    30,
+    { now: 1_800_000_000_000, rand: () => 0 }
+  )
+  assert.equal(feed.length, 1)
+  assert.equal(feed[0].kind, 'post')
+  assert.equal(feed[0].siteVerified, true)
+  assert.ok(feed[0].score > 0)
+})
+
 test('parseRssItems：RSS2 CDATA / Atom href 兜底 / 非 http link 丢弃', () => {
   const xml = `<?xml version="1.0"?>
 <rss version="2.0"><channel>

@@ -88,7 +88,23 @@ app.get('/api/feed', async (c) => {
       siteWeight: number
     }>()
   const feed: PlazaFeedEntry[] = scoreFeed(
-    (results ?? []).map((r) => ({ ...r, siteVerified: r.siteVerified === 1 })),
+    (results ?? []).map((r) => ({
+      // scoreFeed 的入参是 { item, siteId, … } 包裹形状，SQL 扁平行要按契约组装
+      item: {
+        kind: r.kind,
+        ref: r.ref,
+        title: r.title,
+        summary: r.summary,
+        url: r.url,
+        image: r.image,
+        publishedAt: r.publishedAt,
+      },
+      siteId: r.siteId,
+      siteName: r.siteName,
+      siteUrl: r.siteUrl,
+      siteVerified: r.siteVerified === 1,
+      siteWeight: r.siteWeight,
+    })),
     limit
   )
   return c.json({ feed })
