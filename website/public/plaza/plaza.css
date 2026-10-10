@@ -111,12 +111,13 @@
   font-size: 0.72rem;
 }
 /* 认证徽章：朱砂印（纯图标，色取官网主色 var(--accent)，与站点名红同源——落款与钤印的关系）。
-   尺寸跟所在文字走（em），在站点名旁是小红章，不抢视觉但一眼认得出 */
+   印章要盖得稳：略大于 meta 行小字（1.05rem ≈ 站点名饱和度），缩进零间隙贴着落款 */
 .plaza-badge {
   display: inline-flex;
   align-items: center;
   color: var(--accent, #b23a29);
-  font-size: 0.78rem;
+  font-size: 1.05rem;
+  margin-left: -1px;
 }
 .plaza-badge-icon {
   width: 1em;
