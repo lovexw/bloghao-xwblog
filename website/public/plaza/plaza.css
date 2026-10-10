@@ -110,19 +110,19 @@
   padding: 1px 8px;
   font-size: 0.72rem;
 }
-/* 认证徽章：X 式锯齿圆章（纯图标，颜色 #1d9bf0 与 X 认证同源）。
-   尺寸跟所在文字走（em），在站点名旁是小蓝章，不抢视觉但一眼认得出 */
+/* 认证徽章：朱砂印（纯图标，色取官网主色 var(--accent)，与站点名红同源——落款与钤印的关系）。
+   尺寸跟所在文字走（em），在站点名旁是小红章，不抢视觉但一眼认得出 */
 .plaza-badge {
   display: inline-flex;
   align-items: center;
-  color: #1d9bf0;
+  color: var(--accent, #b23a29);
   font-size: 0.78rem;
 }
 .plaza-badge-icon {
   width: 1em;
   height: 1em;
   display: block;
-  /* 徽章底色与印章边缘都由 SVG path 承担，这里只负责基线微调 */
+  /* 印章底色由 SVG path 承担（fill=var(--accent)），这里只负责基线微调 */
   transform: translateY(0.5px);
 }
 
