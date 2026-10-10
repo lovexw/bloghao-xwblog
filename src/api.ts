@@ -600,7 +600,14 @@ api.post('/admin/posts', async (c) => {
   // 广播发布事件（服务端插件钩子，见 src/hooks.ts）：新建即发布也算跃迁
   if (p.status === 'published' && row) {
     c.executionCtx.waitUntil(
-      firePostPublished(c.env, { slug: row.slug, title: row.title, summary: row.summary, via: 'admin' })
+      firePostPublished(c.env, {
+        slug: row.slug,
+        title: row.title,
+        summary: row.summary,
+        via: 'admin',
+        // 加密/会员锁文标志：广场同步插件据此跳过（防泄漏清单同口径）
+        locked: !!row.password_hash || (!!row.min_tier && row.min_tier !== 'all'),
+      })
     )
   }
   const categoryId = row ? await getPostCategoryId(c.env.DB, row.id) : null
@@ -679,7 +686,14 @@ api.put('/admin/posts/:id', async (c) => {
   // 广播发布事件：只在草稿/定时 → 已发布的跃迁时触发，重复编辑已发布文章不重推
   if (status === 'published' && existing.status !== 'published' && row) {
     c.executionCtx.waitUntil(
-      firePostPublished(c.env, { slug: row.slug, title: row.title, summary: row.summary, via: 'admin' })
+      firePostPublished(c.env, {
+        slug: row.slug,
+        title: row.title,
+        summary: row.summary,
+        via: 'admin',
+        // 加密/会员锁文标志：广场同步插件据此跳过（防泄漏清单同口径）
+        locked: !!row.password_hash || (!!row.min_tier && row.min_tier !== 'all'),
+      })
     )
   }
   return c.json({ ok: true, post: row ? { ...postAdminView(row), tagList: parseTags(row), categoryId } : null })
@@ -1513,7 +1527,7 @@ api.delete('/admin/comments/:id', async (c) => {
 /* ---------------- 设置 ---------------- */
 // 敏感项只写不读：GET 一律打码返回（明文只在生成 Token / 保存后不再回显）；
 // PUT 收到打码占位符视为「保持原值」，这样前端整表提交不会把占位符写进库
-const SECRET_SETTINGS = ['externalToken', 'telegramBotToken', 'telegramWebhookSecret', 'bufferAccessToken']
+const SECRET_SETTINGS = ['externalToken', 'telegramBotToken', 'telegramWebhookSecret', 'bufferAccessToken', 'plazaToken']
 const SECRET_MASK = '••••••••'
 // 布尔开关统一收口：'1'/'true' → '1'，其余一律 '0'（新增布尔键加进表即可，别再抄判断分支）
 const BOOL_SETTINGS = [

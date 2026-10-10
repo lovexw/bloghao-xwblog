@@ -62,6 +62,9 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   // 服务端插件「微博同步 Buffer」：Buffer API Key 与目标渠道 ID（X 等，设置页可一键拉取，src/hooks.ts）
   bufferAccessToken: '',
   bufferChannelId: '',
+  // 服务端插件「广场同步」：广场 hub 地址（默认官方 https://plaza.bloghao.com）与站点注册 token（src/hooks.ts，docs/PLAZA.md）
+  plazaEndpoint: 'https://plaza.bloghao.com',
+  plazaToken: '',
   // 一键灰度（哀悼/纪念模式）：所有公开页 CSS 去色，见 src/render.ts page()
   siteGrayscale: '0',
   // 一键闭站：公开页面与公开 API 全部 503，仅后台/登录/图床可用（src/index.ts 闭站中间件）

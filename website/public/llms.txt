@@ -22,6 +22,7 @@
 - [部署教程](https://raw.githubusercontent.com/lovexw/bloghao/main/docs/DEPLOY.md)：从注册 Cloudflare 到部署 Worker、绑定自定义域名、自动部署与备份恢复
 - [使用手册](https://raw.githubusercontent.com/lovexw/bloghao/main/docs/GUIDE.md)：后台导览、写文章全流程、快捷键、评论与媒体管理、设置逐项说明
 - [主题开发](https://raw.githubusercontent.com/lovexw/bloghao/main/docs/THEMES.md)：一套主题 = 八个必需渲染函数（+ 可选 member / rank 两个）+ 全局 CSS，三步注册新主题，公共积木与排版规范底线
+- [广场](https://raw.githubusercontent.com/lovexw/bloghao/main/docs/PLAZA.md)：官网广场（内容聚合流）的接入步骤、hub 部署与 ingest 协议、混排口径与认证徽标
 - [插件开发](https://raw.githubusercontent.com/lovexw/bloghao/main/docs/PLUGINS.md)：一个 JS 文件扩展编辑器，`window.BlogHao` 插件 API 与加载机制
 - [API 参考](https://raw.githubusercontent.com/lovexw/bloghao/main/docs/API.md)：全部公开 / 管理接口，HTML 净化白名单摘要也在这里，写自己的客户端
 - [微信排版规范](https://raw.githubusercontent.com/lovexw/bloghao/main/docs/wechat-typography-spec.md)：微信编辑器插件开发规范的落地对照表与体检规则

@@ -26,6 +26,11 @@ export interface PostPublishedPayload {
   summary: string
   /** 触发来源：后台手动发布 / 定时到点 */
   via: 'admin' | 'scheduler'
+  /**
+   * 加密文 / 会员锁文（password_hash 非空或 min_tier ≠ all）。广场同步插件据此跳过——
+   * 加密文标题摘要都不该出现在公开广场（防泄漏清单同口径）。老调用点不传视为 false
+   */
+  locked?: boolean
 }
 
 export interface CommentCreatedPayload {
@@ -235,8 +240,102 @@ export async function listBufferChannels(
   }
 }
 
+/* ---------------- 广场同步（roadmap B17：官网 bloghao.com/plaza 内容聚合流） ----------------
+ * push 主路：文章/微博发布时把公开条目推给广场 hub（独立 Worker，协议见 docs/PLAZA.md）。
+ * 「是否同步到广场」的开关就是后台「插件」页启停本插件（opt-in），配置在「设置 → 服务端插件」：
+ * 广场地址（默认官方 hub）+ 注册 token（hub 站长审核发放）。加密文 / 会员锁文不上广场。
+ * pull 补漏路（hub 定时抓 /rss.xml 文章）在 hub 侧，见 plaza/。
+ */
+
+/** 广场 ingest 签名：HMAC-SHA256(token, `ts.rawBody`) → hex。与 hub 校验端同一算法（tests 双端镜像） */
+export async function plazaSign(token: string, ts: string, rawBody: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(token),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  )
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${ts}.${rawBody}`))
+  const v = new Uint8Array(sig)
+  let s = ''
+  for (let i = 0; i < v.length; i++) s += v[i].toString(16).padStart(2, '0')
+  return s
+}
+
+const plazaSync: ServerPlugin = {
+  id: 'plaza-sync',
+  title: '广场同步（bloghao.com）',
+  description:
+    '文章与微博发布时自动同步到官网广场（bloghao.com/plaza），让更多博主看到你的更新。需要在广场 hub 注册站点拿到 token（见 docs/PLAZA.md），填进「设置 → 服务端插件」；加密文与会员专属文不会同步。',
+  version: '1.0.0',
+  author: '官方',
+  async onPostPublished(p, ctx) {
+    if (p.locked) return
+    const endpoint = (ctx.settings.plazaEndpoint || '').trim().replace(/\/+$/, '')
+    const token = (ctx.settings.plazaToken || '').trim()
+    if (!/^https:\/\//i.test(endpoint) || !token) return
+    await plazaIngest(endpoint, token, {
+      items: [
+        {
+          kind: 'post',
+          ref: p.slug,
+          title: p.title,
+          summary: excerpt(p.summary, 500),
+          url: ctx.base ? `${ctx.base}/post/${p.slug}` : '',
+          image: '',
+          publishedAt: Date.now(),
+        },
+      ],
+    })
+  },
+  async onWeiboPublished(p, ctx) {
+    const endpoint = (ctx.settings.plazaEndpoint || '').trim().replace(/\/+$/, '')
+    const token = (ctx.settings.plazaToken || '').trim()
+    if (!/^https:\/\//i.test(endpoint) || !token) return
+    await plazaIngest(endpoint, token, {
+      items: [
+        {
+          kind: 'weibo',
+          ref: String(p.id),
+          title: excerpt(p.content, 80),
+          summary: excerpt(p.content, 500),
+          url: ctx.base ? `${ctx.base}/weibo#wb-${p.id}` : '',
+          // hub 只收 https 绝对地址：站内 /images/ 补 base 前缀，外链原样，其余置空
+          image: p.images[0]
+            ? p.images[0].startsWith('/images/') && ctx.base
+              ? ctx.base + p.images[0]
+              : /^https:\/\//i.test(p.images[0])
+                ? p.images[0]
+                : ''
+            : '',
+          publishedAt: Date.now(),
+        },
+      ],
+    })
+  },
+}
+
+/** 签名上报（fireHook 已吞错，这里失败抛出也只丢这一条同步，不影响发布主流程） */
+async function plazaIngest(endpoint: string, token: string, body: Record<string, unknown>): Promise<void> {
+  const ts = String(Date.now())
+  const raw = JSON.stringify(body)
+  const res = await fetch(`${endpoint}/api/ingest`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-plaza-token': token,
+      'x-plaza-timestamp': ts,
+      'x-plaza-signature': await plazaSign(token, ts, raw),
+    },
+    body: raw,
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!res.ok) console.error(`[plaza-sync] ingest ${res.status}`)
+}
+
 /** 注册表：第三方服务端插件在此登记（顺序即后台展示顺序） */
-export const SERVER_PLUGINS: ServerPlugin[] = [tgChannel, commentWebhook, bufferSync, footerHtmlPlugin]
+export const SERVER_PLUGINS: ServerPlugin[] = [tgChannel, commentWebhook, bufferSync, plazaSync, footerHtmlPlugin]
 
 /** 后台「插件」页列表用：只出元数据，不带处理函数 */
 export function listServerPlugins(): { id: string; title: string; description: string; version: string; author: string }[] {
