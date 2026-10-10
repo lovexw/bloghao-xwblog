@@ -236,6 +236,16 @@ input, textarea, select { font: inherit; color: inherit; }
 .switch input:checked + .track { background: var(--accent); }
 .switch input:checked + .track::after { transform: translateX(18px); }
 
+/* 设置页分页签：页内切换不走路由，未保存输入在页签间保留（保存全部跨页签收齐） */
+.settings-tabs-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.settings-tabs .tab { padding: 7px 22px; font-size: 14px; }
+.settings-hint { font-size: 12.5px; color: var(--sub); }
+.stab-pane[hidden] { display: none; }
+@media (max-width: 700px) {
+  .settings-tabs { flex: 1 1 100%; }
+  .settings-tabs .tab { flex: 1; text-align: center; padding: 8px 0; }
+}
+
 /* ---------- 评论 ---------- */
 .comment-row { display: flex; gap: 12px; padding: 14px 18px; border-bottom: 1px solid #f2f2f2; flex-wrap: wrap; }
 .comment-row:last-child { border-bottom: none; }

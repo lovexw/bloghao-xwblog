@@ -152,14 +152,14 @@ const MENU = [
   { type: 'group', label: '内容' },
   { id: 'posts', href: '#/posts', label: '文章', icon: 'post' },
   { id: 'weibo', href: '#/weibo', label: '微博', icon: 'weibo' },
-  { id: 'comments', href: '#/comments', label: '评论', icon: 'comment', badge: () => state.pendingComments || 0 },
-  { id: 'media', href: '#/media', label: '媒体', icon: 'image' },
-  { id: 'categories', href: '#/categories', label: '分类', icon: 'folder' },
-  { id: 'links', href: '#/links', label: '友链', icon: 'link', badge: () => state.pendingLinks || 0 },
   { id: 'pages', href: '#/pages', label: '页面', icon: 'page' },
-  { id: 'trash', href: '#/trash', label: '回收站', icon: 'trash' },
+  { id: 'media', href: '#/media', label: '媒体', icon: 'image' },
+  { type: 'group', label: '互动' },
+  { id: 'comments', href: '#/comments', label: '评论', icon: 'comment', badge: () => state.pendingComments || 0 },
   { id: 'members', href: '#/members', label: '会员', icon: 'member' },
+  { id: 'links', href: '#/links', label: '友链', icon: 'link', badge: () => state.pendingLinks || 0 },
   { type: 'group', label: '系统' },
+  { id: 'trash', href: '#/trash', label: '回收站', icon: 'trash' },
   { id: 'appearance', href: '#/appearance', label: '皮肤', icon: 'palette' },
   { id: 'plugins', href: '#/plugins', label: '插件', icon: 'plug' },
   { id: 'settings', href: '#/settings', label: '设置', icon: 'gear' },
@@ -542,6 +542,8 @@ async function viewStats() {
 async function viewPosts() {
   const hash = location.hash
   const q = new URLSearchParams(hash.split('?')[1] || '')
+  // 文章页第二页签：分类与标签（原独立「分类」页并入，见 viewPostTaxonomy）
+  if (q.get('view') === 'cats') return viewPostTaxonomy()
   const status = q.get('status') || 'all'
   const page = parseInt(q.get('page') || '1', 10)
   const kw = q.get('q') || ''
@@ -594,6 +596,10 @@ async function viewPosts() {
     </div>
     <div class="toolbar">
       <div class="tabs">
+        <button class="tab is-active" data-vtab="list" type="button">列表</button>
+        <button class="tab" data-vtab="cats" type="button">分类标签</button>
+      </div>
+      <div class="tabs">
         ${['all', 'published', 'scheduled', 'draft']
           .map(
             (t) =>
@@ -612,6 +618,9 @@ async function viewPosts() {
     location.hash = '#/posts?' + p.toString()
   }
   $app.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => nav({ status: b.dataset.tab, page: 1 })))
+  $app.querySelectorAll('[data-vtab="cats"]').forEach((b) =>
+    b.addEventListener('click', () => (location.hash = '#/posts?view=cats'))
+  )
   const searchEl = document.getElementById('search-input')
   searchEl.addEventListener('focus', () => (searchFocused = true))
   searchEl.addEventListener('blur', () => (searchFocused = false))
@@ -1161,8 +1170,8 @@ function flModal(link) {
   })
 }
 
-/* ---------------- 分类管理 ---------------- */
-async function viewCategories() {
+/* ---------------- 分类与标签（文章页第二页签，原独立「分类」页并入；#/categories 旧路由在 navigate 里重定向） ---------------- */
+async function viewPostTaxonomy() {
   let d, t
   try {
     ;[d, t] = await Promise.all([api('/admin/categories'), api('/admin/tags')])
@@ -1193,8 +1202,14 @@ async function viewCategories() {
     .join('')
 
   await shellView(
-    'categories',
-    `<div class="page-head"><div><div class="page-title">分类</div><div class="page-sub">文章的大归类，与随手的标签互补</div></div></div>
+    'posts',
+    `<div class="page-head"><div><div class="page-title">文章</div><div class="page-sub">分类的大归类与标签，写文章时选用</div></div></div>
+    <div class="toolbar">
+      <div class="tabs">
+        <button class="tab" data-vtab="list" type="button">列表</button>
+        <button class="tab is-active" data-vtab="cats" type="button">分类标签</button>
+      </div>
+    </div>
     <div class="toolbar">
       <input class="input" id="cat-name" placeholder="新分类名称，如：生活随笔" maxlength="20">
       <button class="btn btn-primary" id="cat-add">添加分类</button>
@@ -1210,6 +1225,10 @@ async function viewCategories() {
         <div class="tag-manage-list">${tagChips || '<div class="empty-box" style="padding:20px 0;">还没有标签，在写文章时添加，或在这里预建</div>'}</div>
       </div>
     </div>`
+  )
+
+  $app.querySelectorAll('[data-vtab="list"]').forEach((b) =>
+    b.addEventListener('click', () => (location.hash = '#/posts'))
   )
 
   document.getElementById('cat-add').addEventListener('click', async () => {
@@ -2357,6 +2376,9 @@ async function viewPlugins() {
 }
 
 /* ---------------- 设置 ---------------- */
+/* 设置页当前页签：页内记忆（不进 hash——hashchange 会触发 navigate 重挂视图，丢未保存输入） */
+let settingsTab = 'site'
+
 async function viewSettings() {
   try {
     state.settings = (await api('/admin/settings')).settings
@@ -2370,6 +2392,17 @@ async function viewSettings() {
     `<div class="page-head"><div><div class="page-title">设置</div><div class="page-sub">站点的门面和规矩</div></div>
       <button class="btn btn-primary" id="btn-save">保存全部</button></div>
 
+    <div class="settings-tabs-row">
+      <div class="tabs settings-tabs" id="settings-tabs">
+        <button class="tab" data-stab="site" type="button">站点</button>
+        <button class="tab" data-stab="social" type="button">互动</button>
+        <button class="tab" data-stab="advance" type="button">进阶</button>
+        <button class="tab" data-stab="data" type="button">数据</button>
+      </div>
+      <div class="settings-hint" id="settings-hint"></div>
+    </div>
+
+    <div class="stab-pane" data-pane="site">
     <div class="panel" style="padding:20px;">
       <div class="form-section">
         <h3>站点信息</h3>
@@ -2433,19 +2466,17 @@ async function viewSettings() {
     </div>
 
     <div class="panel" style="padding:20px;">
-      <div class="form-section"><h3>站点状态</h3><div class="sec-desc">特殊时刻的全站开关：两个都是可逆的，随时保存随时恢复</div>
-        <div class="switch-row">
-          <div><div class="switch-label">灰度模式</div><div class="switch-sub">全站去色显示（黑白），用于哀悼、纪念等特殊时刻；后台不受影响</div></div>
-          <label class="switch"><input type="checkbox" id="st-siteGrayscale" ${s.siteGrayscale === '1' ? 'checked' : ''}><span class="track"></span></label>
+      <div class="form-section"><h3>账号</h3><div class="sec-desc">${state.demo ? '演示站不支持修改密码（演示账号公示在登录页，每 2 小时随数据一起重置）' : '修改登录密码'}</div>
+        <div class="form-row">
+          <div class="form-item"><label>旧密码</label><input class="input" type="password" id="pw-old" autocomplete="current-password" ${state.demo ? 'disabled' : ''}></div>
+          <div class="form-item"><label>新密码（至少 8 位）</label><input class="input" type="password" id="pw-new" autocomplete="new-password" ${state.demo ? 'disabled' : ''}></div>
+          <div class="form-item" style="flex:0 0 auto;align-self:flex-end;"><button class="btn" id="btn-pw" ${state.demo ? 'disabled' : ''}>修改密码</button></div>
         </div>
-        <div class="switch-row">
-          <div><div class="switch-label">关闭站点</div><div class="switch-sub">开启后访客只能看到闭站页，RSS、评论等一并停用；后台与已登录的你不受影响</div>${state.demo ? '<div class="switch-sub" style="color:var(--warn);">🎓 演示站已停用此开关（防止有人把体验站关掉，其他体验者会看不了）</div>' : ''}</div>
-          <label class="switch"><input type="checkbox" id="st-siteClosed" ${s.siteClosed === '1' ? 'checked' : ''} ${state.demo ? 'disabled' : ''}><span class="track"></span></label>
-        </div>
-        <div class="form-item"><label>闭站公告（展示在闭站页，支持换行；留空使用默认文案）</label><textarea class="textarea" id="st-siteClosedMessage" rows="3" maxlength="1000" placeholder="本站暂时关闭，请稍后再来。" ${state.demo ? 'disabled' : ''}>${esc(s.siteClosedMessage || '')}</textarea></div>
       </div>
     </div>
+    </div>
 
+    <div class="stab-pane" data-pane="social" hidden>
     <div class="panel" style="padding:20px;">
       <div class="form-section"><h3>评论</h3><div class="sec-desc">访客留言的规则（文章、微博与留言板通用）</div>
         <div class="switch-row">
@@ -2476,6 +2507,22 @@ async function viewSettings() {
           <div><div class="switch-label">开启访客统计采集</div><div class="switch-sub">关闭后前台页面不再上报访问数据（已有数据保留不再新增，统计页仍可看历史）</div></div>
           <label class="switch"><input type="checkbox" id="st-statsEnabled" ${s.statsEnabled === '1' ? 'checked' : ''}><span class="track"></span></label>
         </div>
+      </div>
+    </div>
+    </div>
+
+    <div class="stab-pane" data-pane="advance" hidden>
+    <div class="panel" style="padding:20px;">
+      <div class="form-section"><h3>站点状态</h3><div class="sec-desc">特殊时刻的全站开关：两个都是可逆的，随时保存随时恢复</div>
+        <div class="switch-row">
+          <div><div class="switch-label">灰度模式</div><div class="switch-sub">全站去色显示（黑白），用于哀悼、纪念等特殊时刻；后台不受影响</div></div>
+          <label class="switch"><input type="checkbox" id="st-siteGrayscale" ${s.siteGrayscale === '1' ? 'checked' : ''}><span class="track"></span></label>
+        </div>
+        <div class="switch-row">
+          <div><div class="switch-label">关闭站点</div><div class="switch-sub">开启后访客只能看到闭站页，RSS、评论等一并停用；后台与已登录的你不受影响</div>${state.demo ? '<div class="switch-sub" style="color:var(--warn);">🎓 演示站已停用此开关（防止有人把体验站关掉，其他体验者会看不了）</div>' : ''}</div>
+          <label class="switch"><input type="checkbox" id="st-siteClosed" ${s.siteClosed === '1' ? 'checked' : ''} ${state.demo ? 'disabled' : ''}><span class="track"></span></label>
+        </div>
+        <div class="form-item"><label>闭站公告（展示在闭站页，支持换行；留空使用默认文案）</label><textarea class="textarea" id="st-siteClosedMessage" rows="3" maxlength="1000" placeholder="本站暂时关闭，请稍后再来。" ${state.demo ? 'disabled' : ''}>${esc(s.siteClosedMessage || '')}</textarea></div>
       </div>
     </div>
 
@@ -2547,7 +2594,9 @@ async function viewSettings() {
         </div>
       </div>
     </div>
+    </div>
 
+    <div class="stab-pane" data-pane="data" hidden>
     <div class="panel" style="padding:20px;">
       <div class="form-section"><h3>订阅与备份</h3><div class="sec-desc">把内容完整地交给订阅者，把数据完整地交回自己</div>
         <div class="switch-row">
@@ -2573,17 +2622,33 @@ async function viewSettings() {
         </div>
       </div>
     </div>
-
-    <div class="panel" style="padding:20px;">
-      <div class="form-section"><h3>账号</h3><div class="sec-desc">${state.demo ? '演示站不支持修改密码（演示账号公示在登录页，每 2 小时随数据一起重置）' : '修改登录密码'}</div>
-        <div class="form-row">
-          <div class="form-item"><label>旧密码</label><input class="input" type="password" id="pw-old" autocomplete="current-password" ${state.demo ? 'disabled' : ''}></div>
-          <div class="form-item"><label>新密码（至少 8 位）</label><input class="input" type="password" id="pw-new" autocomplete="new-password" ${state.demo ? 'disabled' : ''}></div>
-          <div class="form-item" style="flex:0 0 auto;align-self:flex-end;"><button class="btn" id="btn-pw" ${state.demo ? 'disabled' : ''}>修改密码</button></div>
-        </div>
-      </div>
     </div>`
   )
+
+  // 页签只在页内切换（不动 hash，避免触发 navigate 重挂视图丢未保存输入）；
+  // 各页签的输入控件始终留在 DOM，「保存全部」跨页签照常收齐，PUT 缺键保留语义不受影响
+  const STAB_HINTS = {
+    site: '站名、头像、首页形态这些门面事，以及登录密码',
+    social: '留言规则、会员体系与访客统计',
+    advance: '闭站等特殊开关与外部服务对接——不确定的先别动',
+    data: '备份与导出：把数据完整地交回自己手里',
+  }
+  const stabBtns = Array.prototype.slice.call(document.querySelectorAll('#settings-tabs .tab'))
+  const applyStab = () => {
+    stabBtns.forEach((b) => b.classList.toggle('is-active', b.dataset.stab === settingsTab))
+    document.querySelectorAll('.stab-pane').forEach((p) => {
+      p.hidden = p.dataset.pane !== settingsTab
+    })
+    const hint = document.getElementById('settings-hint')
+    if (hint) hint.textContent = STAB_HINTS[settingsTab] || ''
+  }
+  stabBtns.forEach((b) =>
+    b.addEventListener('click', () => {
+      settingsTab = b.dataset.stab
+      applyStab()
+    })
+  )
+  applyStab()
 
   function renderFavSlot(url) {
     document.getElementById('fav-preview-slot').innerHTML = url
@@ -2893,6 +2958,11 @@ async function navigate() {
   const [path] = h.split('?')
   const parts = path.split('/')
   const name = parts[0] || 'home'
+  // 旧路由兼容：分类已并入文章页第二页签（replace 不留历史记录）
+  if (name === 'categories') {
+    location.replace('#/posts?view=cats')
+    return
+  }
   clearTimeout(postsSearchTimer)
   clearTimeout(membersSearchTimer)
   // 离开编辑器：有未保存修改先自动保存再切页（此时编辑器 DOM 还在，能取到最新内容）；
@@ -2916,7 +2986,6 @@ async function navigate() {
     else if (name === 'posts') await viewPosts()
     else if (name === 'weibo') await viewWeibo()
     else if (name === 'links') await viewLinks()
-    else if (name === 'categories') await viewCategories()
     else if (name === 'pages') await viewPages()
     else if (name === 'trash') await viewTrash()
     else if (name === 'members') await viewMembers()
