@@ -155,6 +155,9 @@ try {
   // 2 字短词退回 LIKE 老路：新旧两条路都必须能搜到
   await check('GET', `/search?q=${encodeURIComponent('冒烟')}`, 200, 'smoke-multi-tag')
   await check('GET', '/rss.xml', 200)
+  // JSON Feed 1.1（C12）：机器可读订阅格式，与 RSS 同一份防泄漏口径
+  await check('GET', '/feed.json', 200, '"version":"https://jsonfeed.org/version/1.1"')
+  await check('GET', '/feed.json', 200, '"home_page_url"')
   // RSS 订阅别名（src/index.ts RSS_ALIASES）：常用盲猜路径必须与规范地址同内容，断言代表样本
   await check('GET', '/feed', 200, '<?xml')
   await check('GET', '/feed/', 200, '<?xml')
@@ -242,6 +245,7 @@ try {
   await check('GET', '/', 503, '站点暂时关闭')
   await check('GET', '/post/smoke-multi-tag', 503)
   await check('GET', '/rss.xml', 503)
+  await check('GET', '/feed.json', 503) // JSON Feed 同口径：闭站连订阅面一起关
   await check('GET', '/feed', 503) // 订阅别名路径同样进闭站拦截（与规范地址同中间件链）
   await check('GET', '/sitemap.xml', 503)
   await check('POST', '/api/public/track', 503, '站点已关闭', {
@@ -261,6 +265,9 @@ try {
   await check('GET', '/api/meta/themes', 200)
   await check('GET', '/images/u/smoke-none.jpg', 404) // 404（R2 查无此图）而非 503 = 图床路由已放行
   await check('GET', '/api/admin/visits', 200, undefined, { headers: { Cookie: cookie } })
+  // 系统状态卡（B12）：/admin/stats 必须带备份状态与各表行数字段
+  await check('GET', '/api/admin/stats', 200, '"backup"', { headers: { Cookie: cookie } })
+  await check('GET', '/api/admin/stats', 200, '"weibo"', { headers: { Cookie: cookie } })
   // 已登录管理员：闭站期间仍可全站预览，且灰度样式随页面输出（两个开关一次验到）
   await check('GET', '/', 200, 'html{filter:grayscale(100%)}', { headers: { Cookie: cookie } })
 

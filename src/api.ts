@@ -423,7 +423,7 @@ api.route('/telegram', telegramRoutes)
 
 api.get('/admin/stats', async (c) => {
   const db = c.env.DB
-  const [pub, drafts, pending, uploads, recent, pendingLinks] = await Promise.all([
+  const [pub, drafts, pending, uploads, recent, pendingLinks, weibo, pages, comments, members, settings] = await Promise.all([
     db
       .prepare("SELECT COUNT(*) AS n, COALESCE(SUM(views),0) AS v, COALESCE(SUM(likes),0) AS l FROM posts WHERE status = 'published' AND deleted_at IS NULL")
       .first<{ n: number; v: number; l: number }>(),
@@ -432,6 +432,12 @@ api.get('/admin/stats', async (c) => {
     db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(size),0) AS s FROM uploads').first<{ n: number; s: number }>(),
     db.prepare("SELECT * FROM posts WHERE status = 'published' AND deleted_at IS NULL ORDER BY published_at DESC LIMIT 5").all<PostRow>(),
     db.prepare("SELECT COUNT(*) AS n FROM friend_links WHERE status = 'pending'").first<{ n: number }>(),
+    // 系统状态卡（B12）：三张软删表按口径过滤 deleted_at（回收站行不计入体量）
+    db.prepare('SELECT COUNT(*) AS n FROM weibo WHERE deleted_at IS NULL').first<{ n: number }>(),
+    db.prepare('SELECT COUNT(*) AS n FROM pages WHERE deleted_at IS NULL').first<{ n: number }>(),
+    db.prepare('SELECT COUNT(*) AS n FROM comments').first<{ n: number }>(),
+    db.prepare('SELECT COUNT(*) AS n FROM members').first<{ n: number }>(),
+    getSettings(db),
   ])
   return c.json({
     posts: pub?.n ?? 0,
@@ -441,6 +447,13 @@ api.get('/admin/stats', async (c) => {
     pendingComments: pending?.n ?? 0,
     pendingLinks: pendingLinks?.n ?? 0,
     uploads: { count: uploads?.n ?? 0, bytes: uploads?.s ?? 0 },
+    db: { weibo: weibo?.n ?? 0, pages: pages?.n ?? 0, comments: comments?.n ?? 0, members: members?.n ?? 0 },
+    // 备份状态由 backup.ts 每晚回写（lastBackupAt/lastBackupBytes），这里只读不查
+    backup: {
+      enabled: settings.backupEnabled !== '0',
+      at: Number(settings.lastBackupAt) || 0,
+      bytes: Number(settings.lastBackupBytes) || 0,
+    },
     recent: (recent.results ?? []).map((r) => ({
       id: r.id,
       title: r.title,

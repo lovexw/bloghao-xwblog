@@ -99,6 +99,7 @@ ${base ? `<meta property="og:url" content="${esc(base + o.path)}">` : ''}
 ${jsonLdHtml}
 ${o.settings.faviconUrl ? `<link rel="icon" href="${esc(absUrl(base, o.settings.faviconUrl))}">` : `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`}
 ${base ? `<link rel="alternate" type="application/rss+xml" title="${esc(siteName)}" href="${esc(base)}/rss.xml">` : ''}
+${base ? `<link rel="alternate" type="application/feed+json" title="${esc(siteName)}" href="${esc(base)}/feed.json">` : ''}
 <style>${o.css}</style>
 ${appearanceHeadStyle(o.settings)}
 ${grayscaleStyle(o.settings)}

@@ -330,6 +330,12 @@ async function viewHome() {
   }
   state.pendingComments = s.pendingComments
   state.pendingLinks = s.pendingLinks
+  // 系统状态卡（B12）：备份状态由 backup.ts 每晚回写 settings，这里只读展示
+  const backupText = !s.backup || !s.backup.enabled
+    ? '自动备份未开启（设置 → 订阅与备份）'
+    : !s.backup.at
+      ? '尚未备份（开启后每晚 00:30 自动运行）'
+      : `${fmtDateTime(s.backup.at)} · ${fmtSize(s.backup.bytes || 0)}`
   const recent = s.recent
     .map(
       (r) => `<div class="recent-item">
@@ -359,6 +365,15 @@ async function viewHome() {
       <div class="panel-body" style="display:flex;gap:24px;align-items:center;">
         <div><div class="stat-value" style="font-size:20px;">${s.uploads.count}<small>个文件</small></div></div>
         <div style="color:var(--sub);font-size:13px;">占用 ${fmtSize(s.uploads.bytes)} · 存于 R2 图床，全球加速</div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span>系统</span><a class="btn btn-ghost btn-sm" href="#/settings">设置 →</a></div>
+      <div class="panel-body" style="display:flex;gap:24px;align-items:center;flex-wrap:wrap;">
+        <div><div class="stat-value" style="font-size:20px;">${s.db.weibo}<small>条微博</small></div></div>
+        <div><div class="stat-value" style="font-size:20px;">${s.db.comments}<small>条评论</small></div></div>
+        <div><div class="stat-value" style="font-size:20px;">${s.db.members}<small>位会员</small></div></div>
+        <div style="color:var(--sub);font-size:13px;">最近备份：${esc(backupText)}</div>
       </div>
     </div>`
   )
