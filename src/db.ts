@@ -125,6 +125,9 @@ export function parseTags(row: Pick<PostRow, 'tags'>): string[] {
   }
 }
 
+/** 文章正文长度上限（UTF-8 字节，非字符数）：api.ts readPostPayload 与 mcp.ts publish_post 同口径 */
+export const MAX_CONTENT_BYTES = 1_000_000
+
 export type PostSort = 'latest' | 'views' | 'likes' | 'comments' | 'random'
 
 export interface ListPostsOptions {

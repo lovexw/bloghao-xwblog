@@ -2635,7 +2635,7 @@ async function viewSettings() {
     </div>
 
     <div class="panel" style="padding:20px;">
-      <div class="form-section"><h3>外部发布</h3><div class="sec-desc">用 Telegram 机器人或开放 API 远程发微博（文字 / 图片 / 相册都可以）</div>
+      <div class="form-section"><h3>外部发布</h3><div class="sec-desc">用 Telegram 机器人或开放 API 远程发微博（文字 / 图片 / 相册都可以），或让 AI 助手经 MCP 发文、查评论</div>
         <div class="form-item">
           <label>API Token（开放接口密钥，重新生成后旧 Token 立即失效）</label>
           <div class="fav-row">
@@ -2643,7 +2643,7 @@ async function viewSettings() {
             <button class="btn btn-sm" id="btn-token-gen" type="button">${s.externalToken ? '重新生成' : '生成 Token'}</button>
             <button class="btn btn-sm btn-ghost" id="btn-token-copy" type="button" ${s.externalToken ? '' : 'disabled'}>复制</button>
           </div>
-          <div class="sec-desc" style="margin-top:6px;">接口：<code>POST ${esc(location.origin)}/api/external/weibo</code>，用法见 docs/GUIDE.md 第 8 节</div>
+          <div class="sec-desc" style="margin-top:6px;">接口：<code>POST ${esc(location.origin)}/api/external/weibo</code>；MCP（AI 助手）：<code>${esc(location.origin)}/mcp</code>，用法见 docs/GUIDE.md 第 8 节</div>
         </div>
         <div class="form-item">
           <label>Telegram Bot Token（找 @BotFather 发 /newbot 创建机器人后获得）</label>

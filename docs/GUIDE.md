@@ -286,6 +286,46 @@ curl -X POST https://blog.xiaowuleyi.com/api/external/weibo \
 
 **规则与后台发布器完全一致**：文字 ≤ 5000 字、图片 ≤ 9 张（JPG / PNG / WebP / GIF，文件走接口上传 ≤ 25MB）、话题从正文 `#话题` 自动提取、`"status":"draft"` 存草稿、限频 30 次/分钟。返回 `{ok, id, url, status, images}`，`url` 直接指向这条微博。接口参数详见 [API.md](API.md)。
 
+### 8.3 AI 助手接入：MCP 服务器
+
+博客内置了一个 **MCP（Model Context Protocol）服务器**——Claude Code、Cursor 等 AI 助手配好之后，可以直接**帮你发文、查评论、发微博**，不用打开后台。
+
+**接入三步**：
+
+1. 在「设置 → 外部发布」点「**生成 Token**」并复制（与 8.2 开放 API 是**同一枚令牌**）
+2. 在 AI 助手的 MCP 配置里加一条（URL 换成你自己的域名）：
+
+   ```json
+   {
+     "mcpServers": {
+       "bloghao": {
+         "url": "https://blog.xiaowuleyi.com/mcp",
+         "headers": { "Authorization": "Bearer 你的Token" }
+       }
+     }
+   }
+   ```
+
+3. 重启 / 刷新 AI 助手，看到 5 个 `bloghao` 工具即接入完成
+
+**可用工具**：
+
+| 工具 | 作用 |
+| --- | --- |
+| `publish_post` | 新建文章：正文**默认 Markdown**，可存草稿或直接发布，支持自定义 slug / 摘要 / 标签 / 封面 |
+| `list_posts` | 按状态、关键词分页列出文章（含草稿，不含正文） |
+| `get_post` | 按 id 或 slug 读单篇全文，供修改前核对 |
+| `list_comments` | 按状态（默认待审）/ 归属列出评论，适合「帮我把待审评论过一遍」 |
+| `publish_weibo` | 发随手记微博，与 8.2 开放 API 同口径（≤5000 字、≤9 图、话题自动提取） |
+
+**规则与边界**：
+
+- 推荐节奏：先 `status: draft` 存草稿 → 你在后台预览确认 → 再发布（`publish_post` 默认就是草稿）
+- 正文存库前统一过净化器（Markdown 先转 HTML，与后台编辑器 Markdown 模式同一条链路）
+- Token = 发布权限，只配在自己的 AI 助手里；想撤销，点「重新生成」Token 即可
+- 限频 30 次/分钟；鉴权失败有额外防爆破限制（10 次/10 分钟）
+- 定时发布、访问密码、会员档位暂不支持经 MCP 设置；演示站不开放 MCP；**一键闭站时 MCP 一并停用**（与其他对外发布通道同口径）
+
 ## 9. 媒体库（图床）
 
 侧栏「媒体」：所有上传过的图片和视频按时间倒序展示，点击可预览、复制访问地址（`/images/u/202610/xxx.png`）、删除。写文章、发微博、传头像图标、采集公众号配图——都存在这一个桶里。

@@ -24,8 +24,8 @@ export interface PostPublishedPayload {
   slug: string
   title: string
   summary: string
-  /** 触发来源：后台手动发布 / 定时到点 */
-  via: 'admin' | 'scheduler'
+  /** 触发来源：后台手动发布 / 定时到点 / MCP（AI 助手，src/mcp.ts） */
+  via: 'admin' | 'scheduler' | 'mcp'
   /**
    * 加密文 / 会员锁文（password_hash 非空或 min_tier ≠ all）。广场同步插件据此跳过——
    * 加密文标题摘要都不该出现在公开广场（防泄漏清单同口径）。老调用点不传视为 false

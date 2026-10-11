@@ -521,6 +521,68 @@ try {
     await check('GET', '/api/admin/trash?type=weibo', 200, undefined, { notContains: '冒烟回收站临时微博', headers: twCookie.headers })
   }
 
+  // ── MCP 链路（src/mcp.ts，ROADMAP B10）：Token 鉴权 → initialize → tools/list → 发文落库 ──
+  // 复用 externalToken（与开放 API 同一枚令牌）；全程临时数据，收尾复位 Token 与清理文章
+  console.log('\n▸ MCP 链路')
+  const MCP_TOKEN = 'smoke-mcp-token-0123456789abcdef'
+  const mcpSeed = await putSettings({ externalToken: MCP_TOKEN })
+  results.push(['MCP：写入 externalToken', mcpSeed.status === 200])
+  console.log(`  ${mcpSeed.status === 200 ? '✓' : '✗'} MCP：写入 externalToken`)
+
+  const mcpPost = (body, withToken) =>
+    raw('POST', '/mcp', {
+      headers: { 'Content-Type': 'application/json', ...(withToken ? { Authorization: `Bearer ${MCP_TOKEN}` } : {}) },
+      body: JSON.stringify(body),
+    })
+
+  const mcpNoAuth = await mcpPost({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } }, false)
+  results.push(['MCP：无 token 401', mcpNoAuth.status === 401])
+  console.log(`  ${mcpNoAuth.status === 401 ? '✓' : '✗'} MCP：无 token 401（status ${mcpNoAuth.status}）`)
+
+  const mcpInit = await mcpPost({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } }, true)
+  const mcpInitBody = await mcpInit.json().catch(() => null)
+  const mcpInitOk = mcpInit.status === 200 && mcpInitBody?.result?.protocolVersion === '2025-06-18' && !!mcpInitBody?.result?.capabilities?.tools
+  results.push(['MCP：initialize 握手', mcpInitOk])
+  console.log(`  ${mcpInitOk ? '✓' : '✗'} MCP：initialize 握手（protocolVersion ${mcpInitBody?.result?.protocolVersion ?? mcpInit.status}）`)
+
+  const mcpList = await mcpPost({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, true)
+  const mcpListBody = await mcpList.json().catch(() => null)
+  const toolNames = (mcpListBody?.result?.tools || []).map((t) => t.name)
+  const mcpListOk =
+    mcpList.status === 200 && ['publish_post', 'list_posts', 'get_post', 'list_comments', 'publish_weibo'].every((n) => toolNames.includes(n))
+  results.push(['MCP：tools/list 五工具', mcpListOk])
+  console.log(`  ${mcpListOk ? '✓' : '✗'} MCP：tools/list（${toolNames.join(', ')}）`)
+
+  // tools/call 发文（Markdown → 净化 HTML，默认草稿）→ 草稿前台不可见 → 后台删掉
+  const mcpPub = await mcpPost(
+    {
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/call',
+      params: { name: 'publish_post', arguments: { title: '冒烟：MCP 发文', content: '# 冒烟标题\n\nMCP 正文段落', status: 'draft' } },
+    },
+    true
+  )
+  const mcpPubBody = await mcpPub.json().catch(() => null)
+  const mcpOut = mcpPubBody?.result && !mcpPubBody.result.isError ? JSON.parse(mcpPubBody.result.content[0].text) : null
+  results.push(['MCP：publish_post 落库', mcpPub.status === 200 && !!mcpOut?.id])
+  console.log(`  ${mcpPub.status === 200 && !!mcpOut?.id ? '✓' : '✗'} MCP：publish_post 落库（id ${mcpOut?.id}，slug ${mcpOut?.slug}）`)
+  if (mcpOut?.id) {
+    await check('GET', `/post/${mcpOut.slug}`, 404) // 草稿前台不可见
+    // 清理走软删 + 彻底删除两步（回收站行继续占用 slug，不彻底删会累积 mcp-N 撞名）
+    const mcpDel = await raw('DELETE', `/api/admin/posts/${mcpOut.id}`, { headers: { Cookie: cookie } })
+    const mcpPurge = await raw('DELETE', `/api/admin/trash/post/${mcpOut.id}`, { headers: { Cookie: cookie } })
+    results.push(['MCP：清理临时文章', mcpDel.status === 200 && mcpPurge.status === 200])
+    console.log(`  ${mcpDel.status === 200 && mcpPurge.status === 200 ? '✓' : '✗'} MCP：清理临时文章`)
+  }
+
+  const mcpGet = await raw('GET', '/mcp')
+  results.push(['MCP：GET 405（无状态不开 SSE）', mcpGet.status === 405])
+  console.log(`  ${mcpGet.status === 405 ? '✓' : '✗'} MCP：GET 405（无状态不开 SSE）`)
+
+  // Token 复位（空 = 接口关闭，与 telegramBotToken 清理同款）
+  await putSettings({ externalToken: '' })
+
   // ── 会员链路（docs/DEVPLAN-2026-10-07.md 契约 v1）：开关门控 → 注册即登录 → 会员身份评论计分
   // → 榜单/首页挂件 → 付费墙防泄漏（游客试读段/会员全文/RSS 无全文）→ 后台会员管理（拉黑即踢）──
   console.log('\n▸ 会员链路')

@@ -40,7 +40,8 @@ async function sleep(ms: number) {
 
 /* ---------------- 落库 / 存图（与后台发布器同一套约束） ---------------- */
 
-async function insertWeibo(db: D1Database, content: string, images: string[], status: 'published' | 'draft'): Promise<WeiboRow> {
+/** 开放 API / TG 机器人 / MCP（src/mcp.ts）三路共用的微博落库 */
+export async function insertWeibo(db: D1Database, content: string, images: string[], status: 'published' | 'draft'): Promise<WeiboRow> {
   const now = Date.now()
   const res = await db
     .prepare('INSERT INTO weibo (content, images, topics, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')

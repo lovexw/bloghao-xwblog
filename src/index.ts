@@ -6,6 +6,7 @@ import { siteClosedResponse } from './closed'
 import { clientIp, getCookie, rateLimit } from './auth'
 import { ensureSchema, getPostBySlug, getSettings, listCategories, listPublishedTags, listPosts, listSitemapPages, listSitemapPosts } from './db'
 import { isEn, recordEditionFailure } from './i18n'
+import { mcpRoutes } from './mcp'
 import { goPageHtml, isTrustedOutHost } from './outlink'
 import { renderAbout, renderArchive, renderCategory, renderGuestbook, renderHome, renderLinks, renderMember, renderNotFound, renderPage, renderPost, renderRank, renderSearch, renderWeibo } from './pages'
 import { mergeUnlockCookie, PP_COOKIE, PP_TTL_MS, verifyPostPassword } from './protect'
@@ -52,6 +53,8 @@ app.use('*', async (c, next) => {
 })
 
 app.route('/api', api)
+// MCP 服务器（AI 助手接入，src/mcp.ts）：复用 externalToken 鉴权；闭站中间件自动覆盖（不进白名单）
+app.route('/mcp', mcpRoutes)
 
 /* ---------------- 英文测试版守卫（English 0.1，机制见 src/i18n.ts） ----------------
  * 英文版渲染抛错时：落库 editionEnStatus=fallback（下一次 getSettings 起 isEn=false，全站自动

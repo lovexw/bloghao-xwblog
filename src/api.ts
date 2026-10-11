@@ -44,6 +44,7 @@ import {
   uniquePageSlug,
   listPosts,
   listWeibo,
+  MAX_CONTENT_BYTES,
   parseTags,
   parseWeiboImages,
   postAdminView,
@@ -83,7 +84,6 @@ import { clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extr
 
 type AppEnv = { Bindings: Env; Variables: { user: SessionUser } }
 
-const MAX_CONTENT_BYTES = 1_000_000 // 正文 ~1MB
 const VIDEO_MIMES: Record<string, string> = {
   'video/mp4': 'mp4',
   'video/webm': 'webm',
