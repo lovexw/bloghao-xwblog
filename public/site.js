@@ -56,6 +56,7 @@
     '退出失败，请重试': 'Failed to log out — please try again',
     '说点什么…': 'Say something…',
     '😊 表情': '😊 Emoji',
+    '移除': 'Remove',
     '返回顶部': 'Back to top',
     '复制代码': 'Copy code',
     '已复制': 'Copied',
@@ -209,7 +210,7 @@
       .map(function (u, i) {
         return (
           '<span class="wb-composer-tile"><img src="' + esc(u) + '" alt="">' +
-          '<button type="button" class="wb-composer-tile-del" data-i="' + i + '" title="移除">×</button></span>'
+          '<button type="button" class="wb-composer-tile-del" data-i="' + i + '" title="' + T('移除') + '">×</button></span>'
         )
       })
       .join('')

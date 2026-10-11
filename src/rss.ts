@@ -1,6 +1,6 @@
 import type { PostRow, SettingsMap } from './types'
 import { parseTags } from './db'
-import { isEn } from './i18n'
+import { isEn, tr } from './i18n'
 import { siteMode } from './render'
 import { sanitizeHtml } from './sanitize'
 import { esc, fmtDate, isoDate, teaserHtml } from './utils'
@@ -43,9 +43,9 @@ export function buildRss(settings: SettingsMap, posts: PostRow[], siteUrl: strin
   return `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
   <channel>
-    <title>${xmlEsc(settings.siteName)}</title>
+    <title>${xmlEsc(tr(en, settings.siteName))}</title>
     <link>${xmlEsc(siteUrl)}</link>
-    <description>${xmlEsc(settings.siteDescription)}</description>
+    <description>${xmlEsc(tr(en, settings.siteDescription))}</description>
     <language>${en ? 'en' : 'zh-CN'}</language>
     <atom:link href="${xmlEsc(siteUrl)}/rss.xml" rel="self" type="application/rss+xml"/>
 ${items}
@@ -62,12 +62,12 @@ export function buildJsonFeed(settings: SettingsMap, posts: PostRow[], siteUrl: 
   const fullText = settings.rssFullText !== '0'
   const feed = {
     version: 'https://jsonfeed.org/version/1.1',
-    title: settings.siteName,
+    title: tr(en, settings.siteName),
     home_page_url: siteUrl,
     feed_url: `${siteUrl}/feed.json`,
-    description: settings.siteDescription,
+    description: tr(en, settings.siteDescription),
     language: en ? 'en' : 'zh-CN',
-    authors: [{ name: settings.siteName, url: siteUrl }],
+    authors: [{ name: tr(en, settings.siteName), url: siteUrl }],
     items: posts.map((p) => {
       const pwProtected = !!p.password_hash
       const memberLocked = !!p.min_tier && p.min_tier !== 'all'
