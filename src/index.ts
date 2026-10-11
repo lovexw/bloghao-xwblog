@@ -21,7 +21,7 @@ import { isDemo } from './utils'
 const app = new Hono<{ Bindings: Env; Variables: { user: SessionUser | null } }>()
 
 // 外链中间页的 CSP（/go 路由专用）：无脚本需求，比前台更收紧——default-src 'none' 只留内联样式
-const CSP_GO = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+const CSP_GO = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
 // 老库缺列自动补齐（幂等），每个 isolate 只执行一次
 let schemaReady: Promise<void> | null = null

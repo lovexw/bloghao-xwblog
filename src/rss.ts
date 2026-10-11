@@ -23,6 +23,9 @@ export function buildRss(settings: SettingsMap, posts: PostRow[], siteUrl: strin
       // 访问密码文章（password_hash 非空）更严：试读段也不出，description 只用作者自填摘要（src/protect.ts 防泄漏清单）
       const pwProtected = !!p.password_hash
       const memberLocked = !!p.min_tier && p.min_tier !== 'all'
+      // 机器可读锁标志（bloghao 命名空间）：广场 hub 的 RSS pull 补漏据此跳过锁文/密码文，
+      // 与 push 路 firePostPublished 的 locked 口径同源——「加密文不上广场」两条路都守住
+      const locked = pwProtected || memberLocked
       const encoded =
         fullText && p.content && !pwProtected
           ? `\n      <content:encoded>${cdata(
@@ -36,12 +39,12 @@ export function buildRss(settings: SettingsMap, posts: PostRow[], siteUrl: strin
       <link>${xmlEsc(siteUrl)}/post/${encodeURIComponent(p.slug)}</link>
       <guid isPermaLink="true">${xmlEsc(siteUrl)}/post/${encodeURIComponent(p.slug)}</guid>
       <pubDate>${rfc822(p.published_at)}</pubDate>
-      <description>${xmlEsc(p.summary)}</description>${encoded}
+      <description>${xmlEsc(p.summary)}</description>${encoded}${pwProtected || memberLocked ? '\n      <bloghao:locked>1</bloghao:locked>' : ''}
     </item>`
     })
     .join('\n')
   return `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:bloghao="https://bloghao.com/plaza-ns">
   <channel>
     <title>${xmlEsc(tr(en, settings.siteName))}</title>
     <link>${xmlEsc(siteUrl)}</link>

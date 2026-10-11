@@ -44,6 +44,25 @@ test('RSS 全文 CDATA 正确处理 ]]>，摘要关闭全文', () => {
   assert.ok(!summaryOnly.includes('<content:encoded>'))
 })
 
+// ── 广场锁标志（bloghao 命名空间）：hub 的 RSS pull 据此跳过锁文/密码文，与 push 路 locked 同口径 ──
+test('RSS 锁标志：密码文/会员锁文条目带 <bloghao:locked>，公开文不带', () => {
+  const posts = [
+    { slug: 'open', title: '公开文', content: '<p>正文</p>', summary: '摘要', published_at: Date.UTC(2026, 0, 1), updated_at: 0 } as never,
+    { slug: 'pw', title: '密码文', content: '<p>正文</p>', summary: '', password_hash: 'salt:hash', published_at: Date.UTC(2026, 0, 1), updated_at: 0 } as never,
+    { slug: 'tier', title: '会员文', content: '<p>正文</p>', summary: '试读', min_tier: 'coffee', published_at: Date.UTC(2026, 0, 1), updated_at: 0 } as never,
+  ]
+  const xml = buildRss(settings, posts, 'https://x.com')
+  assert.ok(xml.includes('xmlns:bloghao="https://bloghao.com/plaza-ns"'), xml)
+  const itemOf = (title: string) => xml.slice(xml.indexOf(`<title>${title}`), xml.indexOf('</item>', xml.indexOf(`<title>${title}`)))
+  const pw = itemOf('密码文')
+  const tier = itemOf('会员文')
+  const open = itemOf('公开文')
+  assert.ok(pw.includes('<bloghao:locked>1</bloghao:locked>'), pw)
+  assert.ok(tier.includes('<bloghao:locked>1</bloghao:locked>'), tier)
+  assert.ok(!open.includes('bloghao:locked'), open)
+  assert.ok(!pw.includes('<content:encoded>'), '密码文不出全文（既有防泄漏口径不回归）')
+})
+
 // ── 回归（2026-10 安全复查）：XML 1.0 禁止的控制字符曾原样输出，一条脏数据打挂整份 feed ──
 test('RSS / sitemap 剥离 XML 非法控制字符（CDATA 内同样非法）', () => {
   const posts = [
