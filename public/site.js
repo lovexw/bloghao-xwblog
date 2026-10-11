@@ -253,7 +253,15 @@
     input.click()
   }
 
-  /* ---------------- 顶部导航「分类话题」折叠菜单：点外部 / Esc 收起 ---------------- */
+  /* ---------------- 顶部导航「分类话题」折叠菜单：点外部 / Esc 收起 ----------------
+   * 打开时给导航挂 snav-open：横滑形态（overflow-x:auto）下 WebKit 把滚动容器内 fixed 子元素
+   * 按容器定位（iOS 实测菜单被剪掉），主题 CSS 据此放开裁剪、菜单转导航锚定的 absolute */
+  document.addEventListener('toggle', function (e) {
+    var d = e.target
+    if (!d || !d.classList || !d.classList.contains('snav-dd')) return
+    var nav = d.closest ? d.closest('nav') : null
+    if (nav) nav.classList[d.open ? 'add' : 'remove']('snav-open')
+  }, true)
   function closeNavMenus(except) {
     var open = document.querySelectorAll('details.snav-dd[open]')
     for (var i = 0; i < open.length; i++) {
