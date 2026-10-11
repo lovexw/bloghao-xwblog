@@ -32,5 +32,8 @@
   // "30 16 * * *" = 北京时间 00:30 自动备份 D1 → R2 backups/（30 份滚动）
   "triggers": { "crons": ["* * * * *", "30 16 * * *"] },
 
+  // workers.dev 平行入口显式关闭（2026-10-12 审计 C2：主站唯一入口 = 自定义域）
+  "workers_dev": false,
+
   "observability": { "enabled": true }
 }
