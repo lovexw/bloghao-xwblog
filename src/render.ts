@@ -280,7 +280,7 @@ export function siteNav(o: {
   pages?: NavPage[]
   active?: string
   memberEnabled?: boolean
-  /** compact 布局（主题逐个试点）：主条只留内容区入口 + 会员药丸压轴，留言板/友情链接/排行榜/随机降级到主题页脚 */
+  /** compact 布局（主题逐个试点）：主条去微博（首页微博流自带「全部 →」入口）+ 会员药丸压轴，排行榜/随机降级到主题页脚 */
   compact?: boolean
   /** 吸顶导航（wechat 先行）：输出 data-xw-nav-sticky 标记，site.js 据此做下滚收起/上滑浮现（阅读工具条联动） */
   sticky?: boolean
@@ -321,13 +321,16 @@ export function siteNav(o: {
     const memberPill = o.memberEnabled
       ? `<a class="${o.cls}-member${o.active === 'member' ? ' is-active' : ''}" href="/member">${tr(en, '会员')}</a>`
       : ''
+    // 微博不单独进顶栏：混合模式首页已展示微博流（头部「全部 →」指向 /weibo），
+    // 纯微博模式的「首页」本身就是微博（homeItem || weiboItem 兜底）
     return `<nav class="${o.cls}"${o.sticky ? ' data-xw-nav-sticky' : ''} aria-label="${tr(en, '站点导航')}">
   ${homeItem || weiboItem}
-  ${m === 'weibo' ? '' : weiboItem}
   ${m === 'weibo' ? '' : item('/archives', tr(en, '归档'), o.active === 'archives')}
   ${m === 'weibo' ? '' : drop}
   ${(o.pages || []).map((p) => item(p.href, p.title, o.active === p.key)).join('')}
   ${item('/about', tr(en, '关于我'), o.active === 'about')}
+  ${item('/guestbook', tr(en, '留言板'), o.active === 'guestbook')}
+  ${item('/links', tr(en, '友情链接'), o.active === 'links')}
   ${rssIcon}
   ${memberPill}
 </nav>`

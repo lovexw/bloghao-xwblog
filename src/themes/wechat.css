@@ -587,7 +587,7 @@ a.wx-account:hover { opacity: 0.75; }
   .wb-imgs-1 img { max-height: 360px; }
 }
 
-/* ---------- 顶部站点导航（compact：首页/微博/归档/分类话题/关于我 + 会员药丸，余项降级页脚） ---------- */
+/* ---------- 顶部站点导航（compact：首页/归档/分类话题/关于我/留言板/友情链接 + 会员药丸，排行榜/随机降级页脚；微博不重复进顶栏） ---------- */
 .wx-snav {
   display: flex; flex-wrap: wrap; align-items: center; gap: 22px;
   padding: 14px 2px 12px; border-bottom: 1px solid var(--wx-line);
@@ -608,8 +608,9 @@ a.wx-account:hover { opacity: 0.75; }
 }
 .wx-snav-member:hover { color: #fff; opacity: 0.88; }
 .wx-snav-member.is-active { color: #fff; }
-@media (max-width: 480px) {
-  /* 单行横滑（2026-10-11 修：会员开启时 RSS 图标成为最后一根稻草，会员药丸被 wrap 挤成孤儿行）——
+@media (max-width: 560px) {
+  /* 单行横滑（2026-10-11 修：会员开启时 RSS 图标成为最后一根稻草，会员药丸被 wrap 挤成孤儿行；
+   * 同日导航补入留言板/友情链接后 480px 档已装不下，断点随前台 560px 档抬齐）——
    * 一行装不下就横向轻扫，滚动条隐藏；「分类话题」下拉菜单转 fixed 逃出滚动容器的裁剪
    * （overflow-x:auto 会把 overflow-y 连带算成 auto，absolute 子菜单会被剪掉） */
   .wx-snav {
