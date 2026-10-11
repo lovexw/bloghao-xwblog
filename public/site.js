@@ -836,8 +836,10 @@
     panel.remove()
   })
 
-  // 给发布器 / 卡片编辑的按钮行插入表情按钮（插入动作依赖 JS，按钮也由 JS 动态加）
-  function wxqAttachButton(foot, ta) {
+  // 给发布器 / 卡片编辑 / 评论表单的按钮行插入表情按钮（插入动作依赖 JS，按钮也由 JS 动态加）。
+  // anchor 可选：评论 foot 是「提示语 + 发送」的 space-between 双孩子布局，把按钮插到发送前并给
+  // margin-left:auto（吸走自由空间）→ 提示语居左、表情+发送右侧成组；别改回 firstChild——会把提示语挤到中间
+  function wxqAttachButton(foot, ta, anchor) {
     if (!foot || foot.querySelector('[data-wxq-btn]')) return
     var btn = document.createElement('button')
     btn.type = 'button'
@@ -848,8 +850,24 @@
       e.preventDefault()
       wxqTogglePanel(btn, ta)
     })
-    foot.insertBefore(btn, foot.firstChild)
+    if (anchor) {
+      btn.style.marginLeft = 'auto'
+      foot.insertBefore(btn, anchor)
+    } else {
+      foot.insertBefore(btn, foot.firstChild)
+    }
   }
+
+  // 评论表单表情按钮（文章评论 / 留言板 / 微博评论——/weibo 页与首页微博流共用同一套 SSR）：
+  // 评论表单全是 SSR 静态 DOM，IIFE 顶层挂一次即可；按钮复用 wb-composer-add 的主题样式
+  document.querySelectorAll('.cmt-form-foot').forEach(function (foot) {
+    var form = foot.closest('form')
+    wxqAttachButton(foot, form && form.querySelector('.cmt-textarea'), foot.querySelector('.cmt-submit'))
+  })
+  document.querySelectorAll('.wb-cmt-foot').forEach(function (foot) {
+    var form = foot.closest('form')
+    wxqAttachButton(foot, form && form.querySelector('.wb-cmt-textarea'), foot.querySelector('.wb-cmt-submit'))
+  })
 
   /* ---------------- 前台发微博（管理员登录时微博页顶部的发布框，能力与后台发布器一致） ---------------- */
   var composerForm = document.querySelector('[data-wb-composer]')
