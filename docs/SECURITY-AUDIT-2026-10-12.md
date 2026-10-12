@@ -137,7 +137,7 @@
 
 ## 六、遗留与建议(未在本轮修复的事项)
 
-1. **A2 根治——注册环节人机验证**(CF Turnstile 或邮箱验证):注册零验证成本是会员经济 Sybil 的根,加验证属产品决策,待站长拍板;本轮已补的 IP 桶只是限流层缓解
+1. ~~**A2 根治——注册环节人机验证**(CF Turnstile 或邮箱验证):注册零验证成本是会员经济 Sybil 的根,加验证属产品决策,待站长拍板;本轮已补的 IP 桶只是限流层缓解~~ → ✅ **2026-10-12 当日拍板并落地**(Turnstile 方案,src/turnstile.ts + /api/member/register 校验门 + site.js 懒挂载,防线见 AGENTS.md「会员体系」末条;默认关闭,站长在后台填入 Turnstile 两键即启用)
 2. **A4 根治——track 打点聚合/批量写**:30/10min 限流已把烧穿量级压到可接受,但根治需要 visit_log 聚合写或抽样,涉及打点口径设计
 3. **C2 workers.dev 收敛**:需站长在 CF dashboard 核实 `xwblog.<account>.workers.dev` 是否在用;确认不用后下一发布在 wrangler.jsonc 加 `workers_dev: false`
 4. **C3 TG query secret 兼容通道**:现绑定若用 header 通道(2026-10 后一键设置即如此),可安全移除 query 兼容;动 external.ts:449 前先确认线上 webhook 绑定方式

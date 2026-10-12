@@ -79,7 +79,10 @@ export function page(o: ThemePageOptions): string {
     ? `<script type="application/ld+json">${JSON.stringify(o.jsonLd).replace(/</g, '\\u003c')}</script>`
     : ''
   return `<!DOCTYPE html>
-<html lang="${en ? 'en' : 'zh-CN'}"${en ? ' data-edition="en"' : ''}>
+<html lang="${en ? 'en' : 'zh-CN'}"${en ? ' data-edition="en"' : ''}${
+    // 注册人机验证（Turnstile）：sitekey 是公开值，仅 /member 页下发给 site.js 懒挂载组件
+    o.path === '/member' && o.settings.turnstileSiteKey ? ` data-turnstile="${esc(o.settings.turnstileSiteKey)}"` : ''
+  }>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">

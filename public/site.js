@@ -41,6 +41,8 @@
     '登录中…': 'Logging in…',
     '注册成功，正在进入…': 'Account created — signing you in…',
     '登录成功，正在进入…': 'Logged in — redirecting…',
+    '请先完成人机验证': 'Please complete the verification first',
+    '人机验证还没就绪，请稍候再试': 'Verification is still loading — please wait a moment and retry',
     '操作失败，请重试': 'Something went wrong — please try again',
     '昵称不能为空': 'Display name cannot be empty',
     '保存中': 'Saving',
@@ -1883,11 +1885,49 @@
   var memAuth = document.querySelector('.mem-auth')
   if (memAuth) {
     var memForms = memAuth.querySelectorAll('[data-member-form]')
+    /* 注册人机验证（Turnstile，A2 根治）：sitekey 挂 <html data-turnstile>（服务端仅 /member
+     * 下发），未配置则整个分支旁路、注册行为与历史完全一致。组件用显式渲染、注册表单首次
+     * 可见时才挂（隐藏容器里 Turnstile 渲染不出）；令牌一次性，注册失败后 reset 换新再提交；
+     * 脚本加载失败不重试到成功不给出路——无令牌的提交会被服务端拒绝（fail closed） */
+    var turnstileSiteKey = document.documentElement.getAttribute('data-turnstile') || ''
+    var turnstileReady = false
+    var turnstileLoading = false
+    var turnstileWidgetId = null
+    var turnstileToken = function () {
+      return turnstileReady && window.turnstile && window.turnstile.getResponse && turnstileWidgetId !== null
+        ? window.turnstile.getResponse(turnstileWidgetId)
+        : ''
+    }
+    var turnstileEnsure = function () {
+      if (!turnstileSiteKey || turnstileReady || turnstileLoading) return
+      turnstileLoading = true
+      window.__xwTurnstileCb = function () {
+        turnstileLoading = false
+        var form = memAuth.querySelector('[data-member-form="register"]')
+        if (!form || !window.turnstile || !window.turnstile.render) return
+        var box = document.createElement('div')
+        box.className = 'mem-turnstile'
+        form.insertBefore(box, form.querySelector('.mem-btn'))
+        turnstileWidgetId = window.turnstile.render(box, { sitekey: turnstileSiteKey })
+        turnstileReady = true
+      }
+      var sc = document.createElement('script')
+      sc.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=__xwTurnstileCb'
+      sc.async = true
+      sc.onerror = function () { turnstileLoading = false }
+      document.head.appendChild(sc)
+    }
+    var turnstileReset = function () {
+      if (turnstileReady && window.turnstile && window.turnstile.reset && turnstileWidgetId !== null) {
+        window.turnstile.reset(turnstileWidgetId)
+      }
+    }
     if (memForms.length > 1) {
       var memShow = function (name) {
         memForms.forEach(function (f) {
           f.hidden = f.getAttribute('data-member-form') !== name
         })
+        if (name === 'register') turnstileEnsure()
       }
       memAuth.addEventListener('click', function (e) {
         var btn = e.target && e.target.closest ? e.target.closest('[data-member-swap]') : null
@@ -1915,6 +1955,17 @@
           var nick = form.querySelector('[name=nickname]')
           if (nick && nick.value.trim()) body.nickname = nick.value.trim()
           if (email && email.value.trim()) body.email = email.value.trim()
+          // Turnstile 令牌（配置了 sitekey 才校验）：未就绪先在本侧拦下，省一次注定失败的请求
+          if (turnstileSiteKey) {
+            var tok = turnstileToken()
+            if (!tok) {
+              if (tip) tip.textContent = T(turnstileReady ? '请先完成人机验证' : '人机验证还没就绪，请稍候再试')
+              btn.textContent = label
+              btn.disabled = false
+              return
+            }
+            body.turnstileToken = tok
+          }
         }
         postJSON('/api/member/' + kind, body)
           .then(function () {
@@ -1927,6 +1978,7 @@
             if (tip) tip.textContent = err.message || T('操作失败，请重试')
             btn.textContent = label
             btn.disabled = false
+            if (kind === 'register') turnstileReset()
           })
       })
     })

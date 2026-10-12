@@ -2621,6 +2621,10 @@ async function viewSettings() {
           <label class="switch"><input type="checkbox" id="st-membersEnabled" ${s.membersEnabled === '1' ? 'checked' : ''}><span class="track"></span></label>
         </div>
         <div class="form-item" style="max-width:180px;"><label>排行榜展示条数</label><input class="input" id="st-rankTopN" type="number" min="1" max="50" value="${esc(s.rankTopN || '10')}"></div>
+        <div class="form-item"><label>注册人机验证（Turnstile，选填）</label><div class="sec-desc" style="margin:4px 0 8px;">Cloudflare Dashboard → Turnstile 建个站点，两把钥匙成对填到这里（都留空 = 关闭）。启用后前台注册需先过人机验证，拦批量小号刷分；Secret 保存后只显示打码</div>
+          <input class="input" id="st-turnstileSiteKey" placeholder="0x4AAAA…（Site Key，公开）" autocomplete="off" value="${esc(s.turnstileSiteKey || '')}" style="margin-bottom:8px;">
+          <input class="input" id="st-turnstileSecret" placeholder="0x4AAAA…（Secret Key，保密）" autocomplete="off" value="${esc(s.turnstileSecret || '')}">
+        </div>
       </div>
     </div>
 
@@ -2886,6 +2890,8 @@ async function viewSettings() {
       postsPerPage: g('st-postsPerPage').value || '10',
       membersEnabled: g('st-membersEnabled').checked ? '1' : '0',
       rankTopN: g('st-rankTopN').value || '10',
+      turnstileSiteKey: g('st-turnstileSiteKey').value.trim(),
+      turnstileSecret: g('st-turnstileSecret').value.trim(),
       siteGrayscale: g('st-siteGrayscale').checked ? '1' : '0',
       siteClosed: g('st-siteClosed').checked ? '1' : '0',
       siteClosedMessage: g('st-siteClosedMessage').value.trim(),

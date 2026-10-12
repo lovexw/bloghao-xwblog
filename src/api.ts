@@ -21,6 +21,7 @@ import {
   sessionCookie,
   memberSessionCookie,
 } from './auth'
+import { verifyTurnstile } from './turnstile'
 import {
   countUsers,
   createCategory,
@@ -229,9 +230,16 @@ api.post('/member/register', async (c) => {
   if (settings.membersEnabled !== '1') return jsonError('会员功能未开放', 404)
   const ip = clientIp(c.req.raw)
   if (!rateLimit(`mreg:${ip}`, 5, 10 * 60_000)) return jsonError('注册太频繁，请稍后再试', 429)
-  const body = await c.req.json<{ username?: string; password?: string; email?: string; nickname?: string; link?: string }>().catch(() => null)
+  const body = await c.req.json<{ username?: string; password?: string; email?: string; nickname?: string; link?: string; turnstileToken?: string }>().catch(() => null)
   // 蜜罐字段 link：正常用户看不到、机器人会填 —— 静默丢弃（同 publicComment 口径）
   if (body?.link) return c.json({ ok: true })
+  // 注册人机验证（Turnstile，A2 根治）：配置了 Secret 才启用，放在字段校验之前让无令牌机器人
+  // 最早出局；演示站跳过（凭据公示的体验站不外发 siteverify，也不给体验者加验证负担）。
+  // verifyTurnstile 拿不到结论一律 false —— 端点抖动时宁可挡注册，不留无验证窗口
+  if (settings.turnstileSecret && !isDemo(c.env)) {
+    const ok = await verifyTurnstile(settings.turnstileSecret, String(body?.turnstileToken || ''), ip)
+    if (!ok) return jsonError('人机验证未通过，请刷新页面后重试')
+  }
   const username = String(body?.username || '').trim()
   const password = String(body?.password || '')
   const email = String(body?.email || '').trim().slice(0, 100)
@@ -1643,7 +1651,7 @@ api.delete('/admin/comments/:id', async (c) => {
 /* ---------------- 设置 ---------------- */
 // 敏感项只写不读：GET 一律打码返回（明文只在生成 Token / 保存后不再回显）；
 // PUT 收到打码占位符视为「保持原值」，这样前端整表提交不会把占位符写进库
-const SECRET_SETTINGS = ['externalToken', 'telegramBotToken', 'telegramWebhookSecret', 'bufferAccessToken', 'plazaToken', 'commentWebhookUrl']
+const SECRET_SETTINGS = ['externalToken', 'telegramBotToken', 'telegramWebhookSecret', 'bufferAccessToken', 'plazaToken', 'commentWebhookUrl', 'turnstileSecret']
 const SECRET_MASK = '••••••••'
 // 布尔开关统一收口：'1'/'true' → '1'，其余一律 '0'（新增布尔键加进表即可，别再抄判断分支）
 const BOOL_SETTINGS = [
@@ -1766,6 +1774,14 @@ api.put('/admin/settings', async (c) => {
       continue
     }
     patch[key] = v.slice(0, 500)
+  }
+  // Turnstile 两键成对（注册人机验证）：只填一个会造出「有锁无窗」（注册被拦且无验证组件可过）
+  // 或「有窗无锁」（组件白渲染）——整体拒绝。Secret 以打码占位符提交时不在 patch 里，回读现值兜底
+  if (patch.turnstileSiteKey !== undefined || patch.turnstileSecret !== undefined) {
+    const cur = await getSettings(c.env.DB)
+    const site = patch.turnstileSiteKey !== undefined ? patch.turnstileSiteKey : cur.turnstileSiteKey
+    const secret = patch.turnstileSecret !== undefined ? patch.turnstileSecret : cur.turnstileSecret
+    if (!!site !== !!secret) return jsonError('Turnstile 需同时填写 Site Key 与 Secret Key（或都留空关闭）')
   }
   // 演示站不允许闭站：有人开了开关，整个重置周期内所有体验者都会看到 503
   if (isDemo(c.env)) patch.siteClosed = '0'
