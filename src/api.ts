@@ -22,6 +22,7 @@ import {
   memberSessionCookie,
 } from './auth'
 import { verifyTurnstile } from './turnstile'
+import { APP_VERSION } from './version'
 import {
   countUsers,
   createCategory,
@@ -466,6 +467,8 @@ api.get('/admin/stats', async (c) => {
     getSettings(db),
   ])
   return c.json({
+    // 系统版本（src/version.ts 镜像 package.json）：仅管理面出口，供概览「系统」卡展示
+    version: APP_VERSION,
     posts: pub?.n ?? 0,
     views: pub?.v ?? 0,
     likes: pub?.l ?? 0,

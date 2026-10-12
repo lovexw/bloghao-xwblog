@@ -374,6 +374,7 @@ async function viewHome() {
         <div><div class="stat-value" style="font-size:20px;">${s.db.comments}<small>条评论</small></div></div>
         <div><div class="stat-value" style="font-size:20px;">${s.db.members}<small>位会员</small></div></div>
         <div style="color:var(--sub);font-size:13px;">最近备份：${esc(backupText)}</div>
+        <div style="color:var(--sub);font-size:13px;">系统版本：博客号 v${esc(s.version || '?')}</div>
       </div>
     </div>`
   )

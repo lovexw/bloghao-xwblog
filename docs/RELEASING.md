@@ -20,6 +20,8 @@
 - **次版本**（2.**X**.0）：常规功能批次
 - **主版本**（**X**.0.0）：破坏性变更（schema 不兼容、配置项废弃等）
 
+> 改 `package.json` 的 `version` 时**同步改 `src/version.ts` 的 `APP_VERSION`**（运行时镜像，后台概览「系统」卡展示）——tests/version.test.ts 守着，漏改测试即红。
+
 对部署用户来说，升级 = 同步本仓库最新代码后重新部署，D1 结构由 ensureSchema 自动增量迁移——若某次发布含**需要手动动作**的条目，必须在 CHANGELOG 对应条目用「⚠️ 升级注意」标出。
 
 ## 发布前检查（在 origin main 上）
