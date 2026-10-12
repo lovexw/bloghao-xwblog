@@ -36,6 +36,7 @@
       <a class="docs-side-title" href="index.html">📚 文档中心</a>
       <ul class="docs-side-list">
       <li><a href="deploy.html">🚀 部署教程</a></li>
+      <li><a href="cloudflare.html">☁️ Cloudflare 基础</a></li>
       <li><a href="guide.html">📖 使用手册</a></li>
       <li><a href="plaza.html">🧭 广场</a></li>
       <li><a href="themes.html">🎨 主题开发</a></li>
@@ -60,6 +61,11 @@
 <p>升级方式：同步本仓库最新代码后重新部署即可，D1 结构自动增量迁移；个别需要手动动作的条目以「⚠️ 升级注意」标出。开发线的完整迭代细节见各仓库 git log——这里是给部署用户的要点。</p>
 </blockquote>
 <h2 id="unreleased"><a href="https://github.com/bloghao/bloghao/compare/v2.4.0...HEAD" target="_blank" rel="noopener noreferrer">Unreleased</a></h2><p>（尚未发布的内容，日常随手记入，发布时整段移入新版本小节。）</p>
+<h3 id="变更">变更</h3><ul>
+<li><strong>wechat 主题导航与页脚重排</strong>：顶栏去掉「微博」独立入口（首页微博流头部自带「全部 →」，纯微博模式「首页」即微博），「留言板」「友情链接」进顶栏（挂在「关于我」后）；页脚不再重复微博/留言板/友情链接/关于我，只留 排行榜/随机/RSS/管理 等次级入口；移动端顶栏单行横滑断点从 480px 抬到 560px（多两项后一行装得下了）</li>
+<li><strong>移动端评论头排版修复</strong>：真 390px 下评论头的作者/会员徽标与回复按钮会被挤到框内拆字换行（「作者」拆成作/者 两行）——评论头放开 flex 换行、徽标与按钮整字不拆，放不下的整块落到第二行（与微博评论头同口径）</li>
+<li><strong>移动端「分类话题」下拉修复</strong>：顶栏转为横向滚动容器后，iOS WebKit 把滚动容器内的 fixed 菜单按容器定位，下拉被剪掉看不见——菜单打开时放开导航裁剪（site.js 切 <code>snav-open</code>，<code>:has</code> 兜底无 JS），菜单转导航锚定的 absolute 落在导航正下方</li>
+</ul>
 <h2 id="240---2026-10-11"><a href="https://github.com/bloghao/bloghao/compare/v2.3.0...v2.4.0" target="_blank" rel="noopener noreferrer">2.4.0</a> - 2026-10-11</h2><p>本版本是一次<strong>发布前全面安全审计</strong>的加固批次（五路并行审计：安全核心 / API 与会员 / 数据层 / 前端 / 渲染与基础设施），加上<strong>广场微博补漏自愈</strong>——微博上广场从此不怕推送失败，广场页信息流升级三段式布局。</p>
 <h3 id="新增">新增</h3><ul>
 <li><strong>广场微博补漏自愈</strong>：微博此前只靠「发布瞬间推送」上广场，推送失败即永久缺席且没有自愈路——新增公开微博接口（<code>GET /api/public/weibo</code>，只读、仅已发布内容、无敏感字段），广场 hub 定时拉取对齐（推送优先、拉取只补漏不覆盖，超 30 天的旧内容不补）；hub 管理端新增「手动触发补漏」。协议见 docs/PLAZA.md「微博补漏」</li>
@@ -114,7 +120,7 @@
 <li><strong>微博同步 Buffer（X 等）</strong>：服务端插件新增「微博同步 Buffer」——发微博后自动同步到 X 等社交平台，Buffer 排程平台免费档替用户承担 X API 按量计费（3 渠道）；API Key 与渠道 ID 在「设置 → 服务端插件」一键拉取，超 280 字符自动截断、<code>#话题#</code> 转 X 话题格式、站内配图走公链直传。同步建立在新增的 <code>onWeiboPublished</code> 钩子上（后台新建即发 / 草稿转发布 / 开放 API / TG 机器人四条路都触发，编辑已发布微博不重推），插件开发见 docs/PLUGINS.md</li>
 <li><strong>Docker 多租户控制面</strong>：<code>docker-poc</code> 新增网页控制台（<code>control.ts</code>）——开站 / 停用 / 删除 / 重置密码免重启热加载；配套「开台脚本 <code>add-tenant.sh</code>」一条命令开一个新博客站（<code>--demo</code> 开演示种子站、<code>--remove</code> 下线保留数据，兼容 jq / node 双后端），并附 1GB 内存小机部署清单 <a href="https://github.com/bloghao/bloghao/blob/main/docker-poc/DEPLOY-MICRO.md">DEPLOY-MICRO.md</a>（跑 30~50 个博客站的完整路径与容量账）</li>
 </ul>
-<h3 id="变更">变更</h3><ul>
+<h3 id="变更-1">变更</h3><ul>
 <li><strong>自动 Slug 更有标准</strong>：新建文章 / 页面不填 Slug 时，英文标题仍转短横线格式；中文标题从「p-随机串」改为「发布日期 + 4 位随机位」（如 <code>20261007-k3fx</code>，按北京时间取日期），可读、可按日排序，重名自动加序号不会发布失败；已有文章的链接保持不变</li>
 <li><strong>会员排行挂件下线首页</strong>：首页不再渲染会员积分排行卡片，榜单收敛到 <code>/rank</code> 页（导航「排行榜」入口不变）；排行榜条数设置仍控制 <code>/rank</code> 展示人数</li>
 <li><strong>会员评论表单全站贯通</strong>：登录会员打开文章 / 留言板 / 微博评论，三处表单都显示「以会员 xxx 的身份发言」并免填昵称（此前仅服务端识别会员身份，表单仍按游客渲染昵称输入框）</li>
@@ -161,6 +167,7 @@
       <div class="docs-toc-title">本页目录</div>
       <ul class="docs-toc-list">
         <li class="toc-d2"><a href="#unreleased" data-toc="unreleased">Unreleased</a></li>
+        <li class="toc-d3"><a href="#变更" data-toc="变更">变更</a></li>
         <li class="toc-d2"><a href="#240---2026-10-11" data-toc="240---2026-10-11">2.4.0 - 2026-10-11</a></li>
         <li class="toc-d3"><a href="#新增" data-toc="新增">新增</a></li>
         <li class="toc-d3"><a href="#安全" data-toc="安全">安全</a></li>
@@ -169,7 +176,7 @@
         <li class="toc-d3"><a href="#新增-1" data-toc="新增-1">新增</a></li>
         <li class="toc-d2"><a href="#220---2026-10-10" data-toc="220---2026-10-10">2.2.0 - 2026-10-10</a></li>
         <li class="toc-d3"><a href="#新增-2" data-toc="新增-2">新增</a></li>
-        <li class="toc-d3"><a href="#变更" data-toc="变更">变更</a></li>
+        <li class="toc-d3"><a href="#变更-1" data-toc="变更-1">变更</a></li>
         <li class="toc-d3"><a href="#修复-1" data-toc="修复-1">修复</a></li>
         <li class="toc-d2"><a href="#210---2026-10-06" data-toc="210---2026-10-06">2.1.0 - 2026-10-06</a></li>
         <li class="toc-d3"><a href="#新增-3" data-toc="新增-3">新增</a></li>

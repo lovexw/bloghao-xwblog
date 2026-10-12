@@ -21,6 +21,7 @@
 ## 开发文档（Markdown 源文件）
 
 - [部署教程](https://raw.githubusercontent.com/bloghao/bloghao/main/docs/DEPLOY.md)：从注册 Cloudflare 到部署 Worker、绑定自定义域名、自动部署与备份恢复
+- [Cloudflare 基础教程](https://raw.githubusercontent.com/bloghao/bloghao/main/docs/CLOUDFLARE-BASICS.md)：Workers、D1、R2、Cron 定时任务、自定义域名与 Turnstile 的基础说明，控制台巡检与常用运维命令速查
 - [使用手册](https://raw.githubusercontent.com/bloghao/bloghao/main/docs/GUIDE.md)：后台导览、写文章全流程、快捷键、评论与媒体管理、设置逐项说明
 - [主题开发](https://raw.githubusercontent.com/bloghao/bloghao/main/docs/THEMES.md)：一套主题 = 八个必需渲染函数（+ 可选 member / rank 两个）+ 全局 CSS，三步注册新主题，公共积木与排版规范底线
 - [广场](https://raw.githubusercontent.com/bloghao/bloghao/main/docs/PLAZA.md)：官网广场（内容聚合流）的接入步骤、hub 部署与 ingest 协议、混排口径与认证徽标
