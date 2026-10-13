@@ -953,12 +953,16 @@ async function viewWeibo() {
     wbUploading++
     addVideoBtn.disabled = true
     try {
-      const up = await uploadFile(file, (p) => (addVideoBtn.textContent = `上传视频 ${p}%`))
+      const prep = await prepareVideo(file)
+      if (prep.error) return toast('只支持 MP4 / WebM 视频', true)
+      const up = await uploadFile(prep.file, (p) => (addVideoBtn.textContent = `上传视频 ${p}%`))
       wbVideo = { url: up.url, poster: '', w: 0, h: 0 }
       wbVideoMeta = fmtSize(file.size)
       renderVideo()
+      // HEVC（iPhone 默认的高效格式）只在部分浏览器能放：如实提示，让站长自己决定要不要换格式
+      if (prep.hevc) toast('HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）')
       // 封面帧慢一步补传：拿不到就保持无封面（视频照常可播），不阻塞保存
-      const shot = await grabVideoPoster(file)
+      const shot = await grabVideoPoster(prep.file)
       if (shot && wbVideo && wbVideo.url === up.url) {
         try {
           const poster = await uploadFile(new File([shot.blob], 'poster.jpg', { type: 'image/jpeg' }), null)
@@ -3267,10 +3271,71 @@ async function viewSettings() {
 
 /* ---------------- 微博视频工具（B19）：体积上限与 src/store.ts MAX_UPLOAD_BYTES 同口径 ---------------- */
 const VIDEO_MAX_BYTES = 25 * 1024 * 1024
-const VIDEO_ACCEPT = 'video/mp4,video/webm,.mp4,.webm'
-const VIDEO_EXT_RE = /\.(mp4|webm)$/i
-/** 少数安卓浏览器 file.type 为空，按扩展名兜底 */
-const isVideoFile = (f) => !!f && (/^video\/(mp4|webm)$/i.test(f.type || '') || (!f.type && VIDEO_EXT_RE.test(f.name || '')))
+// accept 用 video/*：iOS 的「照片图库」选择器按 accept 过滤，只列 video/mp4 会把 iPhone 拍的
+// .mov 视频整批筛掉（图库里一个视频都不显示）；真正的格式把关在 prepareVideo 里做
+const VIDEO_ACCEPT = 'video/*'
+const VIDEO_EXT_RE = /\.(mp4|webm|mov)$/i
+/** 选中的文件按视频处理（真正的格式判定在 prepareVideo）；少数安卓浏览器 file.type 为空，按扩展名兜底 */
+const isVideoFile = (f) => !!f && (/^video\//i.test(f.type || '') || (!f.type && VIDEO_EXT_RE.test(f.name || '')))
+
+/**
+ * ISO-BMFF 容器归一化：iPhone 拍的是 .mov（ftyp 主品牌 'qt  '），结构本就是 ISO-BMFF，
+ * 但浏览器与「只收 mp4/webm」的上传端点都不认 QuickTime 容器。这里原地把 ftyp 里的 'qt  '
+ * 改写成 'isom'（标准 mp4 品牌）：H.264 / AAC 的 iPhone 视频改完即全平台可放。
+ * 改了返回 true；没找到 ftyp 或品牌不是 qt 返回 false。
+ */
+function patchFtypBrand(head) {
+  let at = -1
+  for (let i = 0; i + 8 <= head.length; i++) {
+    if (head[i] === 0x66 && head[i + 1] === 0x74 && head[i + 2] === 0x79 && head[i + 3] === 0x70) {
+      at = i // 'ftyp'
+      break
+    }
+  }
+  if (at < 4) return false
+  const size = (head[at - 4] << 24) | (head[at - 3] << 16) | (head[at - 2] << 8) | head[at - 1]
+  const end = size > 16 && size <= head.length ? at - 4 + size : head.length
+  let patched = false
+  for (let j = at + 4; j + 4 <= end; j += 4) {
+    // 品牌位按 4 字节对齐：'qt  ' 与 'qt' 两种写法都认
+    if (head[j] === 0x71 && head[j + 1] === 0x74 && (head[j + 2] === 0x20 || head[j + 3] === 0x20)) {
+      head[j] = 0x69 // i
+      head[j + 1] = 0x73 // s
+      head[j + 2] = 0x6f // o
+      head[j + 3] = 0x6d // m
+      patched = true
+    }
+  }
+  return patched
+}
+
+/** 粗略探测有没有 HEVC（'hvc1' / 'hev1' 样本描述）：moov 在头或在尾，前后各扫 1MB 就够 */
+async function detectHevc(file) {
+  const MAX = 1024 * 1024
+  const parts = [file.slice(0, Math.min(MAX, file.size))]
+  if (file.size > MAX) parts.push(file.slice(Math.max(0, file.size - MAX)))
+  for (const p of parts) {
+    const b = new Uint8Array(await p.arrayBuffer())
+    for (let j = 0; j + 4 <= b.length; j++) {
+      if (
+        (b[j] === 0x68 && b[j + 1] === 0x76 && b[j + 2] === 0x63 && b[j + 3] === 0x31) ||
+        (b[j] === 0x68 && b[j + 1] === 0x65 && b[j + 2] === 0x76 && b[j + 3] === 0x31)
+      )
+        return true
+    }
+  }
+  return false
+}
+
+/** 上传前的视频整理：mp4 / webm 原样；ISO-BMFF 的 .mov 改写成 mp4；其余格式回 error */
+async function prepareVideo(file) {
+  if (/^video\/(mp4|webm)$/i.test(file.type || '') || (!file.type && /\.(mp4|webm)$/i.test(file.name || '')))
+    return { file, hevc: false }
+  const head = new Uint8Array(await file.slice(0, 64).arrayBuffer())
+  if (!patchFtypBrand(head)) return { error: true }
+  const name = (file.name || 'video').replace(/\.[^.]+$/, '') + '.mp4'
+  return { file: new File([head, file.slice(64)], name, { type: 'video/mp4' }), hevc: await detectHevc(file) }
+}
 /** 抽视频第一帧当封面帧（最长边压到 1280 省体积）：失败 / 超时 resolve(null)，卡片退化成无封面 */
 function grabVideoPoster(file) {
   return new Promise((resolve) => {

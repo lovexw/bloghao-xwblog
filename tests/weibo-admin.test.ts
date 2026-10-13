@@ -183,3 +183,50 @@ test('25MB 口径两处同源：site.js / 后台 app.js 的 VIDEO_MAX_BYTES 等�
     assert.equal(Number(m[1]) * 1024 * 1024, MAX_UPLOAD_BYTES, file + ' 的体积上限与服务端漂移了')
   }
 })
+
+// ── iPhone 上传（2026-10-13 站长手机实测）：选择器 accept 与 .mov 容器归一化 ──
+// accept 只列 mp4/webm 时，iOS 的「照片图库」会把 iPhone 拍的 .mov 视频整批筛掉（一个都不显示）；
+// 选进来之后还要把 ftyp 里的 'qt  ' 品牌改写成 mp4，浏览器与上传端点才认。
+
+test('site.js patchFtypBrand：iPhone 的 qt 品牌就地改写成 isom，其它文件一律不动', () => {
+  const src = readFileSync(new URL('../public/site.js', import.meta.url), 'utf8')
+  const seg = src.slice(src.indexOf('/** ISO-BMFF 容器归一化'), src.indexOf('/** 粗略探测有没有 HEVC'))
+  assert.ok(seg.includes('function patchFtypBrand'), 'site.js 切片失败：patchFtypBrand 不在预期位置')
+  const patch = new Function(seg + '\n;return patchFtypBrand')() as (head: Uint8Array) => boolean
+
+  // iPhone 录制：box size 24、主品牌 'qt  '、兼容品牌列表里还有一个 'qt  '，后面跟着 mdat 长度
+  const mov = new Uint8Array([
+    0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20, 0, 0, 2, 0, 0x71, 0x74, 0x20, 0x20, 0, 0, 0, 8,
+  ])
+  const rest = [...mov.slice(20)]
+  assert.equal(patch(mov), true)
+  assert.equal(String.fromCharCode(...mov.slice(8, 12)), 'isom', '主品牌应改成 isom')
+  assert.equal(String.fromCharCode(...mov.slice(16, 20)), 'isom', '兼容品牌里的 qt 也要改')
+  assert.deepEqual([...mov.slice(20)], rest, 'ftyp 之外的字节不得改动')
+
+  // 已经是 mp4（isom）/ 不是 ISO-BMFF / 文件头太短，都不动
+  assert.equal(patch(new Uint8Array([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d, 0, 0, 2, 0])), false)
+  assert.equal(
+    patch(new Uint8Array([0, 0, 0, 24, 0x77, 0x69, 0x64, 0x65, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])),
+    false
+  )
+  assert.equal(patch(new Uint8Array([0, 0, 0, 16, 0x66])), false)
+})
+
+test('site.js detectHevc：认出 hvc1 / hev1，纯 H.264 不误报', async () => {
+  const src = readFileSync(new URL('../public/site.js', import.meta.url), 'utf8')
+  const seg = src.slice(src.indexOf('/** 粗略探测有没有 HEVC'), src.indexOf('/** 上传前的视频整理'))
+  assert.ok(seg.includes('function detectHevc'), 'site.js 切片失败：detectHevc 不在预期位置')
+  const detect = new Function(seg + '\n;return detectHevc')() as (f: File) => Promise<boolean>
+
+  assert.equal(await detect(new File([new Uint8Array([0, 0, 0, 8, 0x68, 0x76, 0x63, 0x31, 0, 0, 0, 8])], 'a.mov')), true)
+  assert.equal(await detect(new File([new Uint8Array([0, 0, 0, 8, 0x61, 0x76, 0x63, 0x31, 0, 0, 0, 8])], 'b.mov')), false)
+})
+
+test('两个客户端的选择器都写 video/*，且都带 ftyp 归一化（accept 列窄了 iOS 图库就看不出视频）', () => {
+  for (const file of ['../public/site.js', '../public/admin/app.js']) {
+    const src = readFileSync(new URL(file, import.meta.url), 'utf8')
+    assert.match(src, /VIDEO_ACCEPT = 'video\/\*'/, file + ' 的 VIDEO_ACCEPT 必须是 video/*')
+    assert.ok(src.includes('function patchFtypBrand'), file + ' 缺少 ftyp 容器归一化')
+  }
+})

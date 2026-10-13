@@ -26,6 +26,10 @@
     '视频': 'Video',
     '最大 25MB，MP4 / WebM': 'Up to 25MB, MP4 / WebM',
     '只支持 MP4 / WebM 视频': 'Only MP4 / WebM videos are supported',
+    'HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）':
+      'HEVC video: fine on iPhone / Mac, but some Windows browsers cannot play it (export an MP4 from a video editor for the widest support)',
+    'HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）':
+      'HEVC video: fine on iPhone / Mac, but some Windows browsers cannot play it (export an MP4 from a video editor for the widest support)',
     '网络错误，上传失败': 'Network error — upload failed',
     '置顶': 'Pin',
     '取消置顶': 'Unpin',
@@ -244,12 +248,92 @@
    * 元数据与封面帧都是 best-effort：拿不到就退化成无封面卡，绝不阻塞发布。
    */
   var VIDEO_MAX_BYTES = 25 * 1024 * 1024
-  var VIDEO_ACCEPT = 'video/mp4,video/webm,.mp4,.webm'
-  var VIDEO_EXT_RE = /\.(mp4|webm)$/i
+  // accept 用 video/*：iOS 的「照片图库」选择器按 accept 过滤，只列 video/mp4 会把 iPhone 拍的
+  // .mov 视频整批筛掉（图库里一个视频都不显示，2026-10-13 站长手机实测）；格式把关改到上传前做
+  var VIDEO_ACCEPT = 'video/*'
+  var VIDEO_EXT_RE = /\.(mp4|webm|mov)$/i
 
+  /** 选中的文件按视频处理（真正的格式判定在 prepareVideo：能归一化成 mp4 的才算） */
   function isVideoFile(f) {
     if (!f) return false
-    return /^video\/(mp4|webm)$/i.test(f.type || '') || (!f.type && VIDEO_EXT_RE.test(f.name || ''))
+    return /^video\//i.test(f.type || '') || (!f.type && VIDEO_EXT_RE.test(f.name || ''))
+  }
+
+  /** ISO-BMFF 容器归一化：iPhone 拍的是 .mov（ftyp 主品牌 'qt  '），结构本就是 ISO-BMFF，
+   *  但浏览器与「只收 mp4/webm」的上传端点都不认 QuickTime 容器。这里原地把 ftyp 里的
+   *  'qt  ' 品牌改写成 'isom'（= 标准 mp4 品牌），H.264 / AAC 的 iPhone 视频改完即全平台可放。
+   *  head 是文件头若干字节的 Uint8Array；改了返回 true，没找到 ftyp / 品牌不是 qt 返回 false。 */
+  function patchFtypBrand(head) {
+    var at = -1
+    for (var i = 0; i + 8 <= head.length; i++) {
+      if (head[i] === 0x66 && head[i + 1] === 0x74 && head[i + 2] === 0x79 && head[i + 3] === 0x70) {
+        at = i // 'ftyp'
+        break
+      }
+    }
+    if (at < 4) return false
+    var size = (head[at - 4] << 24) | (head[at - 3] << 16) | (head[at - 2] << 8) | head[at - 1]
+    var end = size > 16 && size <= head.length ? at - 4 + size : head.length
+    var patched = false
+    for (var j = at + 4; j + 4 <= end; j += 4) {
+      // 品牌位按 4 字节对齐：'qt  ' 与 'qt' 两种写法都认
+      if (head[j] === 0x71 && head[j + 1] === 0x74 && (head[j + 2] === 0x20 || head[j + 3] === 0x20)) {
+        head[j] = 0x69 // i
+        head[j + 1] = 0x73 // s
+        head[j + 2] = 0x6f // o
+        head[j + 3] = 0x6d // m
+        patched = true
+      }
+    }
+    return patched
+  }
+
+  /** 粗略探测有没有 HEVC（'hvc1' / 'hev1' 样本描述）：moov 可能在文件头也可能在尾，
+   *  前后各扫 1MB 就够（超过 25MB 的视频本来也传不上来）。找不到一律当没有，不打扰用户。 */
+  function detectHevc(file) {
+    var MAX = 1024 * 1024
+    var parts = [file.slice(0, Math.min(MAX, file.size))]
+    if (file.size > MAX) parts.push(file.slice(Math.max(0, file.size - MAX)))
+    return Promise.all(
+      parts.map(function (p) {
+        return p.arrayBuffer()
+      })
+    ).then(function (bufs) {
+      for (var i = 0; i < bufs.length; i++) {
+        var b = new Uint8Array(bufs[i])
+        for (var j = 0; j + 4 <= b.length; j++) {
+          if (
+            (b[j] === 0x68 && b[j + 1] === 0x76 && b[j + 2] === 0x63 && b[j + 3] === 0x31) ||
+            (b[j] === 0x68 && b[j + 1] === 0x65 && b[j + 2] === 0x76 && b[j + 3] === 0x31)
+          )
+            return true
+        }
+      }
+      return false
+    })
+  }
+
+  /** 上传前的视频整理：mp4 / webm 原样；ISO-BMFF 的 .mov 改写成 mp4（只读文件头 64 字节 +
+   *  前后各 1MB 探编码，Blob 拼接是零拷贝引用，不把整段视频读进内存）；其余格式回 error。
+   *  返回 { file, hevc } 或 { error: true } */
+  function prepareVideo(file) {
+    if (/^video\/(mp4|webm)$/i.test(file.type || '') || (!file.type && /\.(mp4|webm)$/i.test(file.name || '')))
+      return Promise.resolve({ file: file, hevc: false })
+    var headSlice = file.slice(0, 64)
+    return headSlice
+      .arrayBuffer()
+      .then(function (buf) {
+        var head = new Uint8Array(buf)
+        if (!patchFtypBrand(head)) return null
+        var name = (file.name || 'video').replace(/\.[^.]+$/, '') + '.mp4'
+        return new File([head, file.slice(64)], name, { type: 'video/mp4' })
+      })
+      .then(function (patched) {
+        if (!patched) return { error: true }
+        return detectHevc(file).then(function (hevc) {
+          return { file: patched, hevc: hevc }
+        })
+      })
   }
 
   function fmtSize(n) {
@@ -266,8 +350,20 @@
     return m + ':' + (r < 10 ? '0' + r : r)
   }
 
-  /** 上传视频（带百分比回调）；失败抛 Error，文案与服务端 jsonError 同源 */
+  /** 上传视频（带百分比回调）：先做容器归一化（iPhone 的 .mov → mp4，见 prepareVideo），
+   *  再走 raw 上传。失败抛 Error，文案与服务端 jsonError 同源；成功时带上 hevc 标记供调用方提示。 */
   function uploadVideo(file, onProgress) {
+    return prepareVideo(file).then(function (prep) {
+      if (prep.error) throw new Error(T('只支持 MP4 / WebM 视频'))
+      return uploadVideoRaw(prep.file, onProgress).then(function (d) {
+        d.hevc = prep.hevc
+        return d
+      })
+    })
+  }
+
+  /** 真正发往 /admin/upload 的那一步（XHR 取进度） */
+  function uploadVideoRaw(file, onProgress) {
     return new Promise(function (resolve, reject) {
       var xhr = new XMLHttpRequest()
       xhr.open('POST', '/api/admin/upload')
@@ -1123,6 +1219,10 @@
           cpVideo = { url: up.url, poster: '', w: 0, h: 0 }
           if (!cpVideoMeta) cpVideoMeta = fmtSize(file.size)
           cpRenderVideo()
+          // HEVC（iPhone 默认的高效格式）只在部分浏览器能放：如实提示，让站长自己决定要不要换格式
+          if (up.hevc) cpMsg(T('HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）'))
+          // HEVC（iPhone 默认的高效格式）只在部分浏览器能放：如实提示，让站长自己决定要不要换格式
+          if (up.hevc) cpMsg(T('HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）'))
           // 封面帧慢一步补传：拿不到就保持无封面（卡片照常播放），不拖慢发布
           grabVideoPoster(file, function (shot) {
             if (!shot || !cpVideo || cpVideo.url !== up.url) return
@@ -1163,9 +1263,12 @@
 
     function cpAddFiles(fileList) {
       var all = Array.prototype.slice.call(fileList || [])
+      // 拖拽 / 粘贴不看 accept，视频文件会直接落到这里：先分流到视频通道（同后台 addMediaFiles 口径）
+      var vids = all.filter(isVideoFile)
+      if (vids.length) cpAddVideo(vids[0])
       var imgs = all.filter(function (f) { return /^image\//.test(f.type) })
       if (!imgs.length) {
-        if (all.length) cpMsg(T('只支持 JPG / PNG / WebP / GIF 图片'))
+        if (all.length && !vids.length) cpMsg(T('只支持 JPG / PNG / WebP / GIF 图片'))
         return
       }
       var room = WB_MAX_IMAGES - cpImages.length
@@ -1546,6 +1649,8 @@
             video = { url: up.url, poster: '', w: 0, h: 0 }
             if (!videoMeta) videoMeta = fmtSize(file.size)
             renderVideo()
+            if (up.hevc) tip(T('HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）'))
+            if (up.hevc) tip(T('HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）'))
             grabVideoPoster(file, function (shot) {
               if (!shot || !video || video.url !== up.url) return
               uploadImage(new File([shot.blob], 'poster.jpg', { type: 'image/jpeg' }))
@@ -1590,7 +1695,11 @@
       })
 
       function addFiles(fileList) {
-        var imgs = [].slice.call(fileList || []).filter(function (f) { return /^image\//.test(f.type) })
+        var all = [].slice.call(fileList || [])
+        // 拖拽 / 粘贴不看 accept：视频走视频通道（一条微博一个视频），其余按图片处理
+        var vids = all.filter(isVideoFile)
+        if (vids.length) addVideoFile(vids[0])
+        var imgs = all.filter(function (f) { return /^image\//.test(f.type) })
         if (!imgs.length) return
         var room = WB_MAX_IMAGES - images.length
         if (room <= 0) return tip(EN ? 'At most ' + WB_MAX_IMAGES + ' photos' : '最多 ' + WB_MAX_IMAGES + ' 张图')

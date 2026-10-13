@@ -154,6 +154,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - 存 `weibo.video` 单列 JSON `{url, poster, w, h}`：写侧 `parseWeiboVideo`（scheme 白名单 + 宽高限幅 + 未知键丢弃）、读侧 `weiboVideoView`（脏 JSON / 非法 scheme 一律 null，异常值不流进 `<video src>`）；schema.sql 与 db.ts `SCHEMA_COLUMNS` 两处同步的老规矩照旧
 - **PUT 的 `video` 键是缺键即保留**（同 posts 的 `password` 语义）：后台列表上下架、前台旧编辑器只发 content+images+status，别改成全量覆盖——会把视频静默清掉；显式 `null` / 空串才是清除。冒烟「微博视频链路」逐条守着
 - 渲染唯一入口 `render.ts weiboVideoHtml`（**单行输出**：媒体区顺序 正文 → 视频 → 配图，竖屏居中限高，无封面帧时叠 ▶ 角标、开播由 site.js 挂 `is-playing` 收起）；site.js 的 `wbVideoHtmlJs` 是它的手工 ES5 镜像，tests/weibo-admin.test.ts 把 site.js 切片执行后与服务端**逐字节比对**——改任一侧跑它（后台 app.js 只渲染缩略 `<video>`，无镜像义务）
+- **两个客户端的 `VIDEO_ACCEPT` 必须是 `video/*`，别枚举 mp4/webm**：iOS 的「照片图库」选择器按 accept 过滤，列窄了会让 iPhone 拍的 `.mov` 视频一个都不显示（2026-10-13 站长手机实测）；格式把关前移到上传前的 `prepareVideo`——ISO-BMFF 的 `.mov` 只把 ftyp 里的 `qt  ` 品牌原地改写成 `isom`（零依赖字节手术 + Blob 拼接，只读文件头 64 字节，不整份读内存），HEVC 的再给一条诚实提示（iPhone / Mac 正常，部分 Windows 浏览器放不出来）。**服务端白名单不放宽**：归一化后的文件本身就是 mp4（魔数照旧过嗅探），「只收 mp4/webm」那道防线不动；tests/weibo-admin.test.ts 守 `patchFtypBrand` 的字节级行为、`detectHevc` 的判定与两处 accept 口径
 - 视频文件不出站：RSS 不含；广场同步与开放接口 `/api/public/weibo` 只取**封面帧**当缩略图（插件 payload 的 `video` 只带 `{url, poster}` 元数据）；`audit.ts pullReferenceTexts` 已登记 `weibo.video`（视频与封面帧都在图床里，漏登记会被媒体体检判成「未被引用」）
 - 封面帧是发布端 best-effort 产物（客户端 canvas 抽第一帧、最长边压到 1280、JPEG 0.82；抓不到 / 超时就留空，卡片退化成无封面播放器）：**新增发布入口别把它做成必需步骤**，也不要在服务端做图像解码（Workers 没有）
 
