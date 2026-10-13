@@ -147,6 +147,21 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 
 `series` 按天补零；UV 为去重匿名访客号（`COUNT(DISTINCT vid)`）；数据表 `visit_log` 保留 180 天、不进备份。
 
+响应额外携带 `bot` 键——爬虫 / AI 抓取维度（`src/bots.ts`，服务端按 User-Agent 识别，爬虫不执行 JS 进不了上面的访客统计）：
+
+```json
+{
+  "total": 0, "todayTotal": 0,
+  "byKind":   [{ "name": "ai", "pv": 0 }],
+  "byBot":    [{ "name": "GPTBot", "kind": "ai", "pv": 0, "activeDays": 1 }],
+  "topPaths": [{ "path": "/post/hello", "pv": 0 }],
+  "series":   [{ "day": "2026-10-01", "pv": 0, "ai": 0, "se": 0 }],
+  "latest":   [{ "ts": 0, "name": "Google", "kind": "se", "path": "/" }]
+}
+```
+
+`byKind.name` 是类别编号：`ai`（AI 抓取）/ `se`（搜索引擎）/ `feed`（订阅器）/ `seo`（SEO 工具）/ `arch`（网页存档）。数据表 `bot_log` 与 `visit_log` 同隐私口径（不存 IP / UA 原文，只存识别名 / 类别 / 路径 / 国家码），同 180 天保留、不进备份；识别命中才落库，浏览器流量与爬虫记录天然互斥。
+
 ### 文章
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |

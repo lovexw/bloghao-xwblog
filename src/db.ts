@@ -876,6 +876,16 @@ const SCHEMA_TABLES = [
     br      TEXT    NOT NULL DEFAULT '',
     country TEXT    NOT NULL DEFAULT ''
   )`,
+  // 爬虫 / AI 抓取日志（src/bots.ts）：服务端按 UA 识别后旁路落库，不进备份，保留 180 天
+  `CREATE TABLE IF NOT EXISTS bot_log (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts      INTEGER NOT NULL,
+    day     TEXT    NOT NULL,
+    name    TEXT    NOT NULL DEFAULT '',
+    kind    TEXT    NOT NULL DEFAULT '',
+    path    TEXT    NOT NULL DEFAULT '',
+    country TEXT    NOT NULL DEFAULT ''
+  )`,
   // FTS5 全文索引（src/fts.ts，ROADMAP B4）：external content 挂原表省一份正文存储，
   // trigram 分词适配中文。虚表可以进 schema.sql（单条无分号体）；触发器只能在这里挂——
   // demo.ts 的 ensureTables 按分号朴素切分 SQL，切不开 CREATE TRIGGER 的 BEGIN...END 体，
@@ -924,6 +934,9 @@ const SCHEMA_INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_visit_day ON visit_log (day, ts)',
   // 滚动清理 DELETE WHERE ts < ? 走前导索引（visit_log 是量最大的日志表；与 schema.sql 同步登记）
   'CREATE INDEX IF NOT EXISTS idx_visit_ts ON visit_log (ts)',
+  // 爬虫日志同口径（src/bots.ts；与 schema.sql 同步登记）
+  'CREATE INDEX IF NOT EXISTS idx_bot_day ON bot_log (day, ts)',
+  'CREATE INDEX IF NOT EXISTS idx_bot_ts ON bot_log (ts)',
   // 回收站软删行极少：部分索引只收已删行，trash 面查询与 30 天到期清理免全表扫
   'CREATE INDEX IF NOT EXISTS idx_posts_deleted ON posts (deleted_at) WHERE deleted_at IS NOT NULL',
   'CREATE INDEX IF NOT EXISTS idx_weibo_deleted ON weibo (deleted_at) WHERE deleted_at IS NOT NULL',

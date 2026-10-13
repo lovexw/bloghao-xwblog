@@ -386,28 +386,32 @@ const BR_NAME = { wechat: '微信', chrome: 'Chrome', edge: 'Edge', firefox: 'Fi
 const CC_NAME = {
   CN: '中国大陆', HK: '中国香港', MO: '中国澳门', TW: '中国台湾', US: '美国', JP: '日本', KR: '韩国',
   SG: '新加坡', MY: '马来西亚', TH: '泰国', VN: '越南', GB: '英国', DE: '德国', FR: '法国', CA: '加拿大',
-  AU: '澳大利亚', RU: '俄罗斯', IN: '印度', NL: '荷兰', BR: '巴西',
+  AU: '澳大利亚', RU: '俄罗斯', IN: '印度', NL: '荷兰', BR: '巴西', IE: '爱尔兰',
 }
 const STATS_DAYS = [7, 30, 90]
+/* 爬虫分类（src/bots.ts BOT_KIND_NAME 的前端镜像：ai/se/feed/seo/arch） */
+const BOT_KIND_CN = { ai: 'AI 抓取', se: '搜索引擎', feed: '订阅器', seo: 'SEO 工具', arch: '网页存档' }
+const BOT_KIND_CLS = { ai: 'bk-ai', se: 'bk-se', feed: 'bk-feed', seo: 'bk-seo', arch: 'bk-arch' }
 
 /** 横条排行（来源 / 设备 / 浏览器 / 国家） */
-function hbarRows(items, nameFn) {
-  if (!items.length) return '<div class="empty-box">暂无数据</div>'
-  const max = Math.max(...items.map((x) => x.pv), 1)
+function hbarRows(items, nameFn, valueFn) {
+  if (!items.length) return '<div class="empty-box empty-sm">暂无数据</div>'
+  const max = Math.max(...items.map((x) => (valueFn ? valueFn(x) : x.pv)), 1)
   return items
-    .map(
-      (x) => `<div class="hbar-row">
+    .map((x) => {
+      const v = valueFn ? valueFn(x) : x.pv
+      return `<div class="hbar-row">
         <span class="hbar-name" title="${esc(nameFn(x))}">${esc(nameFn(x))}</span>
-        <span class="hbar-track"><span class="hbar-fill" style="width:${Math.max(2, Math.round((x.pv / max) * 100))}%"></span></span>
-        <span class="hbar-num">${x.pv}</span>
+        <span class="hbar-track"><span class="hbar-fill" style="width:${Math.max(2, Math.round((v / max) * 100))}%"></span></span>
+        <span class="hbar-num">${v}</span>
       </div>`
-    )
+    })
     .join('')
 }
 
 /** 每日趋势：PV 柱 + UV 折线，自绘 SVG（零依赖），悬停整列出数值 */
 function trendChart(series) {
-  const W = 720, H = 210, padL = 40, padR = 8, padT = 12, padB = 24
+  const W = 720, H = 200, padL = 36, padR = 8, padT = 12, padB = 22
   const n = series.length
   if (!n) return ''
   const iw = W - padL - padR
@@ -428,16 +432,16 @@ function trendChart(series) {
     if (i % tickEvery === 0 || i === n - 1) {
       // 最后一个刻度右对齐贴边，放大字号后中锚文字会溢出 viewBox 被裁
       if (i === n - 1) {
-        marks += `<text x="${W - padR}" y="${H - 6}" text-anchor="end" class="chart-tick">${esc(d.day.slice(5))}</text>`
+        marks += `<text x="${W - padR}" y="${H - 5}" text-anchor="end" class="chart-tick">${esc(d.day.slice(5))}</text>`
       } else {
-        marks += `<text x="${(x + step / 2).toFixed(1)}" y="${H - 6}" text-anchor="middle" class="chart-tick">${esc(d.day.slice(5))}</text>`
+        marks += `<text x="${(x + step / 2).toFixed(1)}" y="${H - 5}" text-anchor="middle" class="chart-tick">${esc(d.day.slice(5))}</text>`
       }
     }
   })
   let grid = ''
   for (let g = 0; g <= 3; g++) {
     const y = padT + (ih * g) / 3
-    grid += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--line)" stroke-width="1"/><text x="${padL - 6}" y="${(y + 4).toFixed(1)}" text-anchor="end" class="chart-tick">${Math.round((maxV * (3 - g)) / 3)}</text>`
+    grid += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--line)" stroke-width="1"/><text x="${padL - 5}" y="${(y + 3.5).toFixed(1)}" text-anchor="end" class="chart-tick">${Math.round((maxV * (3 - g)) / 3)}</text>`
   }
   const hovers = series
     .map((d, i) => {
@@ -450,7 +454,7 @@ function trendChart(series) {
 
 /** 今日 24 小时分布（北京时间） */
 function hourChart(hourly) {
-  const W = 720, H = 150, padL = 40, padR = 8, padT = 10, padB = 22
+  const W = 720, H = 140, padL = 36, padR = 8, padT = 10, padB = 20
   const iw = W - padL - padR
   const ih = H - padT - padB
   const maxV = Math.max(...hourly.map((x) => x.pv), 5)
@@ -466,14 +470,80 @@ function hourChart(hourly) {
     marks += `<rect x="${x.toFixed(1)}" y="${padT}" width="${step.toFixed(1)}" height="${ih}" fill="transparent"><title>${d.h}:00–${d.h + 1}:00：${d.pv} 次浏览</title></rect>`
   })
   for (const hh of [0, 6, 12, 18]) {
-    marks += `<text x="${(padL + hh * step + step / 2).toFixed(1)}" y="${H - 6}" text-anchor="middle" class="chart-tick">${hh}时</text>`
+    marks += `<text x="${(padL + hh * step + step / 2).toFixed(1)}" y="${H - 5}" text-anchor="middle" class="chart-tick">${hh}时</text>`
   }
   let grid = ''
   for (let g = 0; g <= 2; g++) {
     const y = padT + (ih * g) / 2
-    grid += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--line)" stroke-width="1"/><text x="${padL - 6}" y="${(y + 4).toFixed(1)}" text-anchor="end" class="chart-tick">${Math.round((maxV * (2 - g)) / 2)}</text>`
+    grid += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--line)" stroke-width="1"/><text x="${padL - 5}" y="${(y + 3.5).toFixed(1)}" text-anchor="end" class="chart-tick">${Math.round((maxV * (2 - g)) / 2)}</text>`
   }
   return `<svg class="chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="今日小时分布">${grid}${marks}</svg>`
+}
+
+/** 爬虫抓取趋势（按天柱状）：与 hourChart 同构，AI 抓取那部分叠深色 */
+function botChart(series) {
+  const W = 720, H = 140, padL = 36, padR = 8, padT = 10, padB = 20
+  const n = series.length
+  if (!n) return ''
+  const iw = W - padL - padR
+  const ih = H - padT - padB
+  const maxV = Math.max(...series.map((d) => d.pv), 5)
+  const step = iw / n
+  const barW = Math.max(1, Math.min(step * 0.6, 24))
+  const tickEvery = Math.ceil(n / 6)
+  let marks = ''
+  series.forEach((d, i) => {
+    const x = padL + i * step
+    if (d.pv > 0) {
+      const h = Math.max(1, (d.pv / maxV) * ih)
+      const ah = d.ai > 0 ? Math.max(1, Math.min(h, (d.ai / maxV) * ih)) : 0
+      marks += `<rect x="${(x + (step - barW) / 2).toFixed(1)}" y="${(padT + ih - h).toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="1.5" fill="var(--sub)" opacity="0.45"/>`
+      if (ah > 0) {
+        marks += `<rect x="${(x + (step - barW) / 2).toFixed(1)}" y="${(padT + ih - ah).toFixed(1)}" width="${barW.toFixed(1)}" height="${ah.toFixed(1)}" rx="1.5" fill="var(--accent)" opacity="0.85"/>`
+      }
+    }
+    if (i % tickEvery === 0 || i === n - 1) {
+      if (i === n - 1) {
+        marks += `<text x="${W - padR}" y="${H - 5}" text-anchor="end" class="chart-tick">${esc(d.day.slice(5))}</text>`
+      } else {
+        marks += `<text x="${(x + step / 2).toFixed(1)}" y="${H - 5}" text-anchor="middle" class="chart-tick">${esc(d.day.slice(5))}</text>`
+      }
+    }
+  })
+  let grid = ''
+  for (let g = 0; g <= 2; g++) {
+    const y = padT + (ih * g) / 2
+    grid += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--line)" stroke-width="1"/><text x="${padL - 5}" y="${(y + 3.5).toFixed(1)}" text-anchor="end" class="chart-tick">${Math.round((maxV * (2 - g)) / 2)}</text>`
+  }
+  const hovers = series
+    .map((d, i) => {
+      const x = padL + i * step
+      const se = d.pv - d.ai
+      return `<rect x="${x.toFixed(1)}" y="${padT}" width="${step.toFixed(1)}" height="${ih}" fill="transparent"><title>${d.day}：共 ${d.pv}（AI ${d.ai} · 搜索引擎 ${se}）</title></rect>`
+    })
+    .join('')
+  return `<svg class="chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="爬虫抓取趋势">${grid}${marks}${hovers}</svg>`
+}
+
+/** 最近抓取流水行：爬虫徽章 + 路径 + 相对时间 */
+function botTime(ts) {
+  const diff = Date.now() - ts
+  if (diff < 60_000) return '刚刚'
+  if (diff < 3_600_000) return Math.floor(diff / 60_000) + ' 分钟前'
+  if (diff < 86_400_000) return Math.floor(diff / 3_600_000) + ' 小时前'
+  return Math.floor(diff / 86_400_000) + ' 天前'
+}
+
+function botLatestRows(latest) {
+  return latest
+    .map(
+      (b) => `<div class="bot-feed-row">
+        <span class="bot-chip ${BOT_KIND_CLS[b.kind] || ''}" title="${esc(BOT_KIND_CN[b.kind] || b.kind)}">${esc(b.name)}</span>
+        <span class="bot-feed-path" title="${esc(b.path)}">${esc(b.path)}</span>
+        <span class="bot-feed-time">${botTime(b.ts)}</span>
+      </div>`
+    )
+    .join('')
 }
 
 async function viewStats() {
@@ -503,10 +573,58 @@ async function viewStats() {
   const trendBody = hasData
     ? `<div class="chart-legend"><span><i class="lg-bar"></i>浏览量</span><span><i class="lg-line"></i>访客数</span></div>${trendChart(s.series)}`
     : '<div class="empty-box">还没有访客数据。功能上线后有人访问就会出现，也可以先自己逛一逛。</div>'
+
+  /* 爬虫 / AI 抓取维度（src/bots.ts，服务端按 UA 识别；爬虫不执行 JS 进不了访客统计） */
+  const b = s.bot || { total: 0, todayTotal: 0, byKind: [], byBot: [], topPaths: [], series: [], latest: [] }
+  const botKinds = b.byKind
+    .map(
+      (k) => `<span class="bot-kind-pill ${BOT_KIND_CLS[k.name] || ''}">${esc(BOT_KIND_CN[k.name] || k.name)}<b>${k.pv}</b></span>`
+    )
+    .join('')
+  const botChartBody = b.total
+    ? `<div class="chart-legend"><span><i class="lg-bar lg-ai"></i>AI 抓取</span><span><i class="lg-bar lg-se"></i>其他爬虫</span></div>${botChart(b.series)}`
+    : '<div class="empty-box empty-sm">还没有识别到爬虫。抓取记录由服务端自动生成（爬虫不执行 JS，与上面的访客数据互不影响）。</div>'
+  const botPanel = `
+    <div class="panel" id="bot-panel">
+      <div class="panel-head"><span>AI 与爬虫抓取</span><span class="panel-head-sub">近 ${days} 天 · 按浏览器 UA 识别，仅服务端可见的抓取</span></div>
+      <div class="panel-body">
+        ${
+          b.total
+            ? `<div class="bot-headline">
+                <span class="bot-total">${b.total}</span>
+                <span class="bot-total-sub">次抓取<b>${b.todayTotal ? `，今天 ${b.todayTotal}` : ''}</b></span>
+              </div>
+              <div class="bot-kinds">${botKinds}</div>
+              ${botChartBody}
+              <div class="bot-cols">
+                <div>
+                  <div class="bot-col-title">谁在抓</div>
+                  ${hbarRows(
+                    b.byBot,
+                    (x) => x.name,
+                    (x) => x.pv
+                  )}
+                </div>
+                <div>
+                  <div class="bot-col-title">被抓的页面</div>
+                  ${hbarRows(
+                    b.topPaths,
+                    (x) => x.path,
+                    (x) => x.pv
+                  )}
+                </div>
+              </div>
+              <div class="bot-col-title bot-feed-title">最近抓取</div>
+              ${botLatestRows(b.latest)}`
+            : botChartBody
+        }
+      </div>
+    </div>`
+
   await shellView(
     'stats',
     `<div class="page-head">
-      <div><div class="page-title">统计</div><div class="page-sub">访客都在看什么、从哪里来（数据来自前台页面访问，后台自身不计入）</div></div>
+      <div><div class="page-title">统计</div><div class="page-sub">访客都在看什么、从哪里来；AI 与搜索引擎在抓什么（后台自身不计入）</div></div>
     </div>
     <div class="stat-grid">
       <div class="stat-card"><div class="stat-label">浏览量（${days} 天）</div><div class="stat-value">${s.pv}</div></div>
@@ -518,13 +636,20 @@ async function viewStats() {
       <div class="panel-head"><span>访问趋势</span><div class="tabs">${tabs}</div></div>
       <div class="panel-body">${trendBody}</div>
     </div>
-    <div class="panel">
-      <div class="panel-head"><span>今日小时分布</span><span class="panel-head-sub">北京时间</span></div>
-      <div class="panel-body">${s.todayPv ? hourChart(s.hourly) : '<div class="empty-box">今天还没有访问</div>'}</div>
+    ${botPanel}
+    <div class="stats-duo">
+      <div class="panel">
+        <div class="panel-head"><span>今日小时分布</span><span class="panel-head-sub">北京时间</span></div>
+        <div class="panel-body">${s.todayPv ? hourChart(s.hourly) : '<div class="empty-box empty-sm">今天还没有访问</div>'}</div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>访客设备</span></div>
+        <div class="panel-body">${hbarRows(s.devices, (x) => DEV_NAME[x.name] || x.name || '未知')}</div>
+      </div>
     </div>
     <div class="panel">
       <div class="panel-head"><span>受欢迎的页面</span><span class="panel-head-sub">近 ${days} 天 · 点标题可打开页面</span></div>
-      <div class="panel-body">${pages || '<div class="empty-box">暂无数据</div>'}</div>
+      <div class="panel-body">${pages || '<div class="empty-box empty-sm">暂无数据</div>'}</div>
     </div>
     <div class="stats-duo">
       <div class="panel">
@@ -532,19 +657,13 @@ async function viewStats() {
         <div class="panel-body">${hbarRows(s.topRefs, (x) => x.ref)}</div>
       </div>
       <div class="panel">
-        <div class="panel-head"><span>访客设备</span></div>
-        <div class="panel-body">${hbarRows(s.devices, (x) => DEV_NAME[x.name] || x.name || '未知')}</div>
-      </div>
-    </div>
-    <div class="stats-duo">
-      <div class="panel">
         <div class="panel-head"><span>浏览器</span></div>
         <div class="panel-body">${hbarRows(s.browsers, (x) => BR_NAME[x.name] || x.name || '未知')}</div>
       </div>
-      <div class="panel">
-        <div class="panel-head"><span>国家 / 地区</span></div>
-        <div class="panel-body">${hbarRows(s.countries, (x) => CC_NAME[x.name] || x.name)}</div>
-      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span>国家 / 地区</span></div>
+      <div class="panel-body">${hbarRows(s.countries, (x) => CC_NAME[x.name] || x.name)}</div>
     </div>`
   )
   $app.querySelectorAll('.tab[data-days]').forEach((t) =>

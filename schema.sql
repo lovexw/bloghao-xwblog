@@ -237,6 +237,21 @@ CREATE INDEX IF NOT EXISTS idx_visit_day ON visit_log (day, ts);
 -- 滚动清理 DELETE WHERE ts < ? 走前导索引（visit_log 是量最大的日志表，全表扫不值）
 CREATE INDEX IF NOT EXISTS idx_visit_ts ON visit_log (ts);
 
+-- 爬虫 / AI 抓取日志（后台「统计」页，src/bots.ts）：服务端按 User-Agent 识别后旁路落库
+-- （爬虫不执行 JS，进不了 visit_log）。只存识别名/类别 + 路径 + 国家码，不存 IP / UA 原文。
+-- 识别规则与写入闸见 src/bots.ts；日志类数据不进备份，保留 180 天由每晚备份 cron 顺带清理。
+CREATE TABLE IF NOT EXISTS bot_log (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts      INTEGER NOT NULL,               -- 毫秒时间戳
+  day     TEXT    NOT NULL,               -- 北京时间 YYYY-MM-DD
+  name    TEXT    NOT NULL DEFAULT '',    -- 识别名（GPTBot / Google / 必应…）
+  kind    TEXT    NOT NULL DEFAULT '',    -- ai | se | feed | seo | arch
+  path    TEXT    NOT NULL DEFAULT '',    -- 请求路径（截 300）
+  country TEXT    NOT NULL DEFAULT ''     -- CF-IPCountry 两字母码
+);
+CREATE INDEX IF NOT EXISTS idx_bot_day ON bot_log (day, ts);
+CREATE INDEX IF NOT EXISTS idx_bot_ts ON bot_log (ts);
+
 -- 回收站软删行极少：部分索引只收 deleted_at IS NOT NULL，trash 面查询与 30 天到期清理免全表扫
 CREATE INDEX IF NOT EXISTS idx_posts_deleted ON posts (deleted_at) WHERE deleted_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_weibo_deleted ON weibo (deleted_at) WHERE deleted_at IS NOT NULL;

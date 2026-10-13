@@ -39,6 +39,7 @@ const WIPE_TABLES = [
   'member_sessions',
   'member_points_log',
   'visit_log',
+  'bot_log',
   'users',
   'settings',
 ]
@@ -310,6 +311,16 @@ async function seedAll(env: Env): Promise<void> {
     visitStmts.push(db.prepare(`INSERT INTO visit_log ${visitCols} VALUES ${placeholders}`).bind(...binds))
   }
   await batched(db, visitStmts, 40)
+
+  // 13b) 爬虫抓取日志（src/bots.ts bot_log）：6 列 × 15 行 = 90，同样留余量
+  const botCols = '(ts, day, name, kind, path, country)'
+  const botStmts: D1PreparedStatement[] = []
+  for (const group of chunk(plan.bots, 15)) {
+    const placeholders = group.map(() => '(?, ?, ?, ?, ?, ?)').join(', ')
+    const binds = group.flatMap((b) => [b.ts, b.day, b.name, b.kind, b.path, b.country])
+    botStmts.push(db.prepare(`INSERT INTO bot_log ${botCols} VALUES ${placeholders}`).bind(...binds))
+  }
+  await batched(db, botStmts, 40)
 
   // 14) 记账：播种完成。此后 fetch 路径的自播种直接放行，直到下个 cron 周期重置
   await db

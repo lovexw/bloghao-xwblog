@@ -78,6 +78,7 @@ import { imageExtOf, MAX_REMOTE_IMAGES, MAX_UPLOAD_BYTES, saveUpload, sniffImage
 import { hashPostPassword } from './protect'
 import { listTrash, restorePostStatus, trashTable, type TrashTable } from './trash'
 import { classifyBrowser, classifyDevice, cleanPath, cleanRef, cleanTitle, cleanVid, getVisitStats, recordVisit } from './stats'
+import { getBotStats } from './bots'
 import { fetchLinkMeta, fetchableUrl } from './linkmeta'
 import { BROWSER_UA, buildCardHtml, coverProxyHostOk, coverReferer, fetchDoubanDetail, probeRelay, resolveCardCover, sanitizeMediaItem, searchMedia, subjectIdFromUrl, validateRelay, type MediaItem } from './douban'
 import { THEMES } from './themes/registry'
@@ -493,10 +494,11 @@ api.get('/admin/stats', async (c) => {
   })
 })
 
-/* 访客统计（后台「统计」页），聚合见 src/stats.ts */
+/* 访客统计（后台「统计」页），聚合见 src/stats.ts；bot 为爬虫/AI 抓取维度（src/bots.ts） */
 api.get('/admin/visits', async (c) => {
   const days = clampInt(c.req.query('days'), 1, 365, 30)
-  return c.json(await getVisitStats(c.env.DB, days))
+  const [visits, bot] = await Promise.all([getVisitStats(c.env.DB, days), getBotStats(c.env.DB, days)])
+  return c.json({ ...visits, bot })
 })
 
 /* ---------------- 文章管理 ---------------- */

@@ -2,6 +2,7 @@ import { Hono, type Context } from 'hono'
 import { scheduledBackup } from './backup'
 import { runScheduledPublish } from './scheduler'
 import { api } from './api'
+import { cleanBotPath, identifyBot, purgeBots, recordBot, shouldRecordBot } from './bots'
 import { siteClosedResponse } from './closed'
 import { clientIp, getCookie, rateLimit } from './auth'
 import { ensureSchema, getPostBySlug, getSettings, listCategories, listPublishedTags, listPosts, listSitemapPages, listSitemapPosts } from './db'
@@ -49,6 +50,30 @@ app.use('*', async (c, next) => {
 app.use('*', async (c, next) => {
   const res = await siteClosedResponse(c.env.DB, c.req.raw, c.req.path)
   if (res) return res
+  await next()
+})
+
+/* ---------------- 爬虫 / AI 抓取识别（src/bots.ts，统计页新维度） ----------------
+ * 爬虫不执行 JS、进不了 visit_log，只能在服务端按 User-Agent 识别后旁路记录。
+ * 只拦公开面：/admin、/api、/images、/mcp 不算「抓内容」；识别不命中（浏览器/未知脚本）
+ * 直接放行零开销。记录走 waitUntil 异步写，绝不阻塞响应；写入闸（去抖 + 预算）在
+ * shouldRecordBot 内部，防穷举路径刷 D1 写配额——见 bots.ts 文件头注释。 */
+const BOT_SKIP_PREFIX = ['/admin', '/api', '/images', '/mcp']
+app.use('*', async (c, next) => {
+  const ua = c.req.header('User-Agent') || ''
+  if (ua) {
+    const bot = identifyBot(ua)
+    if (bot && !BOT_SKIP_PREFIX.some((p) => c.req.path === p || c.req.path.startsWith(p + '/'))) {
+      const qi = c.req.url.indexOf('?')
+      const path = cleanBotPath(qi >= 0 ? c.req.path + c.req.url.slice(qi) : c.req.path)
+      if (path && shouldRecordBot(bot.name, path)) {
+        const country = (c.req.header('CF-IPCountry') || '').slice(0, 8)
+        c.executionCtx.waitUntil(
+          recordBot(c.env.DB, { name: bot.name, kind: bot.kind, path, country }).catch(() => {})
+        )
+      }
+    }
+  }
   await next()
 })
 
@@ -288,6 +313,8 @@ export default {
           await scheduledBackup(controller, env)
           // 访客日志滚动清理：visit_log 是日志类数据不进备份，只在这里按保留期删
           await purgeVisits(env.DB).catch((e) => console.error('purgeVisits failed:', e))
+          // 爬虫日志滚动清理：bot_log 同为日志类数据不进备份（src/bots.ts）
+          await purgeBots(env.DB).catch((e) => console.error('purgeBots failed:', e))
           // 回收站滚动清理：到期（30 天）的软删行彻底删除并级联评论（src/trash.ts）
           await purgeTrash(env.DB).catch((e) => console.error('purgeTrash failed:', e))
           // 页脚「站点足迹」统计夜更（db.ts refreshFootStats，页脚名片读 settings.siteFoot）
