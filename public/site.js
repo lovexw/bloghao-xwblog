@@ -25,6 +25,7 @@
     '只支持 JPG / PNG / WebP / GIF 图片': 'Only JPG / PNG / WebP / GIF images are supported',
     '视频': 'Video',
     '最大 25MB，MP4 / WebM': 'Up to 25MB, MP4 / WebM',
+    '图片 / 视频，一条微博最多 1 个视频': 'Photos / video — one video per note',
     '只支持 MP4 / WebM 视频': 'Only MP4 / WebM videos are supported',
     'HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）':
       'HEVC video: fine on iPhone / Mac, but some Windows browsers cannot play it (export an MP4 from a video editor for the widest support)',
@@ -313,25 +314,42 @@
     })
   }
 
-  /** 上传前的视频整理：mp4 / webm 原样；ISO-BMFF 的 .mov 改写成 mp4（只读文件头 64 字节 +
-   *  前后各 1MB 探编码，Blob 拼接是零拷贝引用，不把整段视频读进内存）；其余格式回 error。
-   *  返回 { file, hevc } 或 { error: true } */
+  /** 重声明视频类型（扩展名一起对齐）：给了 patchedHead 就用改写过的文件头重组（Blob 拼接零拷贝） */
+  function retypeVideo(file, mime, ext, patchedHead) {
+    var name = (file.name || 'video').replace(/\.[^.]+$/, '') + '.' + ext
+    return patchedHead
+      ? new File([patchedHead, file.slice(64)], name, { type: mime })
+      : new File([file], name, { type: mime })
+  }
+
+  /** 上传前的视频整理：**只认文件头，不信任浏览器声明的 MIME**（与服务端「只认魔数」同口径）——
+   *  - ISO-BMFF（有 ftyp）：品牌是 'qt  ' 的（iPhone 拍的 .mov）原地改写成 'isom'，其余品牌字节原样，
+   *    统一按 mp4 声明上传（本来就是同族容器），H.264 / AAC 的 iPhone 视频改完即全平台可放；
+   *  - WebM（EBML 魔数）：按 webm 声明；
+   *  - 其它容器（avi / mkv / flv…）：回 error，前端提示换格式。
+   *  只读文件头 64 字节，不把整段视频读进内存。
+   *  2026-10-13 回归：此前把「品牌无需改写」当成「不认识的格式」直接拒——macOS 把 .mp4 报成
+   *  video/quicktime（内容品牌 isom）时会误拒；现在只要有 ftyp 就照收。 */
   function prepareVideo(file) {
-    if (/^video\/(mp4|webm)$/i.test(file.type || '') || (!file.type && /\.(mp4|webm)$/i.test(file.name || '')))
-      return Promise.resolve({ file: file, hevc: false })
-    var headSlice = file.slice(0, 64)
-    return headSlice
+    return file
+      .slice(0, 64)
       .arrayBuffer()
       .then(function (buf) {
         var head = new Uint8Array(buf)
-        if (!patchFtypBrand(head)) return null
-        var name = (file.name || 'video').replace(/\.[^.]+$/, '') + '.mp4'
-        return new File([head, file.slice(64)], name, { type: 'video/mp4' })
-      })
-      .then(function (patched) {
-        if (!patched) return { error: true }
+        // WebM：EBML 魔数 1A 45 DF A3
+        if (head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3)
+          return { file: retypeVideo(file, 'video/webm', 'webm'), hevc: false }
+        patchFtypBrand(head) // 有 'qt  ' 品牌就顺手改写，没有就保持字节原样
+        var hasFtyp = false
+        for (var i = 0; i + 4 <= head.length; i++) {
+          if (head[i] === 0x66 && head[i + 1] === 0x74 && head[i + 2] === 0x79 && head[i + 3] === 0x70) {
+            hasFtyp = true
+            break
+          }
+        }
+        if (!hasFtyp) return { error: true }
         return detectHevc(file).then(function (hevc) {
-          return { file: patched, hevc: hevc }
+          return { file: retypeVideo(file, 'video/mp4', 'mp4', head), hevc: hevc }
         })
       })
   }
@@ -367,14 +385,21 @@
     return new Promise(function (resolve, reject) {
       var xhr = new XMLHttpRequest()
       xhr.open('POST', '/api/admin/upload')
-      xhr.responseType = 'json'
+      // 不收 json：413 这类响应体是纯文本（「请求体过大」），按 json 读会变成 null，
+      // 页面只显示笼统的「上传失败」——2026-10-13 那次 413 就是这么被藏住的
       xhr.upload.onprogress = function (e) {
         if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100))
       }
       xhr.onload = function () {
-        var d = xhr.response || {}
+        var d = {}
+        try {
+          d = JSON.parse(xhr.responseText || '{}') || {}
+        } catch (e) {
+          d = {}
+        }
         if (xhr.status >= 200 && xhr.status < 300 && d.url) return resolve(d)
-        reject(new Error(d.error || T('上传失败')))
+        var serverMsg = d.error || (xhr.responseText || '').trim()
+        reject(new Error(serverMsg ? serverMsg.slice(0, 80) : T('上传失败') + '（HTTP ' + xhr.status + '）'))
       }
       xhr.onerror = function () {
         reject(new Error(T('网络错误，上传失败')))
@@ -1149,7 +1174,6 @@
     var cpCount = composerForm.querySelector('.wb-composer-count')
     var cpTip = composerForm.querySelector('.wb-composer-tip')
     var cpVideoBox = composerForm.querySelector('.wb-composer-video')
-    var cpVideoBtn = composerForm.querySelector('.wb-composer-add-video')
     var cpButtons = composerForm.querySelectorAll('.wb-composer-add, .wb-composer-draft, .wb-composer-publish')
     var cpImages = []
     var cpVideo = null // 单视频（B19）：{ url, poster, w, h } | null
@@ -1173,19 +1197,12 @@
       if (cpCount && cpText) cpCount.textContent = cpText.value.length + ' / ' + WB_MAX_CHARS
     }
 
-    /** 视频预览（最多一个）：已有视频时禁用「视频」按钮并说明原因，避免误以为能换 */
+    /** 视频预览（最多一个）：媒体入口统一走「加图」按钮（图片 / 视频同一个选择器，站长 2026-10-13 拍板），
+     *  这里只管预览块；单视频约束在 cpAddVideo 落点提示 */
     function cpRenderVideo() {
       if (cpVideoBox) {
         cpVideoBox.hidden = !cpVideo
         cpVideoBox.innerHTML = cpVideo ? videoTileHtml(cpVideo, cpVideoMeta) : ''
-      }
-      if (cpVideoBtn) {
-        cpVideoBtn.disabled = !!cpVideo
-        cpVideoBtn.title = cpVideo
-          ? EN
-            ? 'One video per note — remove the current one first'
-            : '一条微博只能带一个视频，先移除当前视频'
-          : T('最大 25MB，MP4 / WebM')
       }
     }
 
@@ -1195,11 +1212,11 @@
       if (!isVideoFile(file)) return cpMsg(T('只支持 MP4 / WebM 视频'))
       if (file.size > VIDEO_MAX_BYTES)
         return cpMsg((EN ? 'Video must be under 25MB — this one is ' : '视频不能超过 25MB，当前 ') + fmtSize(file.size))
-      var label = cpVideoBtn ? cpVideoBtn.textContent : ''
+      var label = cpAdd ? cpAdd.textContent : ''
       cpUploading++
-      if (cpVideoBtn) {
-        cpVideoBtn.disabled = true
-        cpVideoBtn.textContent = (EN ? 'Uploading ' : '上传视频 ') + '0%'
+      if (cpAdd) {
+        cpAdd.disabled = true
+        cpAdd.textContent = (EN ? 'Uploading ' : '上传视频 ') + '0%'
       }
       // 元数据先到就先显示（时长/尺寸），赶在上传完成之前给回馈
       readVideoMeta(file, function (m) {
@@ -1213,14 +1230,12 @@
         cpMsg((EN ? 'Video added · ' : '已加视频 · ') + cpVideoMeta)
       })
       uploadVideo(file, function (pct) {
-        if (cpVideoBtn) cpVideoBtn.textContent = (EN ? 'Uploading ' : '上传视频 ') + pct + '%'
+        if (cpAdd) cpAdd.textContent = (EN ? 'Uploading ' : '上传视频 ') + pct + '%'
       })
         .then(function (up) {
           cpVideo = { url: up.url, poster: '', w: 0, h: 0 }
           if (!cpVideoMeta) cpVideoMeta = fmtSize(file.size)
           cpRenderVideo()
-          // HEVC（iPhone 默认的高效格式）只在部分浏览器能放：如实提示，让站长自己决定要不要换格式
-          if (up.hevc) cpMsg(T('HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）'))
           // HEVC（iPhone 默认的高效格式）只在部分浏览器能放：如实提示，让站长自己决定要不要换格式
           if (up.hevc) cpMsg(T('HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）'))
           // 封面帧慢一步补传：拿不到就保持无封面（卡片照常播放），不拖慢发布
@@ -1246,7 +1261,7 @@
         })
         .finally(function () {
           cpUploading--
-          if (cpVideoBtn) cpVideoBtn.textContent = label
+          if (cpAdd) cpAdd.textContent = label
           cpRenderVideo()
         })
     }
@@ -1309,21 +1324,14 @@
 
     if (cpAdd) {
       cpAdd.addEventListener('click', function () {
-        pickFiles({ accept: 'image/jpeg,image/png,image/webp,image/gif', multiple: true }, function (files) {
+        // 图片与视频共用一个入口：多选时视频只取第一个（一条微博最多 1 个视频），其余按图片走。
+        // accept 里写 video/*（不是枚举 mp4/webm）——iOS 图库按 accept 过滤，列窄了 iPhone 拍的 .mov 一个都不显示
+        pickFiles({ accept: 'image/jpeg,image/png,image/webp,image/gif,' + VIDEO_ACCEPT, multiple: true }, function (files) {
           cpAddFiles(files)
         })
       })
     }
 
-    if (cpVideoBtn) {
-      cpVideoBtn.addEventListener('click', function () {
-        if (cpVideo) return cpMsg(EN ? 'One video per note — remove the current one first' : '一条微博只能带一个视频，先移除当前视频')
-        pickFiles({ accept: VIDEO_ACCEPT }, function (files) {
-          var f = files && files[0]
-          if (f) cpAddVideo(f)
-        })
-      })
-    }
     if (cpVideoBox) {
       cpVideoBox.addEventListener('click', function (e) {
         var del = e.target && e.target.closest ? e.target.closest('[data-video-del]') : null
@@ -1568,8 +1576,7 @@
         '<div class="wb-composer-tiles" hidden></div>' +
         '<div class="wb-composer-video" hidden></div>' +
         '<div class="wb-composer-foot">' +
-        '<button type="button" class="wb-composer-add">' + (EN ? addLabelEn(0, WB_MAX_IMAGES) : '加图（0/' + WB_MAX_IMAGES + '）') + '</button>' +
-        '<button type="button" class="wb-composer-add wb-composer-add-video" title="' + T('最大 25MB，MP4 / WebM') + '">' + T('视频') + '</button>' +
+        '<button type="button" class="wb-composer-add" title="' + T('图片 / 视频，一条微博最多 1 个视频') + '">' + (EN ? addLabelEn(0, WB_MAX_IMAGES) : '加图（0/' + WB_MAX_IMAGES + '）') + '</button>' +
         '<span class="wb-composer-count">0 / ' + WB_MAX_CHARS + '</span>' +
         '<span class="wb-composer-tip" aria-live="polite"></span>' +
         '<button type="button" class="wb-composer-draft" data-wb-edit-cancel>' + T('取消') + '</button>' +
@@ -1590,7 +1597,6 @@
       var saveBtn = form.querySelector('[data-wb-edit-save]')
       var cancelBtn = form.querySelector('[data-wb-edit-cancel]')
       var videoBox = form.querySelector('.wb-composer-video')
-      var addVideoBtn = form.querySelector('.wb-composer-add-video')
       var images = []
       var video = null // 单视频（B19）：{ url, poster, w, h } | null
       var videoMeta = ''
@@ -1610,16 +1616,10 @@
         countEl.textContent = ta.value.length + ' / ' + WB_MAX_CHARS
       }
 
-      /** 视频预览（最多一个）：与顶部发布器同口径，已有视频时禁用按钮 */
+      /** 视频预览（最多一个）：媒体入口统一走「加图」按钮（与顶部发布器同口径） */
       function renderVideo() {
         videoBox.hidden = !video
         videoBox.innerHTML = video ? videoTileHtml(video, videoMeta) : ''
-        addVideoBtn.disabled = !!video
-        addVideoBtn.title = video
-          ? EN
-            ? 'One video per note — remove the current one first'
-            : '一条微博只能带一个视频，先移除当前视频'
-          : T('最大 25MB，MP4 / WebM')
       }
 
       /** 加视频：类型 / 体积前置校验 + 进度 + 封面帧（best-effort）；与顶部发布器同一套流程 */
@@ -1628,10 +1628,10 @@
         if (!isVideoFile(file)) return tip(T('只支持 MP4 / WebM 视频'))
         if (file.size > VIDEO_MAX_BYTES)
           return tip((EN ? 'Video must be under 25MB — this one is ' : '视频不能超过 25MB，当前 ') + fmtSize(file.size))
-        var label = addVideoBtn.textContent
+        var label = addBtn.textContent
         uploading++
-        addVideoBtn.disabled = true
-        addVideoBtn.textContent = (EN ? 'Uploading ' : '上传视频 ') + '0%'
+        addBtn.disabled = true
+        addBtn.textContent = (EN ? 'Uploading ' : '上传视频 ') + '0%'
         readVideoMeta(file, function (m) {
           if (!m) return
           videoMeta = fmtSize(file.size) + (fmtDuration(m.duration) ? ' · ' + fmtDuration(m.duration) : '')
@@ -1643,13 +1643,12 @@
           tip((EN ? 'Video added · ' : '已加视频 · ') + videoMeta)
         })
         uploadVideo(file, function (pct) {
-          addVideoBtn.textContent = (EN ? 'Uploading ' : '上传视频 ') + pct + '%'
+          addBtn.textContent = (EN ? 'Uploading ' : '上传视频 ') + pct + '%'
         })
           .then(function (up) {
             video = { url: up.url, poster: '', w: 0, h: 0 }
             if (!videoMeta) videoMeta = fmtSize(file.size)
             renderVideo()
-            if (up.hevc) tip(T('HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）'))
             if (up.hevc) tip(T('HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）'))
             grabVideoPoster(file, function (shot) {
               if (!shot || !video || video.url !== up.url) return
@@ -1673,7 +1672,7 @@
           })
           .finally(function () {
             uploading--
-            addVideoBtn.textContent = label
+            addBtn.textContent = label
             renderVideo()
           })
       }
@@ -1729,15 +1728,9 @@
           })
       }
       addBtn.addEventListener('click', function () {
-        pickFiles({ accept: 'image/jpeg,image/png,image/webp,image/gif', multiple: true }, function (files) {
+        // 图片与视频共用一个入口（与顶部发布器同口径）；addFiles 内部把视频分流到视频通道
+        pickFiles({ accept: 'image/jpeg,image/png,image/webp,image/gif,' + VIDEO_ACCEPT, multiple: true }, function (files) {
           addFiles(files)
-        })
-      })
-      addVideoBtn.addEventListener('click', function () {
-        if (video) return tip(EN ? 'One video per note — remove the current one first' : '一条微博只能带一个视频，先移除当前视频')
-        pickFiles({ accept: VIDEO_ACCEPT }, function (files) {
-          var f = files && files[0]
-          if (f) addVideoFile(f)
         })
       })
       // 粘贴 / 拖拽加图，与顶部发布框同款

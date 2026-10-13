@@ -232,22 +232,58 @@ test('两个客户端的选择器都写 video/*，且都带 ftyp 归一化（acc
 })
 
 // 回归（2026-10-13 站长实测）：B19 落地时三处入口只接了两处——前台 /weibo 的发布框
-// （render.ts weiboComposer）漏了视频按钮与视频容器，于是「想传视频只能点加图」：
-// iOS 图库里看不到视频、桌面端也选不出 mp4。这里把「三入口齐备 + 按钮顺序契约」钉死。
-test('前台发布框必须带视频按钮与视频容器，且「加图」仍是第一个 .wb-composer-add', () => {
+// （render.ts weiboComposer）漏了媒体入口，于是「想传视频只能点加图」：iOS 图库里看不到视频、
+// 桌面端也选不出 mp4。站长随后拍板：不要独立的视频按钮，图片与视频共用一个选择器，
+// 只留「一条微博最多 1 个视频」的约束。这里把「唯一媒体按钮 + 视频容器 + accept 含 video/*」钉死。
+test('前台发布框：媒体按钮只有一个（图片/视频共用），视频预览容器到位', () => {
   const html = weiboComposer({ adminName: '站长' })
-  assert.ok(html.includes('wb-composer-add-video'), '前台发布框缺视频按钮')
   assert.ok(html.includes('class="wb-composer-video"'), '前台发布框缺视频预览容器')
-  // site.js 用 querySelector('.wb-composer-add') 取「加图」（要管计数与上传进度）：加图必须排最前
-  const iAdd = html.indexOf('class="wb-composer-add"')
-  const iVideo = html.indexOf('wb-composer-add-video')
-  assert.ok(iAdd >= 0 && iVideo > iAdd, '「加图」必须是第一个 .wb-composer-add')
-  // 两侧类名对齐：site.js 查的按钮 / 容器类名必须真的渲染出来了
+  assert.equal((html.match(/class="wb-composer-add"/g) || []).length, 1, '媒体按钮应恰好一个')
+  assert.ok(!html.includes('wb-composer-add-video'), '独立视频按钮已按站长意见去掉')
+  // site.js 查的容器类名 / accept 两边对齐（accept 必须含 video/*，否则 iOS 图库筛掉 .mov）
   const site = readFileSync(new URL('../public/site.js', import.meta.url), 'utf8')
-  for (const cls of ['wb-composer-video', 'wb-composer-add-video']) {
-    assert.ok(site.includes('.' + cls), 'site.js 未接线 .' + cls)
-    assert.ok(html.includes(cls), 'weiboComposer 未渲染 ' + cls)
+  assert.ok(site.includes('.wb-composer-video'), 'site.js 未接线 .wb-composer-video')
+  assert.match(site, /image\/jpeg,image\/png,image\/webp,image\/gif,' \+ VIDEO_ACCEPT/, '前台媒体入口的 accept 应拼上 VIDEO_ACCEPT')
+  const app = readFileSync(new URL('../public/admin/app.js', import.meta.url), 'utf8')
+  assert.ok(app.includes('${VIDEO_ACCEPT}'), '后台媒体入口的 accept 应拼上 VIDEO_ACCEPT')
+})
+
+// 回归（2026-10-13 站长上传失败）：prepareVideo 曾把「品牌无需改写」当成「不认识的格式」——
+// macOS 常把 .mp4 报成 video/quicktime（内容品牌是 isom），于是被直接拒掉。现在只认文件头。
+test('site.js prepareVideo：只认文件头——声明成 quicktime 的 isom 文件不再被误拒', async () => {
+  const src = readFileSync(new URL('../public/site.js', import.meta.url), 'utf8')
+  const seg = src.slice(src.indexOf('/** ISO-BMFF 容器归一化'), src.indexOf('/** 上传视频（带百分比回调）'))
+  assert.ok(seg.includes('function prepareVideo') && seg.includes('function patchFtypBrand'), 'site.js 切片失败：视频工具段不在预期位置')
+  const api = new Function('T', 'File', seg + '\n;return { prepareVideo }')((zh: string) => zh, File) as {
+    prepareVideo: (f: File) => Promise<{ file?: File; hevc?: boolean; error?: boolean }>
   }
-  // 卡片编辑器（site.js 手写表单）同样要有这两个东西
-  assert.ok(site.includes('wb-composer-add-video'), 'site.js 卡片编辑器缺视频按钮')
+  const iso = (brand: string) =>
+    new Uint8Array([
+      0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70,
+      ...brand.split('').map((c) => c.charCodeAt(0)),
+      0, 0, 2, 0,
+      ...brand.split('').map((c) => c.charCodeAt(0)),
+      0, 0, 0, 8, 1, 2, 3, 4,
+    ])
+
+  const r1 = await api.prepareVideo(new File([iso('isom')], 'a.mp4', { type: 'video/quicktime' }))
+  assert.ok(!r1.error, 'isom 品牌声明成 quicktime 时不该被拒')
+  assert.equal(r1.file!.type, 'video/mp4')
+  assert.equal(r1.file!.name, 'a.mp4')
+
+  const r2 = await api.prepareVideo(new File([iso('qt  ')], 'b.mov', { type: 'video/quicktime' }))
+  assert.ok(!r2.error)
+  assert.equal(r2.file!.type, 'video/mp4')
+  assert.equal(r2.file!.name, 'b.mp4', 'qt 视频归一化后扩展名对齐 mp4')
+  const head = new Uint8Array(await r2.file!.slice(0, 16).arrayBuffer())
+  assert.equal(String.fromCharCode(...head.slice(8, 12)), 'isom', 'qt 品牌应被就地改写成 isom')
+
+  const r3 = await api.prepareVideo(
+    new File([new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x41, 0x56, 0x49, 0x20])], 'c.avi', { type: 'video/x-msvideo' })
+  )
+  assert.equal(r3.error, true, '非 ISO-BMFF 容器应回 error')
+
+  const r4 = await api.prepareVideo(new File([new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0, 0, 0, 0])], 'd.webm', { type: '' }))
+  assert.ok(!r4.error)
+  assert.equal(r4.file!.type, 'video/webm')
 })

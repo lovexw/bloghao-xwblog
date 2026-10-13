@@ -232,6 +232,36 @@ try {
   ])
   console.log(`  ${loginRes.status === 200 && cookie.startsWith('bloghao_session=') ? '✓' : '✗'} 闭站链路：登录夹具管理员（status ${loginRes.status}）`)
 
+  // ── 上传体积预检链路（2026-10-13 修复回归）──
+  // 真 bug：预检的豁免路径写成 '/admin/upload'，而实际路径是 /api/admin/upload（api 挂在 /api 下），
+  // 永不匹配 → 上传端点一直按 2MB 普通限额预检：超过 2MB 的视频 / 大图 / 开放接口配图直接 413，
+  // 前端只看到「上传失败」。此前没有 >2MB 请求体的用例，所以一路潜伏到线上（站长 20MB 视频失败暴露）。
+  console.log('\n▸ 上传体积预检链路')
+  {
+    const upCookie = { headers: { Cookie: cookie } }
+    // 3MB 合成 mp4：服务端只认文件魔数（前 4 字节长度 + 'ftyp' + 'isom' 主品牌 + 兼容品牌）
+    const mp4 = new Uint8Array(3 * 1024 * 1024)
+    mp4.set([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d, 0, 0, 2, 0, 0x69, 0x73, 0x6f, 0x6d, 0, 0, 0, 8])
+    const fd = new FormData()
+    fd.append('file', new File([mp4], 'smoke-3mb.mp4', { type: 'video/mp4' }))
+    const upRes = await raw('POST', '/api/admin/upload', { ...upCookie, body: fd })
+    const upBody = await upRes.json().catch(() => null)
+    const passOk = upRes.status === 200 && !!(upBody && upBody.url)
+    results.push(['上传预检：3MB mp4 放行（>2MB 不再 413）', passOk])
+    console.log(`  ${passOk ? '✓' : '✗'} 上传预检：3MB mp4 放行（status ${upRes.status}）`)
+    if (upBody && upBody.key) await raw('DELETE', `/api/admin/uploads?key=${encodeURIComponent(upBody.key)}`, upCookie)
+
+    // 超限仍要被拦下（豁免路径修好不能顺手把上限也放宽了）
+    const huge = new Uint8Array(31 * 1024 * 1024)
+    huge.set([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d])
+    const fd2 = new FormData()
+    fd2.append('file', new File([huge], 'smoke-31mb.mp4', { type: 'video/mp4' }))
+    const overRes = await raw('POST', '/api/admin/upload', { ...upCookie, body: fd2 })
+    const overOk = overRes.status === 413
+    results.push(['上传预检：31MB 仍被拒（413）', overOk])
+    console.log(`  ${overOk ? '✓' : '✗'} 上传预检：31MB 仍被拒（status ${overRes.status}）`)
+  }
+
   const putSettings = (patch) =>
     raw('PUT', '/api/admin/settings', {
       headers: { 'Content-Type': 'application/json', Cookie: cookie },

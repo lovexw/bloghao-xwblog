@@ -873,12 +873,11 @@ async function viewWeibo() {
     `<div class="page-head"><div><div class="page-title">微博</div><div class="page-sub">随手记：短文字 + 图片，不用起标题</div></div></div>
     <div class="panel wb-composer">
       <textarea class="textarea wb-input" id="wb-content" maxlength="${WB_MAX_CHARS}" placeholder="有什么新鲜事？">${esc(wbEditing?.content || '')}</textarea>
-      <div class="wb-hint">支持 ⌘/Ctrl+V 粘贴截图或视频、把文件拖进来，或点下方「加图 / 视频」；正文里写 #话题 即可归类并高亮，如 #晚餐日记</div>
+      <div class="wb-hint">支持 ⌘/Ctrl+V 粘贴截图或视频、把文件拖进来，或点下方「加图」；正文里写 #话题 即可归类并高亮，如 #晚餐日记</div>
       <div class="wb-imgs" id="wb-imgs"></div>
       <div class="wb-imgs" id="wb-video-box"></div>
       <div class="wb-composer-foot">
-        <button class="btn btn-ghost btn-sm" id="wb-add-img" type="button">${I.image} 加图（${images.length}/${WB_MAX_IMAGES}）</button>
-        <button class="btn btn-ghost btn-sm" id="wb-add-video" type="button" title="最大 25MB，MP4 / WebM">视频</button>
+        <button class="btn btn-ghost btn-sm" id="wb-add-img" type="button" title="图片 / 视频，一条微博最多 1 个视频">${I.image} 加图（${images.length}/${WB_MAX_IMAGES}）</button>
         <button class="btn btn-ghost btn-sm" id="wb-emoji" type="button">😊 表情</button>
         <span class="wb-count" id="wb-count">${(wbEditing?.content || '').length} / ${WB_MAX_CHARS}</span>
         <span class="spacer"></span>
@@ -893,7 +892,6 @@ async function viewWeibo() {
 
   const contentEl = document.getElementById('wb-content')
   const addImgBtn = document.getElementById('wb-add-img')
-  const addVideoBtn = document.getElementById('wb-add-video')
   const countEl = document.getElementById('wb-count')
   const composer = $app.querySelector('.wb-composer')
 
@@ -940,8 +938,6 @@ async function viewWeibo() {
       wbVideoMeta = ''
       renderVideo()
     })
-    addVideoBtn.disabled = !!wbVideo
-    addVideoBtn.title = wbVideo ? '一条微博只能带一个视频，先移除当前视频' : '最大 25MB，MP4 / WebM'
   }
 
   /** 加视频：类型 / 体积前置校验 + 上传进度 + 封面帧（best-effort），与前台发布器同一套口径 */
@@ -949,13 +945,13 @@ async function viewWeibo() {
     if (wbVideo) return toast('一条微博只能带一个视频，先移除当前视频', true)
     if (!isVideoFile(file)) return toast('只支持 MP4 / WebM 视频', true)
     if (file.size > VIDEO_MAX_BYTES) return toast(`视频不能超过 25MB，当前 ${fmtSize(file.size)}`, true)
-    const label = addVideoBtn.innerHTML
+    const label = addImgBtn.innerHTML
     wbUploading++
-    addVideoBtn.disabled = true
+    addImgBtn.disabled = true
     try {
       const prep = await prepareVideo(file)
       if (prep.error) return toast('只支持 MP4 / WebM 视频', true)
-      const up = await uploadFile(prep.file, (p) => (addVideoBtn.textContent = `上传视频 ${p}%`))
+      const up = await uploadFile(prep.file, (p) => (addImgBtn.textContent = `上传视频 ${p}%`))
       wbVideo = { url: up.url, poster: '', w: 0, h: 0 }
       wbVideoMeta = fmtSize(file.size)
       renderVideo()
@@ -982,7 +978,7 @@ async function viewWeibo() {
       toast(e.message, true)
     } finally {
       wbUploading--
-      addVideoBtn.innerHTML = label
+      addImgBtn.innerHTML = label
       renderVideo()
     }
   }
@@ -1027,7 +1023,9 @@ async function viewWeibo() {
   }
 
   function pickImages() {
-    pickFiles('image/jpeg,image/png,image/webp,image/gif', true, (files) => addImageFiles(files))
+    // 图片与视频共用一个入口（站长 2026-10-13 拍板）：accept 里必须写 video/*（枚举具体类型会让
+    // iOS 图库筛掉 iPhone 拍的 .mov），选完由 addMediaFiles 分流——视频只取第一个，其余按图片走
+    pickFiles(`image/jpeg,image/png,image/webp,image/gif,${VIDEO_ACCEPT}`, true, (files) => addMediaFiles(files))
   }
 
   // 粘贴图片：光标在发布器内 ⌘/Ctrl+V 即上传（纯文本粘贴不受影响）
@@ -1084,13 +1082,6 @@ async function viewWeibo() {
   if (wbEditing) window.scrollTo({ top: 0 })
   contentEl.addEventListener('input', () => (countEl.textContent = `${contentEl.value.length} / ${WB_MAX_CHARS}`))
   addImgBtn.addEventListener('click', pickImages)
-  addVideoBtn.addEventListener('click', () => {
-    if (wbVideo) return toast('一条微博只能带一个视频，先移除当前视频', true)
-    pickFiles(VIDEO_ACCEPT, false, (files) => {
-      const f = files && files[0]
-      if (f) addVideoFile(f)
-    })
-  })
   document.getElementById('wb-save')?.addEventListener('click', () => saveWeibo(wbEditing?.status || 'draft'))
   document.getElementById('wb-publish')?.addEventListener('click', () => saveWeibo('published'))
   document.getElementById('wb-draft')?.addEventListener('click', () => saveWeibo('draft'))

@@ -75,6 +75,9 @@
 <li><strong>链接预取 Speculation Rules（B24）</strong>：前台自动声明同源链接预渲染（conservative 档——鼠标按下链接才触发，排除后台 / 开放 API / 外链中间页 / 订阅端点），点进去几乎瞬开；Chrome / Safari 新版生效、老浏览器静默忽略。配套保证统计诚实：预取与预渲染请求<strong>不计文章阅读量</strong>，访客打点在预渲染期间不报、页面被真正打开时补报</li>
 </ul>
 <h3 id="修复">修复</h3><ul>
+<li><strong>上传大文件一律失败（超 2MB 全部 413）</strong>：入站体积预检的上传豁免路径少了 <code>/api</code> 前缀（真实路径是 <code>/api/admin/upload</code>），于是上传端点一直按 2MB 的普通限额预检——视频、大图、开放接口配图只要超过 2MB 就地被拒，页面上只显示「上传失败」（前台图片因为上传前会压缩到几百 KB，所以一直没暴露）。现已修正，冒烟新增「上传体积预检链路」守着（3MB 必须放行 / 31MB 必须 413）</li>
+<li><strong>视频偶尔被判「只支持 MP4 / WebM」</strong>：macOS 常把 <code>.mp4</code> 报成 <code>video/quicktime</code>，而客户端此前把「容器品牌无需改写」误当成「不认识的格式」直接拒掉。现在改为<strong>只认文件头</strong>：有 <code>ftyp</code> 就是 ISO-BMFF，品牌是 <code>qt  </code> 的（iPhone 的 .mov）改写成 mp4，其余品牌原样按 mp4 上传；WebM 认 EBML 魔数，其它容器才提示换格式。另外，上传失败时会把服务端原话（如「请求体过大」「文件超过 25MB 限制」）显示出来，不再只有一句笼统的「上传失败」</li>
+<li><strong>视频入口合并</strong>（站长拍板）：不再单设「视频」按钮，图片与视频共用同一个「加图」选择器，只保留「一条微博最多 1 个视频」的约束（多选时视频取第一个、其余当图片；拖拽 / 粘贴同样分流）</li>
 <li><strong>iPhone（iOS Safari）选不到图库里的视频</strong>：视频按钮的选择器以前只列 <code>video/mp4</code> / <code>video/webm</code>，而 iOS 的「照片图库」是按它过滤的——iPhone 拍的视频是 <code>.mov</code>，于是图库里一个视频都不显示（2026-10-13 站长手机实测）。现在选择器写 <code>video/*</code>，选中后站点自动把 <code>.mov</code> 的容器改写成 MP4（只改文件头几字节的品牌位，不重编码、不损质量），H.264 的 iPhone 视频改完即全平台可放；HEVC（iPhone 默认的高效格式）上传时会提示一句「iPhone / Mac 正常，部分 Windows 浏览器放不出来」，想更稳可先导出 MP4。服务端「只收 MP4 / WebM」的白名单不变</li>
 </ul>
 <h2 id="251---2026-10-12"><a href="https://github.com/bloghao/bloghao/compare/v2.5.0...v2.5.1" target="_blank" rel="noopener noreferrer">2.5.1</a> - 2026-10-12</h2><h3 id="新增-1">新增</h3><ul>

@@ -109,11 +109,16 @@ export const api = new Hono<AppEnv>()
  * 风险（正常客户端与 curl 都带 CL），公开写端点另有限流与蜜罐在前 */
 const BODY_LIMIT_BYTES = 2 * 1024 * 1024
 const BODY_LIMIT_UPLOAD_BYTES = 30 * 1024 * 1024
+/* 上传豁免路径**必须写全前缀**：api 路由挂在 /api 下（index.ts `app.route('/api', api)`），
+ * 而 c.req.path 是完整路径（/api/admin/upload）。这里曾漏写 /api 前缀，于是上传端点一直按
+ * 2MB 的普通限额预检——超过 2MB 的视频 / 大图 / 开放接口配图直接 413（前端只看到「上传失败」）。
+ * 2026-10-13 站长上传 20MB 视频失败暴露：此前没有 >2MB 请求体的测试，所以一路潜伏到线上。
+ * 冒烟「上传体积预检」用例守着（3MB mp4 必须 200，26MB 必须 413）。 */
+const UPLOAD_PATH_PREFIXES = ['/api/admin/upload', '/api/admin/og-image', '/api/external/weibo']
 api.use('*', async (c, next) => {
   if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) {
     const p = c.req.path
-    const isUpload =
-      p.startsWith('/admin/upload') || p.startsWith('/admin/og-image') || p.startsWith('/external/weibo')
+    const isUpload = UPLOAD_PATH_PREFIXES.some((prefix) => p.startsWith(prefix))
     const cl = Number(c.req.header('Content-Length') || '0')
     if (cl > (isUpload ? BODY_LIMIT_UPLOAD_BYTES : BODY_LIMIT_BYTES)) return c.text('请求体过大', 413)
   }

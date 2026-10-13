@@ -161,6 +161,7 @@ const ZH_EN: Record<string, string> = {
   // 微博视频（B19）
   '视频': 'Video',
   '最大 25MB，MP4 / WebM': 'Up to 25MB, MP4 / WebM',
+  '图片 / 视频，一条微博最多 1 个视频': 'Photos / video — one video per note',
   '只支持 MP4 / WebM 视频': 'Only MP4 / WebM videos are supported',
   '写点什么，或者配张图 / 加段视频吧': 'Write something, or attach a photo / video first',
   // 闭站页
