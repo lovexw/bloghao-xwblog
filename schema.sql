@@ -114,11 +114,12 @@ CREATE INDEX IF NOT EXISTS idx_comments_post ON comments (post_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_comments_status ON comments (status, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS categories (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  name       TEXT    NOT NULL UNIQUE,
-  slug       TEXT    NOT NULL UNIQUE,
-  sort       INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT    NOT NULL UNIQUE,
+  slug        TEXT    NOT NULL UNIQUE,
+  sort        INTEGER NOT NULL DEFAULT 0,
+  description TEXT    NOT NULL DEFAULT '', -- 分类描述（B23）：归档页页头一行说明 + meta description
+  created_at  INTEGER NOT NULL
 );
 
 -- 单分类：一篇文章最多属于一个分类（post_id 为主键）

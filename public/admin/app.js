@@ -1325,6 +1325,7 @@ async function viewPostTaxonomy() {
       <div class="cat-main">
         <span class="cat-name">${esc(c.name)}</span>
         <span class="cat-slug">/category/${esc(c.slug)} · ${c.post_count ?? 0} 篇</span>
+        ${c.description ? `<span class="cat-slug">${esc(String(c.description).slice(0, 80))}</span>` : ''}
       </div>
       <div class="post-ops">
         <button class="btn btn-ghost btn-sm" data-act="edit">编辑</button>
@@ -1432,6 +1433,7 @@ async function viewPostTaxonomy() {
         <div class="modal-body">
           <label class="auth-field"><label>名称</label><input class="input" id="cat-edit-name" value="${esc(cat.name)}" maxlength="20"></label>
           <label class="auth-field" style="margin-top:10px;"><label>链接标识（字母 / 数字 / 中文 / 短横线）</label><input class="input" id="cat-edit-slug" value="${esc(cat.slug)}"></label>
+          <label class="auth-field" style="margin-top:10px;"><label>分类描述（可选，一行说明：显示在分类页页头，也作为该页的搜索引擎摘要）</label><textarea class="textarea" id="cat-edit-desc" rows="2" maxlength="300" placeholder="这个分类收些什么">${esc(cat.description || '')}</textarea></label>
         </div>
         <div class="modal-foot"><button class="btn" data-close>取消</button><button class="btn btn-primary" id="cat-edit-save">保存</button></div>`)
       m.mask.querySelector('#cat-edit-save').addEventListener('click', async () => {
@@ -1443,6 +1445,7 @@ async function viewPostTaxonomy() {
             body: {
               name: m.mask.querySelector('#cat-edit-name').value.trim(),
               slug: m.mask.querySelector('#cat-edit-slug').value.trim(),
+              description: m.mask.querySelector('#cat-edit-desc').value.trim(),
             },
           })
           toast('已保存')
@@ -2701,6 +2704,23 @@ async function viewSettings() {
     </div>
 
     <div class="panel" style="padding:20px;">
+      <div class="form-section"><h3>SEO 与统计</h3><div class="sec-desc">搜索引擎验证、第三方统计脚本与 robots.txt 追加规则；三项都可留空</div>
+        <div class="form-item">
+          <label>站点验证标签（一行一个，直接粘贴站长平台给的 meta 标签；支持 Google / Bing / 百度 / 搜狗 / 360 / Yandex 等验证字段）</label>
+          <textarea class="textarea" id="st-verifyMetas" rows="3" placeholder="&lt;meta name=&quot;google-site-verification&quot; content=&quot;xxxx&quot;&gt;">${esc(s.verifyMetas || '')}</textarea>
+        </div>
+        <div class="form-item">
+          <label>统计脚本（第三方统计的 script 标签或脚本地址，仅 https；Umami / Plausible / CF Web Analytics / 51la 这类「地址 + data-* 配置」的都能用，需要内联配置代码的 GA4 / GTM 不支持）</label>
+          <textarea class="textarea" id="st-analyticsScript" rows="2" placeholder="&lt;script defer src=&quot;https://…/script.js&quot; data-website-id=&quot;…&quot;&gt;&lt;/script&gt;">${esc(s.analyticsScript || '')}</textarea>
+        </div>
+        <div class="form-item">
+          <label>robots.txt 追加段（附在内置规则之后：额外 Sitemap、屏蔽目录等；演示站固定整站 Disallow，不看这段）</label>
+          <textarea class="textarea" id="st-robotsExtra" rows="3" placeholder="Disallow: /drafts/">${esc(s.robotsExtra || '')}</textarea>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="padding:20px;">
       <div class="form-section"><h3>语言版本（英文测试版 English 0.1）</h3><div class="sec-desc">前台界面语言：文章与微博正文保持原文，仅界面文案切换。英文版渲染出现异常时会自动回退中文版，并在后台顶部提醒；重新开启即重置异常状态</div>
         <label class="mode-row"><input type="radio" name="st-edition" value="zh"><span class="mode-text"><b>中文（默认）</b><i>前台保持中文界面</i></span></label>
         <label class="mode-row"><input type="radio" name="st-edition" value="en"><span class="mode-text"><b>English 0.1（英文测试版）</b><i>前台界面切换为英文并在页面顶部公示测试版横幅；测试期间搜索引擎不收录（noindex），出问题自动回退中文版</i></span></label>
@@ -3028,6 +3048,9 @@ async function viewSettings() {
       rssFullText: g('st-rssFullText').checked ? '1' : '0',
       backupEnabled: g('st-backupEnabled').checked ? '1' : '0',
       statsEnabled: g('st-statsEnabled').checked ? '1' : '0',
+      verifyMetas: g('st-verifyMetas').value.trim(),
+      analyticsScript: g('st-analyticsScript').value.trim(),
+      robotsExtra: g('st-robotsExtra').value,
     }
     // 关站是全站 503 的大动作：开启瞬间必须明确确认（取消时不动按钮状态）
     if (body.siteClosed === '1' && !wasClosed) {

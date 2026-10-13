@@ -120,6 +120,8 @@ export interface CategoryRow {
   name: string
   slug: string
   sort: number
+  /** 分类描述（B23）：归档页页头说明 + meta description；纯文本，后台分类编辑维护 */
+  description: string
   created_at: number
 }
 

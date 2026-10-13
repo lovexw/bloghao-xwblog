@@ -2113,12 +2113,21 @@
   /* ---------------- 访客统计打点（后台「统计」页，服务端见 src/stats.ts） ----------------
    * 只上报匿名访客 id / 路径 / 标题 / 来源域名，不碰 Cookie 不存 IP；
    * 页面带 <meta name="xw-stats" content="off">（后台关闭采集）时完全不发请求 */
-  try {
-    if (
-      document.visibilityState === 'visible' &&
-      !/bot|crawl|spider|slurp/i.test(navigator.userAgent) &&
-      !document.querySelector('meta[name="xw-stats"][content="off"]')
-    ) {
+  // 预渲染 / 预取（Speculation Rules，B24）中先不报：页面真被打开时才计入访客，
+  // 否则 hover 一次就给一个没打开过的页面记一笔访客。老浏览器没有 prerendering 属性，
+  // 走原路径（可见即上报）。
+  var trackSent = false
+  function sendTrack() {
+    if (trackSent) return
+    if (document.prerendering) {
+      document.addEventListener('prerenderingchange', sendTrack)
+      return
+    }
+    if (document.visibilityState !== 'visible') return
+    if (/bot|crawl|spider|slurp/i.test(navigator.userAgent)) return
+    if (document.querySelector('meta[name="xw-stats"][content="off"]')) return
+    trackSent = true
+    try {
       var vid = storeGet('xw-vid')
       if (!vid) {
         vid = Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
@@ -2131,8 +2140,9 @@
         v: vid,
         t: document.title,
       }).catch(function () {})
+    } catch (err) {
+      /* 统计永不影响页面 */
     }
-  } catch (err) {
-    /* 统计永不影响页面 */
   }
+  sendTrack()
 })()

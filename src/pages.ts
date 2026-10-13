@@ -36,6 +36,7 @@ import { searchPosts, searchWeibo } from './fts'
 import {
   articleJsonLd,
   archiveGroups,
+  categoryLink,
   headingAnchors,
   commentsHtml,
   HOME_SORTS,
@@ -63,6 +64,7 @@ import type { MemberData, RankData } from './themes/registry'
 import type { Env, PostRow, SessionUser, SettingsMap } from './types'
 import { packMatrix, qrMatrix } from './qrcode'
 import { clampInt, esc, excerpt, isDemo, readingMinutes, teaserHtml } from './utils'
+import { analyticsOrigin, breadcrumbJsonLd, isSpeculativeRequest } from './seo'
 
 type C = Context<{ Bindings: Env; Variables: { user: SessionUser | null } }>
 
@@ -72,22 +74,42 @@ function pageOpts(c: C, o: Parameters<typeof page>[0]): Parameters<typeof page>[
   return isDemo(c.env) ? { ...o, noindex: true, demo: true } : o
 }
 
-const CSP =
-  "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: blob:; media-src 'self' https:; script-src 'self'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'; object-src 'none'"
+/** Cloudflare Turnstile 挑战脚本与 iframe 的固定可信端点（仅会员页放行） */
+const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com'
 
-/** 会员页开启 Turnstile 注册验证时的放行版：挑战脚本与 iframe 来自 challenges.cloudflare.com
- *  （固定可信端点，仅此页放行，其余页面保持严格 CSP）。replace 自 CSP 自动跟随主策略变更；
- *  两个锚点串若在 CSP 里被改名，这里会静默失效——动 CSP 时顺手核对这两处 */
-const CSP_TURNSTILE = CSP.replace(
-  "script-src 'self'",
-  "script-src 'self' https://challenges.cloudflare.com"
-).replace(
-  "base-uri 'self'",
-  "base-uri 'self'; frame-src 'self' https://challenges.cloudflare.com"
-)
+/**
+ * 公开页 CSP 组装（默认严格，三处按需放宽）：
+ *  ① 统计脚本（settings.analyticsScript）：只放行该脚本自己的域——script-src 载脚本、connect-src 让
+ *     它的 fetch / sendBeacon 上报能过；未配置时两者都不出现；
+ *  ② Speculation Rules 预取声明：内联 <script type="speculationrules"> 同样受 script-src 约束，需
+ *     'inline-speculation-rules' 关键词（MDN「script type=speculationrules」节）。不认该关键词的
+ *     浏览器按未知源忽略、内联脚本照旧被拦——只开这一扇窗，不放宽任何其它内联脚本；
+ *  ③ 会员页 Turnstile：挑战脚本 + 挑战 iframe（frame-src）。
+ */
+function buildCsp(opts: { analyticsOrigin?: string | null; turnstile?: boolean } = {}): string {
+  const script = ["'self'", "'inline-speculation-rules'"]
+  if (opts.analyticsOrigin) script.push(opts.analyticsOrigin)
+  if (opts.turnstile) script.push(TURNSTILE_ORIGIN)
+  const parts = [
+    "default-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' https: http: blob:",
+    "media-src 'self' https:",
+    `script-src ${script.join(' ')}`,
+    "base-uri 'self'",
+    "frame-ancestors 'self'",
+    "form-action 'self'",
+    "object-src 'none'",
+  ]
+  if (opts.turnstile) parts.push(`frame-src 'self' ${TURNSTILE_ORIGIN}`)
+  if (opts.analyticsOrigin) parts.push(`connect-src 'self' ${opts.analyticsOrigin}`)
+  return parts.join('; ')
+}
 
-function baseHeaders(c: C) {
-  c.header('Content-Security-Policy', CSP)
+/** 公开页通用响应头。settings 可选：传入时按站点配置放宽 CSP（统计脚本域）；各公开页渲染函数都在
+ *  读到 settings 之后再调用它——别把调用挪回 settings 之前，否则统计脚本会被 CSP 拦掉 */
+function baseHeaders(c: C, settings?: SettingsMap) {
+  c.header('Content-Security-Policy', buildCsp({ analyticsOrigin: analyticsOrigin(settings?.analyticsScript) }))
   c.header('X-Content-Type-Options', 'nosniff')
   c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
   c.header('X-Frame-Options', 'SAMEORIGIN')
@@ -197,8 +219,8 @@ async function renderList(
   c: C,
   opts: { mode: 'home' | 'category' | 'search' }
 ): Promise<Response> {
-  baseHeaders(c)
   const settings = await getSettings(c.env.DB)
+  baseHeaders(c, settings)
   const theme = getTheme(settings.theme)
   const url = new URL(c.req.url)
   const tag = c.req.param('tag') || url.searchParams.get('tag') || undefined
@@ -388,9 +410,13 @@ async function renderList(
     }
     title = q ? (en ? `Search: ${q}` : `搜索：${q}`) : tr(en, '搜索')
   } else if (opts.mode === 'category' && category) {
-    notice = en
-      ? `<p class="search-meta">${r.total} ${plural(r.total, 'post', 'posts')} in category “${esc(category.name)}”</p>`
-      : `<p class="search-meta">分类「${esc(category.name)}」下共 ${r.total} 篇文章</p>`
+    // 分类描述（B23）：后台分类编辑维护，兼作归档页 meta description；站长自填内容原样透传（不翻译）
+    const descHtml = category.description ? `<p class="search-meta cat-desc">${esc(category.description)}</p>` : ''
+    notice = `${descHtml}${
+      en
+        ? `<p class="search-meta">${r.total} ${plural(r.total, 'post', 'posts')} in category “${esc(category.name)}”</p>`
+        : `<p class="search-meta">分类「${esc(category.name)}」下共 ${r.total} 篇文章</p>`
+    }`
     emptyText = en ? 'No posts in this category yet.' : '这个分类下还没有文章。'
     title = en ? `Category: ${category.name}` : `分类：${category.name}`
   } else if (tag) {
@@ -436,24 +462,34 @@ async function renderList(
     // 纯博客模式：历史上的今天只保留文章条目（微博模块已隐藏）
     onThisDay: mode === 'blog' && otd ? otd.filter((i) => i.kind === 'post') : otd,
   })
+  // 分类归档页（B23）：meta description 优先用分类描述，面包屑「首页 → 分类」；
+  // 搜索页是工具页（noindex）不出结构化数据
+  const listBreadcrumb =
+    opts.mode === 'category' && category
+      ? breadcrumbJsonLd([
+          { name: en ? 'Home' : '首页', url: siteBase(settings, url.origin) + '/' },
+          { name: category.name },
+        ])
+      : undefined
   c.header('Cache-Control', 'no-cache')
   return c.html(
     page(pageOpts(c, {
       settings,
       css: theme.css,
       title,
-      description: settings.siteDescription,
+      description: (opts.mode === 'category' && category?.description) || settings.siteDescription,
       path: opts.mode === 'home' ? '/' : url.pathname,
       origin: url.origin,
       noindex: opts.mode === 'search',
+      jsonLd: listBreadcrumb,
       body: html,
     }))
   )
 }
 
 export async function renderPost(c: C): Promise<Response> {
-  baseHeaders(c)
   const settings = await getSettings(c.env.DB)
+  baseHeaders(c, settings)
   const theme = getTheme(settings.theme)
   const slug = c.req.param('slug') ?? ''
   const row = await getPostBySlug(c.env.DB, slug)
@@ -492,7 +528,9 @@ export async function renderPost(c: C): Promise<Response> {
   const shareQr = qrMatrix(share.url)
   if (shareQr) share.qr = packMatrix(shareQr)
 
-  if (row.status === 'published' && shouldCountView(clientIp(c.req.raw), row.id)) {
+  // 预取 / 预渲染请求（Speculation Rules，B24）不计阅读量：hover 一下就 +1 是灌水，
+  // 用户主动导航的真实点击才计（一小时同 IP 同文的去重继续兜底）
+  if (row.status === 'published' && !isSpeculativeRequest(c.req.raw) && shouldCountView(clientIp(c.req.raw), row.id)) {
     c.executionCtx.waitUntil(
       c.env.DB.prepare('UPDATE posts SET views = views + 1 WHERE id = ?').bind(row.id).run()
     )
@@ -568,21 +606,29 @@ export async function renderPost(c: C): Promise<Response> {
   // 密码墙的描述走 protectedDescription：作者自填摘要照常公开，绝不把 excerpt(row.content) 泄进 meta / JSON-LD
   const metaDescription = pwLocked ? protectedDescription(row.summary, en) : row.summary || excerpt(row.content, 120)
   const base = siteBase(settings, url.origin)
-  // 结构化数据（roadmap A3）：schema.org BlogPosting，与 og:image / canonical 同口径；草稿预览（noindex）不出
+  // 结构化数据（roadmap A3 / B23）：schema.org BlogPosting + 面包屑 BreadcrumbList，与 og:image /
+  // canonical 同口径；草稿预览（noindex）不出。密码墙与会员锁文照常出标题级面包屑（标题本就公开）
   const jsonLd = isPreview
     ? undefined
-    : articleJsonLd({
-        settings,
-        title: row.title,
-        description: metaDescription,
-        image: ogImage,
-        url: `${base}${postPath}`,
-        base,
-        publishedAt: row.published_at,
-        updatedAt: row.updated_at,
-        tags: parseTags(row),
-        commentCount: commentTotal,
-      })
+    : [
+        articleJsonLd({
+          settings,
+          title: row.title,
+          description: metaDescription,
+          image: ogImage,
+          url: `${base}${postPath}`,
+          base,
+          publishedAt: row.published_at,
+          updatedAt: row.updated_at,
+          tags: parseTags(row),
+          commentCount: commentTotal,
+        }),
+        breadcrumbJsonLd([
+          { name: en ? 'Home' : '首页', url: `${base}/` },
+          ...(categoryRow ? [{ name: categoryRow.name, url: `${base}${categoryLink(categoryRow)}` }] : []),
+          { name: row.title },
+        ]),
+      ]
   return c.html(
     page(pageOpts(c, {
       settings,
@@ -603,8 +649,8 @@ export async function renderPost(c: C): Promise<Response> {
 /** 关于我页（/about）：2026-10 起由页面系统承载（pages 表 slug='about'，后台「页面」维护），
  *  查不到对应页面时回退 legacy 的 settings.about 渲染（兜底，正常不会再走到） */
 export async function renderAbout(c: C): Promise<Response> {
-  baseHeaders(c)
   const settings = await getSettings(c.env.DB)
+  baseHeaders(c, settings)
   const theme = getTheme(settings.theme)
   const en = isEn(settings)
   const aboutRow = await getPage(c.env.DB, 'about')
@@ -664,10 +710,10 @@ export async function renderAbout(c: C): Promise<Response> {
 
 /** 独立页面页（/page/:slug）：自建页面（项目页/书单页/隐私政策等）；草稿 404，slug=about 301 回专属短链 */
 export async function renderPage(c: C): Promise<Response> {
-  baseHeaders(c)
   const slug = c.req.param('slug') ?? ''
   if (slug === 'about') return c.redirect('/about', 301)
   const settings = await getSettings(c.env.DB)
+  baseHeaders(c, settings)
   const theme = getTheme(settings.theme)
   const row = await getPage(c.env.DB, slug)
   if (!row || row.status !== 'published') return renderNotFound(c)
@@ -697,8 +743,8 @@ export async function renderPage(c: C): Promise<Response> {
 
 /** 文章归档页（/archives）：全部已发布文章按年分组，独立页面便于搜索引擎收录 */
 export async function renderArchive(c: C): Promise<Response> {
-  baseHeaders(c)
   const settings = await getSettings(c.env.DB)
+  baseHeaders(c, settings)
   const theme = getTheme(settings.theme)
   const en = isEn(settings)
   const [rows, categories, tags, pages, yearStats, heatmap] = await Promise.all([
@@ -737,8 +783,8 @@ export async function renderArchive(c: C): Promise<Response> {
 
 /** 留言板页（/guestbook）：独立留言墙，留言存进 comments（post_id 与 weibo_id 均为 0） */
 export async function renderGuestbook(c: C): Promise<Response> {
-  baseHeaders(c)
   const settings = await getSettings(c.env.DB)
+  baseHeaders(c, settings)
   const theme = getTheme(settings.theme)
   const en = isEn(settings)
   const [comments, categories, tags, pages, user, gbCount, member] = await Promise.all([
@@ -795,8 +841,8 @@ export async function renderGuestbook(c: C): Promise<Response> {
  *  正文结构完全一致，仅 canonical/标题换成首页口径；翻页与话题链接仍指向 /weibo（同一内容）。
  *  纯博客模式（siteMode=blog）：微博模块整体下线，本路由 302 回首页（老链接不断）。 */
 export async function renderWeibo(c: C, asHome = false): Promise<Response> {
-  baseHeaders(c)
   const settings = await getSettings(c.env.DB)
+  baseHeaders(c, settings)
   if (siteMode(settings) === 'blog') return c.redirect('/', 302)
   const theme = getTheme(settings.theme)
   const en = isEn(settings)
@@ -884,8 +930,8 @@ export async function renderWeibo(c: C, asHome = false): Promise<Response> {
 
 /** 友情链接页（/links）：已收录的友链卡片 + 访客申请收录表单 */
 export async function renderLinks(c: C): Promise<Response> {
-  baseHeaders(c)
   const settings = await getSettings(c.env.DB)
+  baseHeaders(c, settings)
   const theme = getTheme(settings.theme)
   const en = isEn(settings)
   const [links, categories, tags, pages] = await Promise.all([
@@ -945,12 +991,14 @@ async function rankEntries(c: C, settings: SettingsMap, sessionId: number | null
 
 /** 会员中心页（/member）：未登录渲染登录/注册双表单，已登录渲染会员中心卡 */
 export async function renderMember(c: C): Promise<Response> {
-  baseHeaders(c)
   const settings = await getSettings(c.env.DB)
+  baseHeaders(c, settings)
   if (!membersEnabled(settings)) return renderNotFound(c)
   // 注册人机验证（Turnstile）：仅此页放行挑战脚本与 iframe，sitekey 经 <html data-turnstile>
   // 下发（page() 内按 path==='/member' 注入），site.js 据此懒挂载组件
-  if (settings.turnstileSiteKey) c.header('Content-Security-Policy', CSP_TURNSTILE)
+  if (settings.turnstileSiteKey) {
+    c.header('Content-Security-Policy', buildCsp({ analyticsOrigin: analyticsOrigin(settings.analyticsScript), turnstile: true }))
+  }
   const theme = getTheme(settings.theme)
   const en = isEn(settings)
   const [categories, tags, pages, session] = await Promise.all([
@@ -995,8 +1043,8 @@ export async function renderMember(c: C): Promise<Response> {
 
 /** 排行榜页（/rank）：会员积分总榜（总榜起步，周榜/天榜待定）；登录访客本人行 isMe 高亮 */
 export async function renderRank(c: C): Promise<Response> {
-  baseHeaders(c)
   const settings = await getSettings(c.env.DB)
+  baseHeaders(c, settings)
   if (!membersEnabled(settings)) return renderNotFound(c)
   const theme = getTheme(settings.theme)
   const en = isEn(settings)
@@ -1034,8 +1082,8 @@ export async function renderRank(c: C): Promise<Response> {
 }
 
 export async function renderNotFound(c: C): Promise<Response> {
-  baseHeaders(c)
   const settings = await getSettings(c.env.DB)
+  baseHeaders(c, settings)
   const en = isEn(settings)
   // hasOwnProperty 防原型链属性（constructor 等）被当成主题 id
   const t = Object.prototype.hasOwnProperty.call(THEMES, settings.theme) ? THEMES[settings.theme] : undefined

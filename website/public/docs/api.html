@@ -138,6 +138,15 @@
   &quot;countries&quot;:[{ &quot;name&quot;: &quot;CN&quot;, &quot;pv&quot;: 0 }],
   &quot;hourly&quot;:   [{ &quot;h&quot;: 0, &quot;pv&quot;: 0 }]
 }</code></pre></div><p><code>series</code> 按天补零；UV 为去重匿名访客号（<code>COUNT(DISTINCT vid)</code>）；数据表 <code>visit_log</code> 保留 180 天、不进备份。</p>
+<p>响应额外携带 <code>bot</code> 键——爬虫 / AI 抓取维度（<code>src/bots.ts</code>，服务端按 User-Agent 识别，爬虫不执行 JS 进不了上面的访客统计）：</p>
+<div class="codeblock" data-lang="json"><pre><code>{
+  &quot;total&quot;: 0, &quot;todayTotal&quot;: 0,
+  &quot;byKind&quot;:   [{ &quot;name&quot;: &quot;ai&quot;, &quot;pv&quot;: 0 }],
+  &quot;byBot&quot;:    [{ &quot;name&quot;: &quot;GPTBot&quot;, &quot;kind&quot;: &quot;ai&quot;, &quot;pv&quot;: 0, &quot;activeDays&quot;: 1 }],
+  &quot;topPaths&quot;: [{ &quot;path&quot;: &quot;/post/hello&quot;, &quot;pv&quot;: 0 }],
+  &quot;series&quot;:   [{ &quot;day&quot;: &quot;2026-10-01&quot;, &quot;pv&quot;: 0, &quot;ai&quot;: 0, &quot;se&quot;: 0 }],
+  &quot;latest&quot;:   [{ &quot;ts&quot;: 0, &quot;name&quot;: &quot;Google&quot;, &quot;kind&quot;: &quot;se&quot;, &quot;path&quot;: &quot;/&quot; }]
+}</code></pre></div><p><code>byKind.name</code> 是类别编号：<code>ai</code>（AI 抓取）/ <code>se</code>（搜索引擎）/ <code>feed</code>（订阅器）/ <code>seo</code>（SEO 工具）/ <code>arch</code>（网页存档）。数据表 <code>bot_log</code> 与 <code>visit_log</code> 同隐私口径（不存 IP / UA 原文，只存识别名 / 类别 / 路径 / 国家码），同 180 天保留、不进备份；识别命中才落库，浏览器流量与爬虫记录天然互斥。</p>
 <h3 id="文章">文章</h3><div class="table-wrap"><table>
 <thead>
 <tr>
@@ -314,12 +323,12 @@
 <tr>
 <td>POST</td>
 <td><code>/api/admin/categories</code></td>
-<td>Body <code>{name, slug?, sort?}</code>；slug 留空用名称，支持字母/数字/中文/短横线</td>
+<td>Body <code>{name, slug?, sort?, description?}</code>；slug 留空用名称，支持字母/数字/中文/短横线</td>
 </tr>
 <tr>
 <td>PUT</td>
 <td><code>/api/admin/categories/:id</code></td>
-<td>编辑（名称与 slug 均不可重复）</td>
+<td>编辑（名称与 slug 均不可重复）；<code>description</code> 缺键即保留</td>
 </tr>
 <tr>
 <td>DELETE</td>
@@ -327,7 +336,7 @@
 <td>删除（关联文章变为未分类，文章不受影响）</td>
 </tr>
 </tbody></table></div>
-<p><code>name</code> ≤ 20 字。单分类模型：一篇文章最多属于一个分类（<code>post_categories.post_id</code> 为主键）。</p>
+<p><code>name</code> ≤ 20 字，<code>description</code> ≤ 300 字（可选：渲染在 <code>/category/:slug</code> 页头并作为该页 meta description，缺省回退站点描述）。单分类模型：一篇文章最多属于一个分类（<code>post_categories.post_id</code> 为主键）。</p>
 <h3 id="独立页面">独立页面</h3><div class="table-wrap"><table>
 <thead>
 <tr>
@@ -506,7 +515,7 @@
 <tbody><tr>
 <td>GET / PUT</td>
 <td><code>/api/admin/settings</code></td>
-<td>可写键：<code>siteName, siteDescription, siteUrl, footerText, avatarUrl, faviconUrl, ogImageDefault, theme, allowComments, moderateComments, notifyNewComment, rssFullText, backupEnabled, postsPerPage, about（legacy，已由「页面」承载）, pluginsDisabled, siteGrayscale, siteClosed, siteClosedMessage, membersEnabled（会员体系总开关）, rankTopN（/rank 展示条数 1-50）, externalToken, telegramBotToken, telegramAllowFrom, telegramWebhookSecret</code>；<code>theme</code> 必须是已注册主题 id；<code>avatarUrl</code>/<code>faviconUrl</code>/<code>ogImageDefault</code> 只接受站内 <code>/images/</code> 与 <code>http(s)</code> 外链；<code>pluginsDisabled</code> 为逗号分隔的插件 manifest id（仅字母/数字/<code>_</code>/<code>-</code>）；<code>siteGrayscale</code>/<code>siteClosed</code> 为 <code>1</code>/<code>0</code> 开关（闭站时公开页面与公开 API 一律 503，白名单见 src/closed.ts，已登录管理员不受影响）；<code>siteClosedMessage</code> ≤1000 字；<code>externalToken</code>/<code>telegramBotToken</code>/<code>telegramWebhookSecret</code> 为敏感项，GET 与 PUT 的响应一律打码（<code>••••••••</code>），明文只在生成时返回一次，PUT 收到打码占位符视为保持原值</td>
+<td>可写键：<code>siteName, siteDescription, siteUrl, footerText, avatarUrl, faviconUrl, ogImageDefault, theme, allowComments, moderateComments, notifyNewComment, rssFullText, backupEnabled, postsPerPage, about（legacy，已由「页面」承载）, pluginsDisabled, siteGrayscale, siteClosed, siteClosedMessage, membersEnabled（会员体系总开关）, rankTopN（/rank 展示条数 1-50）, externalToken, telegramBotToken, telegramAllowFrom, telegramWebhookSecret, verifyMetas（站点验证 meta：一行一个 meta 标签，name 走白名单、取值形态受限，非法整体 400）, analyticsScript（统计脚本：https 脚本地址或 script 片段，内联脚本体与白名单外属性拒绝）, robotsExtra（robots.txt 追加段，剥控制字符、限 2000 字符）</code>；<code>theme</code> 必须是已注册主题 id；<code>avatarUrl</code>/<code>faviconUrl</code>/<code>ogImageDefault</code> 只接受站内 <code>/images/</code> 与 <code>http(s)</code> 外链；<code>pluginsDisabled</code> 为逗号分隔的插件 manifest id（仅字母/数字/<code>_</code>/<code>-</code>）；<code>siteGrayscale</code>/<code>siteClosed</code> 为 <code>1</code>/<code>0</code> 开关（闭站时公开页面与公开 API 一律 503，白名单见 src/closed.ts，已登录管理员不受影响）；<code>siteClosedMessage</code> ≤1000 字；<code>externalToken</code>/<code>telegramBotToken</code>/<code>telegramWebhookSecret</code> 为敏感项，GET 与 PUT 的响应一律打码（<code>••••••••</code>），明文只在生成时返回一次，PUT 收到打码占位符视为保持原值；<code>verifyMetas</code> / <code>analyticsScript</code> 存库为结构化 JSON，GET 与 PUT 响应回显成「可粘贴形态」（与提交格式同形，可原样改回再存），渲染时按结构化值重放——统计脚本域自动进 CSP（<code>script-src</code> + <code>connect-src</code>），验证 meta 与预取声明（Speculation Rules）注入 head；<code>robotsExtra</code> 附在内置 robots 段之后（<code>GET /robots.txt</code>，演示站固定整站 Disallow）</td>
 </tr>
 <tr>
 <td>PUT</td>

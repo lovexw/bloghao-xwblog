@@ -13,6 +13,7 @@ import { renderAbout, renderArchive, renderCategory, renderGuestbook, renderHome
 import { mergeUnlockCookie, PP_COOKIE, PP_TTL_MS, verifyPostPassword } from './protect'
 import { buildJsonFeed, buildRss, buildSitemap } from './rss'
 import { siteBase } from './render'
+import { buildRobotsTxt } from './seo'
 import { purgeVisits } from './stats'
 import { purgeTrash } from './trash'
 import { refreshFootStats } from './db'
@@ -235,12 +236,12 @@ app.get('/sitemap.xml', async (c) => {
   return c.body(buildSitemap(settings, posts, siteUrl, categories, tags, pages))
 })
 
-app.get('/robots.txt', (c) =>
-  isDemo(c.env)
-    ? // 演示站：不希望被搜索引擎收录（内容是种子数据，且闭站页等状态不该进索引）
-      c.text('User-agent: *\nDisallow: /\n')
-    : c.text(`User-agent: *\nAllow: /\nDisallow: /admin\nSitemap: ${new URL(c.req.url).origin}/sitemap.xml\n`)
-)
+/** robots.txt（B20）：内置段 + 后台「设置 → 站点」的 robots 追加段（src/seo.ts buildRobotsTxt）；
+ *  演示站固定整站 Disallow（种子数据与闭站状态不该进索引），追加段不参与 */
+app.get('/robots.txt', async (c) => {
+  const settings = await getSettings(c.env.DB)
+  return c.text(buildRobotsTxt(settings, new URL(c.req.url).origin, isDemo(c.env)))
+})
 
 /* ---------------- R2 图床 ---------------- */
 app.get('/images/*', async (c) => {

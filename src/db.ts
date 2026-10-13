@@ -44,6 +44,11 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   avatarUrl: '',
   // 分享到社交平台的默认卡图（og:image 兜底；文章未设封面/卡图时使用，空则回退内置 /og-default.png）
   ogImageDefault: '',
+  // 站长 SEO（B20，机制 src/seo.ts）：站点验证 meta（结构化 JSON，name 走白名单）/ 统计脚本
+  // （https 脚本 URL 或 provider 片段，解析成结构化属性重放，内联脚本体不接受）/ robots.txt 追加段
+  verifyMetas: '',
+  analyticsScript: '',
+  robotsExtra: '',
   // 外部发布（见 src/external.ts）：空 Token = 开放接口关闭
   externalToken: '',
   telegramBotToken: '',
@@ -480,10 +485,10 @@ export async function getCategoryById(db: D1Database, id: number): Promise<Categ
   return db.prepare('SELECT * FROM categories WHERE id = ?').bind(id).first<CategoryRow>()
 }
 
-export async function createCategory(db: D1Database, name: string, slug: string, sort = 0): Promise<CategoryRow> {
+export async function createCategory(db: D1Database, name: string, slug: string, sort = 0, description = ''): Promise<CategoryRow> {
   const res = await db
-    .prepare('INSERT INTO categories (name, slug, sort, created_at) VALUES (?, ?, ?, ?)')
-    .bind(name, slug, sort, Date.now())
+    .prepare('INSERT INTO categories (name, slug, sort, description, created_at) VALUES (?, ?, ?, ?, ?)')
+    .bind(name, slug, sort, description, Date.now())
     .run()
   const row = await getCategoryById(db, Number(res.meta.last_row_id))
   if (!row) throw new Error('分类创建失败')
@@ -785,6 +790,8 @@ const SCHEMA_COLUMNS: { table: string; column: string; ddl: string }[] = [
   // 游客 QQ 头像（C2 扩展）：游客选填的 qq（仅抓取记账位，公开出参不携带）+ 服务端抓取转存的站内头像地址
   { table: 'comments', column: 'qq', ddl: "ALTER TABLE comments ADD COLUMN qq TEXT NOT NULL DEFAULT ''" },
   { table: 'comments', column: 'avatar', ddl: "ALTER TABLE comments ADD COLUMN avatar TEXT NOT NULL DEFAULT ''" },
+  // 分类描述（B23）：归档页页头说明 + meta description；建表列体见 schema.sql
+  { table: 'categories', column: 'description', ddl: "ALTER TABLE categories ADD COLUMN description TEXT NOT NULL DEFAULT ''" },
 ]
 const SCHEMA_TABLES = [
   // 会员体系（2026-10-07 起，见 docs/DEVPLAN-2026-10-07.md 附录 A 契约）：

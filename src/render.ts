@@ -5,6 +5,7 @@ import { outHref } from './outlink'
 import { cstDate, esc, excerpt, extractWeiboTopics, fmtDate, fmtDateCN, fmtDateTime, isoDate, NICKNAME_CHANGE_COOLDOWN_MS, nicknameCooldown } from './utils'
 import { replaceEmoji } from './emoji'
 import { appearanceHeadStyle } from './appearance'
+import { seoHeadHtml } from './seo'
 import { enBetaBannerHtml, fmtDateEn, fmtDateEnShort, fmtDateTimeEn, isEn, plural, tr, weiboTimeEn } from './i18n'
 
 // 英文测试版（English 0.1）的词典与日期随共享构建器一起再导出：主题与 pages.ts 只认 render 一个进口
@@ -25,8 +26,9 @@ export interface ThemePageOptions {
   noindex?: boolean
   /** 演示体验版（DEMO_MODE）：所有公开页顶部公示站点性质横幅，见 demoBannerHtml() */
   demo?: boolean
-  /** 结构化数据（JSON-LD）：对象序列化进 <script type="application/ld+json">，文章页传 articleJsonLd() 的产物 */
-  jsonLd?: Record<string, unknown>
+  /** 结构化数据（JSON-LD）：对象序列化进 <script type="application/ld+json">，文章页传 articleJsonLd() 的产物；
+   *  传数组时逐块输出（文章页 = BlogPosting + 面包屑 BreadcrumbList，见 src/seo.ts） */
+  jsonLd?: Record<string, unknown> | Record<string, unknown>[]
 }
 
 /** og:image 三级兜底：文章专属卡图（编辑器 OG 标记 > 封面）→ 后台设置的默认卡图 → 内置品牌卡图。
@@ -76,7 +78,9 @@ export function page(o: ThemePageOptions): string {
   const ogImage = resolveOgImage(o.ogImage, o.settings)
   // JSON-LD 里的 < 必须转成 \u003c（仍是合法 JSON）：防正文标题带 </script> 提前闭合脚本标签
   const jsonLdHtml = o.jsonLd
-    ? `<script type="application/ld+json">${JSON.stringify(o.jsonLd).replace(/</g, '\\u003c')}</script>`
+    ? (Array.isArray(o.jsonLd) ? o.jsonLd : [o.jsonLd])
+        .map((one) => `<script type="application/ld+json">${JSON.stringify(one).replace(/</g, '\\u003c')}</script>`)
+        .join('\n')
     : ''
   return `<!DOCTYPE html>
 <html lang="${en ? 'en' : 'zh-CN'}"${en ? ' data-edition="en"' : ''}${
@@ -106,6 +110,7 @@ ${base ? `<link rel="alternate" type="application/feed+json" title="${esc(siteNa
 <style>${o.css}</style>
 ${appearanceHeadStyle(o.settings)}
 ${grayscaleStyle(o.settings)}
+${seoHeadHtml(o.settings)}
 </head>
 <body${o.preview ? ' data-preview="1"' : ''}>
 ${en ? enBetaBannerHtml() : ''}

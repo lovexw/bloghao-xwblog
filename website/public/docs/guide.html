@@ -563,6 +563,7 @@ curl -X POST https://blog.xiaowuleyi.com/api/external/weibo \
 <ul>
 <li><strong>添加分类</strong>：填名称即可，标识（slug，出现在 <code>/category/</code> 后面）留空就用名称本身；支持字母、数字、中文和短横线，不可重复</li>
 <li><strong>编辑 / 删除</strong>：删除分类后，原属文章变为「未分类」，文章本身不受影响</li>
+<li><strong>分类描述</strong>（可选）：编辑弹窗里填一行说明（≤300 字），显示在分类归档页（<code>/category/&lt;标识&gt;</code>）页头，同时作为该页给搜索引擎的摘要；留空则用站点描述</li>
 <li><strong>标签管理</strong>（同页下半部分）：展示全站标签及使用计数。在这里可以<strong>预建</strong>还没被用到的标签（会出现在编辑器补全和后台列表里；顶部「分类话题」菜单只展示已被至少一篇已发布文章使用的标签），也可以<strong>删除</strong>标签——会从所有文章里一并移除</li>
 </ul>
 <p>顶部导航的「分类话题」折叠菜单：上半区是分类，下半区是按热度排序的标签（带计数），点击即进入对应归档页。</p>
@@ -649,6 +650,10 @@ curl -X POST https://blog.xiaowuleyi.com/api/external/weibo \
 <td>分享到社交平台（X / 微信 / Telegram…）时的卡片大图，建议 1200×630 的 PNG / JPG。文章设了封面会优先用封面；没设封面的文章、首页与各列表页用这张兜底，都没上传则用内置卡图</td>
 </tr>
 <tr>
+<td><strong>SEO 与统计</strong></td>
+<td>三项都可留空：<strong>站点验证标签</strong>（把 Google / Bing / 百度等站长平台给的 <code>&lt;meta&gt;</code> 一行一个粘进来，用于站点所有权验证；只认验证字段，不是通用 head 注入口）、<strong>统计脚本</strong>（第三方统计的 <code>&lt;script src=&quot;…&quot;&gt;</code> 片段或脚本地址，仅 https；Umami / Plausible / CF Web Analytics / 51la 这类「地址 + data-* 配置」的都能用，需要内联配置代码的 GA4 / GTM 不支持——后台会解析成结构化属性重放，并把脚本域自动加进 CSP）、<strong>robots.txt 追加段</strong>（附在内置规则之后：额外 Sitemap、屏蔽目录等；演示站固定整站 Disallow）。前两项格式不对会整体拒绝保存，不会留下半配置状态</td>
+</tr>
+<tr>
 <td><strong>灰度模式</strong></td>
 <td>全站去色显示（黑白），用于哀悼、纪念等特殊时刻；后台不受影响，关掉随时恢复</td>
 </tr>
@@ -701,6 +706,9 @@ curl -X POST https://blog.xiaowuleyi.com/api/external/weibo \
 <td>页面底部「账号」区，旧密码 + 新密码（8-64 位）</td>
 </tr>
 </tbody></table></div>
+<blockquote>
+<p>不用配置的两件事：文章页与分类页会自动输出结构化数据（BlogPosting、面包屑 <code>BreadcrumbList</code>），前台同源链接还会声明<strong>预取</strong>（Speculation Rules：鼠标按下链接时才预加载，点进去几乎瞬开，Chrome / Safari 新版生效、老浏览器静默忽略；预取请求不计阅读量与访客统计）。</p>
+</blockquote>
 <h2 id="17-皮肤切换">17. 皮肤切换</h2><p>后台「<strong>皮肤</strong>」页（侧栏「系统」分组）点主题卡片<strong>即刻生效</strong>，无需保存；「皮肤市场」标签页收录精选主题。七套主题，<strong>每套都完整适配</strong>首页 / 文章 / 微博 / 友链 / 关于我 / 归档 / 留言板七类页面和手机端：</p>
 <div class="table-wrap"><table>
 <thead>

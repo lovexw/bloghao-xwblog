@@ -242,11 +242,11 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/admin/categories` | 列表（附 `post_count` 文章计数） |
-| POST | `/api/admin/categories` | Body `{name, slug?, sort?}`；slug 留空用名称，支持字母/数字/中文/短横线 |
-| PUT | `/api/admin/categories/:id` | 编辑（名称与 slug 均不可重复） |
+| POST | `/api/admin/categories` | Body `{name, slug?, sort?, description?}`；slug 留空用名称，支持字母/数字/中文/短横线 |
+| PUT | `/api/admin/categories/:id` | 编辑（名称与 slug 均不可重复）；`description` 缺键即保留 |
 | DELETE | `/api/admin/categories/:id` | 删除（关联文章变为未分类，文章不受影响） |
 
-`name` ≤ 20 字。单分类模型：一篇文章最多属于一个分类（`post_categories.post_id` 为主键）。
+`name` ≤ 20 字，`description` ≤ 300 字（可选：渲染在 `/category/:slug` 页头并作为该页 meta description，缺省回退站点描述）。单分类模型：一篇文章最多属于一个分类（`post_categories.post_id` 为主键）。
 
 ### 独立页面
 | 方法 | 路径 | 说明 |
@@ -299,7 +299,7 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 ### 设置 / 账号 / 工具
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET / PUT | `/api/admin/settings` | 可写键：`siteName, siteDescription, siteUrl, footerText, avatarUrl, faviconUrl, ogImageDefault, theme, allowComments, moderateComments, notifyNewComment, rssFullText, backupEnabled, postsPerPage, about（legacy，已由「页面」承载）, pluginsDisabled, siteGrayscale, siteClosed, siteClosedMessage, membersEnabled（会员体系总开关）, rankTopN（/rank 展示条数 1-50）, externalToken, telegramBotToken, telegramAllowFrom, telegramWebhookSecret`；`theme` 必须是已注册主题 id；`avatarUrl`/`faviconUrl`/`ogImageDefault` 只接受站内 `/images/` 与 `http(s)` 外链；`pluginsDisabled` 为逗号分隔的插件 manifest id（仅字母/数字/`_`/`-`）；`siteGrayscale`/`siteClosed` 为 `1`/`0` 开关（闭站时公开页面与公开 API 一律 503，白名单见 src/closed.ts，已登录管理员不受影响）；`siteClosedMessage` ≤1000 字；`externalToken`/`telegramBotToken`/`telegramWebhookSecret` 为敏感项，GET 与 PUT 的响应一律打码（`••••••••`），明文只在生成时返回一次，PUT 收到打码占位符视为保持原值 |
+| GET / PUT | `/api/admin/settings` | 可写键：`siteName, siteDescription, siteUrl, footerText, avatarUrl, faviconUrl, ogImageDefault, theme, allowComments, moderateComments, notifyNewComment, rssFullText, backupEnabled, postsPerPage, about（legacy，已由「页面」承载）, pluginsDisabled, siteGrayscale, siteClosed, siteClosedMessage, membersEnabled（会员体系总开关）, rankTopN（/rank 展示条数 1-50）, externalToken, telegramBotToken, telegramAllowFrom, telegramWebhookSecret, verifyMetas（站点验证 meta：一行一个 meta 标签，name 走白名单、取值形态受限，非法整体 400）, analyticsScript（统计脚本：https 脚本地址或 script 片段，内联脚本体与白名单外属性拒绝）, robotsExtra（robots.txt 追加段，剥控制字符、限 2000 字符）`；`theme` 必须是已注册主题 id；`avatarUrl`/`faviconUrl`/`ogImageDefault` 只接受站内 `/images/` 与 `http(s)` 外链；`pluginsDisabled` 为逗号分隔的插件 manifest id（仅字母/数字/`_`/`-`）；`siteGrayscale`/`siteClosed` 为 `1`/`0` 开关（闭站时公开页面与公开 API 一律 503，白名单见 src/closed.ts，已登录管理员不受影响）；`siteClosedMessage` ≤1000 字；`externalToken`/`telegramBotToken`/`telegramWebhookSecret` 为敏感项，GET 与 PUT 的响应一律打码（`••••••••`），明文只在生成时返回一次，PUT 收到打码占位符视为保持原值；`verifyMetas` / `analyticsScript` 存库为结构化 JSON，GET 与 PUT 响应回显成「可粘贴形态」（与提交格式同形，可原样改回再存），渲染时按结构化值重放——统计脚本域自动进 CSP（`script-src` + `connect-src`），验证 meta 与预取声明（Speculation Rules）注入 head；`robotsExtra` 附在内置 robots 段之后（`GET /robots.txt`，演示站固定整站 Disallow） |
 | PUT | `/api/admin/password` | Body `{oldPassword, newPassword}`（8-64 位） |
 | POST | `/api/admin/tools/md` | Body `{md}` → `{html}`，Markdown 渲染 |
 | POST | `/api/admin/tools/linkmeta` | Body `{url}` → `{meta:{title, description, image, siteName}}`，编辑器「网址卡片」抓取目标页 og 元数据；只抓 http(s) 公网地址（私有网段/非常规端口拒绝，限长限时），抓不到时字段为空（前端用域名占位组卡）。限频 10 次/分钟/IP |

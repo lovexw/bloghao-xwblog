@@ -66,7 +66,7 @@
     <article class="doc-md">
 <h1 id="开发方向备忘">开发方向备忘</h1><p>记录<strong>已调研、尚未启动</strong>的功能方向。每项保留调研结论与待决策点，启动开发时不必重新摸底；一旦定案实现，具体用法移入 GUIDE / API / THEMES 等功能文档，本文件只留条目与状态；拍板「不做」的进文末不做清单，编号永久空缺不回收。</p>
 <p>2026-10 对标 WordPress / emlog 等系统做过一轮全量能力盘点，方向按三档优先级管理：<strong>A = 一定要做</strong>（下一步就做，多数成本低、确定性强）；<strong>B = 未来一定要做</strong>（重要，但有前置依赖或需先拍板）；<strong>C = 加分项</strong>（可有可无，有富余再做）。</p>
-<p><strong>建议执行顺序（2026-10-07 重整）</strong>：<del>A 区</del>（已收官，A8 随本日落进 AGENTS.md）。B 区已落地 <strong>B9 主题外观变量（内测 v1）</strong> 与 <strong>B10 MCP 服务器（2026-10-11）</strong>；下一批建议：<strong>B3 通知渠道抽象（国内触达）</strong>；再往后 B6 备份异地化 / B13 管理员安全包。B8 主题 / 插件市场 2026-10-08 立项（调研结论已入档），排期等「主题可安装形态」拍板后插入。C 区按富余随缘挑。</p>
+<p><strong>建议执行顺序（2026-10-13 更新）</strong>：<del>A 区</del>（已收官，A8 随本日落进 AGENTS.md）。B 区已落地 <strong>B9 主题外观变量（内测 v1）</strong> 与 <strong>B10 MCP 服务器（2026-10-11）</strong>；下一批：<strong>B19 微博视频（站长 2026-10-12 提级，本周末动工，调研结论已入档）</strong>；<del><strong>B20 站长 SEO 自定义两小件</strong></del> 与同批立项的 <strong>B23 分类描述 + 面包屑 / B24 链接预取</strong> 已于 2026-10-13 一并落地（B21 IndexNow 与 B22 旧 slug 301 待排）；随后 B3 通知渠道抽象（国内触达）；再往后 B6 备份异地化 / B13 管理员安全包；<strong>B5 WXR 导入是下个战略大件候选</strong>（获客价值大于一切 SEO 微优化，2026-10-13 调研结论已入档，启动时机与 B3 的先后由站长拍板）。B8 主题 / 插件市场 2026-10-08 立项（调研结论已入档），排期等「主题可安装形态」拍板后插入。C 区按富余随缘挑。</p>
 <h2 id="优先级总览2026-10-07-更新">优先级总览（2026-10-07 更新）</h2><h3 id="a-区-一定要做">A 区 · 一定要做</h3><div class="table-wrap"><table>
 <thead>
 <tr>
@@ -146,8 +146,8 @@
 </tr>
 <tr>
 <td>B5</td>
-<td>WordPress / emlog / Typecho 导入工具</td>
-<td>数据导出（A1）的另一面，换博客用户的主要入口；scripts/ 已有 emlog 迁移脚本留档可复活</td>
+<td>WordPress / emlog / Typecho 导入工具（<strong>2026-10-13 调研更新</strong>）</td>
+<td>数据导出（A1）的另一面，换博客用户的主要入口——对获客的价值大于一切 SEO 微优化。<strong>拼装件复核几乎全有</strong>：WXR 解析（src/xml.ts 的 XML 处理基础 + 正则/流式解析器）、正文 HTML→Markdown（html-md.ts <code>htmlToMd</code> 现成）、文内外链图片转存（collect.ts + store.ts <code>transferImage</code> 魔数识别转存整套现成）、分类标签落库 / <code>cleanSlug</code> / cstDate 时区口径全有；<strong>真正工程量在 wp: 元数据映射</strong>——attachment 附件（wp:attachment_url → 转存站内并重写正文引用）、草稿态 / 密码文（wp:post_password → protect.ts 口径）、wp:post_type 页面与文章分流、定时与状态语义。scripts/ 已有 emlog 迁移脚本留档可复活</td>
 </tr>
 <tr>
 <td>B6</td>
@@ -214,6 +214,36 @@
 <td>博客号作者专属认证（蓝V式，<strong>立项待研究，2026-10-10 站长提出</strong>；B17 落地时已预留 <code>sites.verified</code> 徽标位与 feed 出参，官网展示「✔︎ 认证」，v1 手工开关）</td>
 <td>所有基于 bloghao.com 部署的博客作者可申请专属认证标识。<strong>前置依赖：身份锚点</strong>——B17 广场 hub 是最自然的发证方：站点所有权验证（用户站按指引在设置页填入 hub 下发的校验 token，或 hub 探测站点上的验证文件）通过后，hub 签发「站名 + 作者」认证凭据。展示两端：广场信息流作者徽标（B17 内直接渲染）+ 用户站前台可选挂认证标（如关于我 / 评论作者旁）。凭据必须走签名 token 而非人工标注（站点可自行验证），要支持吊销与换主；冒用官方名义的站点要能在 hub 侧标记未认证。启动前先拍板：认证分级（个人 / 组织？）与收费与否</td>
 </tr>
+<tr>
+<td>B19</td>
+<td>微博视频（<strong>2026-10-12 站长提级，计划本周末动工</strong>；文章侧视频已现成，本条只补微博侧）</td>
+<td><strong>现状（2026-10-12 调研）</strong>：文章系统视频链路已全通——编辑器「视频」按钮 + 粘贴/拖拽（editor.js:598/841，<code>pickVideoFile</code> 只收 mp4/webm）、上传端点魔数识别 mp4/webm（store.ts <code>sniffUploadExt</code>，25MB 上限）、净化白名单放行 <code>video</code>/<code>source</code>（sanitize.ts:43）、媒体库 video 缩略图；本条范围是<strong>微博侧从零补</strong>：① schema——weibo 表加视频字段（sql 与 db.ts SCHEMA_COLUMNS 两处同步，确认走独立列还是并入 images 数组的口径）；② 发布器——site.js 两处 <code>pickFiles</code>（:969 / :1254，现只收 image/jpeg,png,webp,gif）放开 video accept，ES5 老规矩；③ 渲染——<code>weiboImageGrid</code>（render.ts:683）要处理视频格（<code>&lt;video controls playsinline&gt;</code>，图片九宫格 + 视频混排的分列规则），site.js 微博卡编辑 / 评论渲染的 ES5 手工镜像两侧同改；④ 周边对齐——备份（uploads 表自动覆盖）、媒体体检 <code>pullReferenceTexts</code>（新增存视频地址的字段要登记）、demo 种子不变量、RSS/广场插件出参口径（微博同步是否带视频先按不带处理）。<strong>待拍板</strong>：一条微博几条视频（建议 1 条）、是否复用 25MB 上传上限（Workers 免费档 R2 无流量费但浏览器上传大文件体验一般，建议先沿用）</td>
+</tr>
+<tr>
+<td>B20</td>
+<td>✅ 站长 SEO 自定义：head 注入 + robots.txt 追加（2026-10-13 立项并落地）</td>
+<td>WP 时代 Yoast 类插件最刚需的两件，合计一个下午的量。① 自定义 head 注入——站点验证 meta（Google / Bing / 百度 Search Console）+ 统计脚本（GA / Umami / 51la）。<strong>拆两个专用键，不开裸 HTML 注入口</strong>（管理员账号被盗时裸口是现成存储型 XSS）：<code>verifyMetas</code> 只收验证 meta / link 标签（解析成结构化值重放，name 白名单），<code>analyticsSrc</code> 单脚本 URL（后台 CSP 同步放行脚本域，settings 页改用打码回显口径视实现定）。② robots.txt 自定义追加段——现在硬编码（index.ts /robots.txt），追加段附在内置段后（内置 Allow/Disallow/Sitemap 顺序保持），演示站整站 Disallow 不受影响。<strong>已落地（2026-10-13）</strong>：settings 三键 <code>verifyMetas</code>（验证 meta 白名单）/ <code>analyticsScript</code>（脚本地址或 provider 片段，结构化属性重放；立项时拟名的 <code>analyticsSrc</code> 一并由它承载）/ <code>robotsExtra</code>（追加段）＋ src/seo.ts 解析重放 ＋ <code>buildCsp()</code> 按设置放宽 CSP（统计域与 <code>&#39;inline-speculation-rules&#39;</code>），后台「设置 → 站点 → SEO 与统计」；机制见 AGENTS.md「站长 SEO」节，用法 GUIDE §16</td>
+</tr>
+<tr>
+<td>B21</td>
+<td>IndexNow 即时推送（<strong>2026-10-13 立项，插件形态归宿②</strong>）</td>
+<td>Bing / Yandex / Seznam 等共用的即时推送协议（Google 不参与——其 ping 接口 2023 已弃用，sitemap 是唯一通道，见不做清单）；归宿插件：src/hooks.ts <code>onPostPublished</code> 钩子里 POST <code>api.indexnow.org</code>（url + key 参数，key 是站长自生成随机串、无申请门槛），插件市场好选题；<strong>key 文件托管需内核几行</strong>（GET <code>/{key}.txt</code> 返回纯文本，读 settings 键，放 index.ts /robots.txt 旁），删除 / 转草稿时 optionalDeletes 端点顺手带上</td>
+</tr>
+<tr>
+<td>B22</td>
+<td>旧 slug 301 重定向（<strong>2026-10-13 立项</strong>，Redirection 模式）</td>
+<td>WP 生态装机量巨大的 Redirection 插件解决的问题：文章改 slug 后旧链接 404、搜索引擎权重断链（个人小站改 slug 频率低，但断链伤害不可逆）。两条实现路待拍板：① posts 表加 <code>old_slugs</code> JSON 列（schema.sql 与 SCHEMA_COLUMNS 两处同步；保存时 slug 变更把旧值追加、去重、排除当前值）② 独立 redirects 小表（额外支持手工规则，BACKUP_TABLES 要登记）；命中即 301 到新地址，配合 uniqueSlugIn「回收站行占用 slug」机制防冲突</td>
+</tr>
+<tr>
+<td>B23</td>
+<td>✅ 分类描述 + 面包屑 JSON-LD（2026-10-13 立项并落地）</td>
+<td>categories 表加 <code>description</code> 列（schema 两处同步老规矩）+ 后台分类编辑加输入框——WP 分类描述被 SEO 插件当 /category/:slug 归档页 meta description 用，现在归档页无专属文案；前台渲染进分类页页头（主题参数加字段，registry 类型动一处）；顺带补 BreadcrumbList JSON-LD（首页→分类→文章），render.ts page() 的 jsonLd 通道现成。<strong>已落地（2026-10-13）</strong>：<code>categories.description</code> 列（schema.sql + SCHEMA_COLUMNS 两处同步）＋ 后台分类编辑描述框 ＋ 分类页页头描述行与该页 meta description（缺省回退站点描述）＋ 文章页 / 分类页 <code>BreadcrumbList</code>（jsonLd 通道扩为支持数组，与 BlogPosting 并列输出）</td>
+</tr>
+<tr>
+<td>B24</td>
+<td>✅ Speculation Rules 链接预取（2026-10-13 立项并落地）</td>
+<td>WP 6.8 官方内置的创意：render.ts page() 注入一段 <code>&lt;script type=&quot;speculationrules&quot;&gt;</code>（conservative 档起步，hover 触发同源文章链接 prefetch/prerender），Chrome 109+ / Safari 18.2+ 生效、老浏览器静默忽略零风险；Core Web Vitals LCP 加分，一行声明零维护。<strong>已落地（2026-10-13）</strong>：<code>render.ts page()</code> 注入 <code>&lt;script type=&quot;speculationrules&quot;&gt;</code>（prerender + conservative，排除 /admin、/api、/go、XML/JSON 订阅端点、新窗口与 nofollow），配套统计诚实性两处——预取请求不计阅读量（<code>isSpeculativeRequest</code>）、site.js 打点跳过 <code>document.prerendering</code> 并在激活后补报</td>
+</tr>
 </tbody></table></div>
 <h3 id="c-区-加分项可有可无">C 区 · 加分项（可有可无）</h3><div class="table-wrap"><table>
 <thead>
@@ -235,8 +265,8 @@
 </tr>
 <tr>
 <td>C3</td>
-<td>创作增强</td>
-<td>代码块语法高亮、KaTeX 公式、mermaid 图表（按需加载，注意 CSP 与体积）、文章 TOC 目录——目前均不存在，按需再上</td>
+<td>创作增强（2026-10-13 补调研）</td>
+<td>代码块语法高亮、KaTeX 公式、mermaid 图表（按需加载，注意 CSP 与体积）、文章 TOC 目录——目前均不存在，按需再上；高亮倾向<strong>手写小型 tokenizer</strong>（exif.ts / qrcode.ts 零依赖先例）或编辑器 / 渲染插件形态，不引 highlight.js 全家桶</td>
 </tr>
 <tr>
 <td>C4</td>
@@ -303,9 +333,15 @@
 <td>内容揭示卡（点开可见 / 会员分层可见，<strong>立项待研究，2026-10-09 站长提出</strong>）</td>
 <td>正文里的一段文字 / 一张图 / 一大块内容按两种条件揭示：① 点击展开（剧透折叠，默认遮住），② 不同会员档位可见（与现有付费墙 min_tier 机制的关系要先理清——付费墙是整篇级，这是块级，安全边界必须同样做到服务端截断，渲染层遮挡不算数）。形态候选：块级容器标记（类似 <code>&lt;meta data-og-image&gt;</code> 的 data-* 白名单路子）或编辑器插件。<strong>先研究再动手</strong>，见本条不动代码</td>
 </tr>
+<tr>
+<td>C18</td>
+<td>图片灯箱 lightbox（<strong>2026-10-13 立项，客户端归宿①</strong>）</td>
+<td>WP 图片查看类插件的广泛形态：文章 .rich 图片与微博九宫格点击放大浏览（左右切换 / ESC 关闭）。site.js ES5 手写百行内（零依赖预算），注意与微博九宫格 / 文章 .rich 现有点击行为的衔接、ES5 与禁 lookbehind 老规矩</td>
+</tr>
 </tbody></table></div>
 <h2 id="不做清单拍板记录编号不回收">不做清单（拍板记录，编号不回收）</h2><ul>
 <li><strong>邮件相关（原 B1 邮件服务、原 C15 邮件订阅），2026-10-07 拍板不做</strong>：第三方发信服务对接与发信域名 DNS（SPF/DKIM/DMARC）配置门槛高，免费档额度受限且说砍就砍（MailChannels 砍 Workers 免费集成是先例）；下游的评论邮件通知、邮箱找回密码、注册验证、newsletter 一并冻结——会员密码找回已按「本站不提供密码找回」口径落地（render.ts 两处固定提醒，不再视作欠账）。当年调研结论已随之作废，若未来重启，从 git 历史本日期之前的本文件找回（Resend / 阿里云邮件推送免费档、provider 可切换抽象等）。</li>
+<li><strong>SEO 不做项（AMP / hreflang / Google ping），2026-10-13 拍板</strong>：AMP 已边缘化（Google 搜索结果不再要求 AMP、官方组件停止发展，不值得引）；hreflang 与英文版形态不匹配（edition=en 是单语回退模式而非并行多语站，无 alternate 页面可标）；Google ping 已被官方弃用（2023-06，sitemap.xml 是唯一通道），搜索引擎侧的补位是 IndexNow（B21，覆盖 Bing / Yandex 系）。另：WP 生态的「评论回复邮件订阅」（Subscribe to Comments）同属邮件下游，被本条邮件冻结口径覆盖，不另立条目。</li>
 </ul>
 
     </article>

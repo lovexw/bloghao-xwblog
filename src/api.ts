@@ -1,5 +1,6 @@
 import { type Context, Hono } from 'hono'
 import { runBackup } from './backup'
+import { analyticsScriptHtml, cleanAnalyticsScript, cleanCategoryDescription, cleanRobotsExtra, cleanVerifyMetas, verifyMetaTagsHtml } from './seo'
 import {
   clearMemberSessionCookie,
   clearSessionCookie,
@@ -1172,7 +1173,7 @@ api.get('/admin/categories', async (c) => {
 })
 
 api.post('/admin/categories', async (c) => {
-  const body = await c.req.json<{ name?: string; slug?: string; sort?: number }>().catch(() => null)
+  const body = await c.req.json<{ name?: string; slug?: string; sort?: number; description?: string }>().catch(() => null)
   const name = String(body?.name ?? '').trim().slice(0, 20)
   if (!name) return jsonError('分类名称不能为空')
   const slug = normalizeCategorySlug(String(body?.slug ?? ''), name)
@@ -1180,7 +1181,9 @@ api.post('/admin/categories', async (c) => {
   const dup = await c.env.DB.prepare('SELECT id FROM categories WHERE name = ? OR slug = ?').bind(name, slug).first<{ id: number }>()
   if (dup) return jsonError('同名或同标识的分类已存在')
   const sort = clampInt(body?.sort, 0, 9999, 0)
-  const cat = await createCategory(c.env.DB, name, slug, sort)
+  // 分类描述（B23）：纯文本一行说明，兼作归档页 meta description
+  const description = cleanCategoryDescription(body?.description)
+  const cat = await createCategory(c.env.DB, name, slug, sort, description)
   return c.json({ ok: true, category: cat })
 })
 
@@ -1189,7 +1192,7 @@ api.put('/admin/categories/:id', async (c) => {
   if (!id) return jsonError('分类不存在', 404)
   const existing = await getCategoryById(c.env.DB, id)
   if (!existing) return jsonError('分类不存在', 404)
-  const body = await c.req.json<{ name?: string; slug?: string; sort?: number }>().catch(() => null)
+  const body = await c.req.json<{ name?: string; slug?: string; sort?: number; description?: string }>().catch(() => null)
   const name = String(body?.name ?? existing.name).trim().slice(0, 20)
   if (!name) return jsonError('分类名称不能为空')
   const slug = normalizeCategorySlug(String(body?.slug ?? existing.slug), name)
@@ -1200,7 +1203,9 @@ api.put('/admin/categories/:id', async (c) => {
     .first<{ id: number }>()
   if (dup) return jsonError('同名或同标识的分类已存在')
   const sort = clampInt(body?.sort, 0, 9999, existing.sort)
-  await c.env.DB.prepare('UPDATE categories SET name = ?, slug = ?, sort = ? WHERE id = ?').bind(name, slug, sort, id).run()
+  // 分类描述（B23）：缺键即保留（与 slug / sort 同口径）
+  const description = body?.description === undefined ? existing.description || '' : cleanCategoryDescription(body.description)
+  await c.env.DB.prepare('UPDATE categories SET name = ?, slug = ?, sort = ?, description = ? WHERE id = ?').bind(name, slug, sort, description, id).run()
   return c.json({ ok: true, category: await getCategoryById(c.env.DB, id) })
 })
 
@@ -1671,8 +1676,16 @@ const BOOL_SETTINGS = [
   'membersEnabled',
 ]
 
+/** 站长 SEO 两项（B20）的后台回显形态：存库是结构化 JSON，输入框按「可粘贴形态」展示
+ *  （与 PUT 接受的格式同形，可原样改回再存）；渲染端仍按结构化值重放，不涉原始 HTML 透传 */
+function seoDisplaySettings(s: Record<string, string>): Record<string, string> {
+  s.verifyMetas = verifyMetaTagsHtml(s.verifyMetas)
+  s.analyticsScript = analyticsScriptHtml(s.analyticsScript)
+  return s
+}
+
 api.get('/admin/settings', async (c) => {
-  const settings = await getSettings(c.env.DB)
+  const settings = seoDisplaySettings(await getSettings(c.env.DB))
   for (const key of SECRET_SETTINGS) {
     if (settings[key]) settings[key] = SECRET_MASK
   }
@@ -1768,6 +1781,27 @@ api.put('/admin/settings', async (c) => {
       patch[key] = String(clampInt(v, 1, 50, 10))
       continue
     }
+    if (key === 'verifyMetas') {
+      // 站点验证 meta（B20）：解析成结构化 JSON 存库（name 白名单 + content 形态，见 src/seo.ts），
+      // 非法整体 400——渲染端按结构化值重放，不存在原始 HTML 透传面
+      const cleaned = cleanVerifyMetas(v)
+      if (cleaned === null) return jsonError('站点验证标签格式不正确：一行一个 <meta name="…" content="…">，支持 Google / Bing / 百度 / 搜狗 / 360 / Yandex 等验证字段')
+      patch[key] = cleaned
+      continue
+    }
+    if (key === 'analyticsScript') {
+      // 统计脚本（B20）：https 脚本地址或 provider 片段（解析成 src + 白名单属性重放）；
+      // 内联脚本体一律拒绝（CSP 不放行内联脚本），非法整体 400
+      const cleaned = cleanAnalyticsScript(v)
+      if (cleaned === null) return jsonError('统计脚本无效：只支持 https 脚本地址，或带 src 的 <script> 片段（不支持内联配置代码）')
+      patch[key] = cleaned
+      continue
+    }
+    if (key === 'robotsExtra') {
+      // robots.txt 追加段（B20）：剥控制字符 + 限长后存库，渲染时附在内置段之后
+      patch[key] = cleanRobotsExtra(v)
+      continue
+    }
     if (key === 'edition') {
       // 英文测试版（English 0.1）开关：二值白名单；重新开启即重置回退状态与错误记录
       patch[key] = v === 'en' ? 'en' : 'zh'
@@ -1791,7 +1825,7 @@ api.put('/admin/settings', async (c) => {
   // 演示站不允许闭站：有人开了开关，整个重置周期内所有体验者都会看到 503
   if (isDemo(c.env)) patch.siteClosed = '0'
   await saveSettings(c.env.DB, patch)
-  const saved = await getSettings(c.env.DB)
+  const saved = seoDisplaySettings(await getSettings(c.env.DB))
   // 与 GET 同口径：密钥只在生成时返回一次明文，此后任何回显都打码（防代理/扩展被动收集）
   for (const key of SECRET_SETTINGS) {
     if (saved[key]) saved[key] = SECRET_MASK

@@ -975,6 +975,69 @@ try {
     console.log(`  ${ppDel.status === 200 ? '✓' : '✗'} 加密码：清理临时文章`)
   }
 
+  // ── 站长 SEO 小件链路（B20 / B23 / B24）：设置 → 公开面验证 → 还原 ──
+  // 服务端只认结构化输入（验证 meta 白名单 / 统计脚本白名单属性），断言公开面输出与 CSP 同步放宽
+  console.log('\n▸ 站长 SEO 链路（B20 / B23 / B24）')
+  await check('GET', '/robots.txt', 200, `Sitemap: ${BASE}/sitemap.xml`)
+  const seoOn = await putSettings({
+    verifyMetas: '<meta name="google-site-verification" content="smoke-verify-123">',
+    analyticsScript: '<script defer src="https://analytics.smoke.example/s.js" data-website-id="smoke"></script>',
+    robotsExtra: 'Disallow: /smoke-drafts/',
+  })
+  results.push(['SEO 链路：保存验证 meta / 统计脚本 / robots 追加段', seoOn.status === 200])
+  console.log(`  ${seoOn.status === 200 ? '✓' : '✗'} SEO 链路：保存三项配置（status ${seoOn.status}）`)
+  // 非法输入整体 400（不落库）：白名单外验证字段、内联脚本体
+  const badVerify = await putSettings({ verifyMetas: '<meta name="description" content="x">' })
+  const badScript = await putSettings({ analyticsScript: '<script>alert(1)</script>' })
+  const rejectOk = badVerify.status === 400 && badScript.status === 400
+  results.push(['SEO 链路：非法输入整体 400', rejectOk])
+  console.log(`  ${rejectOk ? '✓' : '✗'} SEO 链路：非法输入整体 400（${badVerify.status}/${badScript.status}）`)
+  await check('GET', '/robots.txt', 200, 'Disallow: /smoke-drafts/')
+  const seoHome = await raw('GET', '/')
+  const seoHtml = await seoHome.text()
+  const seoCsp = seoHome.headers.get('content-security-policy') || ''
+  const injectOk =
+    seoHtml.includes('<meta name="google-site-verification" content="smoke-verify-123">') &&
+    seoHtml.includes('<script type="speculationrules">') &&
+    seoHtml.includes('https://analytics.smoke.example/s.js')
+  results.push(['SEO 链路：首页 head 注入验证 meta / 统计脚本 / 预取声明', injectOk])
+  console.log(`  ${injectOk ? '✓' : '✗'} SEO 链路：首页 head 注入（status ${seoHome.status}）`)
+  const cspOk =
+    seoCsp.includes("'inline-speculation-rules'") &&
+    seoCsp.includes('https://analytics.smoke.example') &&
+    seoCsp.includes("script-src 'self'")
+  results.push(['SEO 链路：CSP 同步放行统计域与内联预取声明', cspOk])
+  console.log(`  ${cspOk ? '✓' : '✗'} SEO 链路：CSP 同步放宽`)
+  // 文章页面包屑 JSON-LD（首页 → 分类 → 文章）
+  await check('GET', '/post/smoke-multi-tag', 200, 'BreadcrumbList')
+  // 分类描述（B23）：建临时分类 → 分类页出描述行 / meta description / 面包屑 → 清理
+  const catCreate = await raw('POST', '/api/admin/categories', {
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({ name: '冒烟分类描述', slug: 'smoke-cat-desc', description: '冒烟分类描述：这个分类收些什么' }),
+  })
+  const catCreated = await catCreate.json().catch(() => null)
+  const catId = catCreated && catCreated.category && catCreated.category.id
+  results.push(['分类描述：建临时分类', catCreate.status === 200 && !!catId])
+  console.log(`  ${catCreate.status === 200 && !!catId ? '✓' : '✗'} 分类描述：建临时分类（id ${catId}）`)
+  if (catId) {
+    const catPage = await raw('GET', '/category/smoke-cat-desc')
+    const catHtml = await catPage.text()
+    const catOk =
+      catPage.status === 200 &&
+      catHtml.includes('冒烟分类描述：这个分类收些什么') &&
+      catHtml.includes('<meta name="description" content="冒烟分类描述：这个分类收些什么">') &&
+      catHtml.includes('BreadcrumbList')
+    results.push(['分类描述：分类页出描述行 / meta description / 面包屑', catOk])
+    console.log(`  ${catOk ? '✓' : '✗'} 分类描述：分类页输出（status ${catPage.status}）`)
+    const catDel = await raw('DELETE', `/api/admin/categories/${catId}`, { headers: { Cookie: cookie } })
+    results.push(['分类描述：清理临时分类', catDel.status === 200])
+    console.log(`  ${catDel.status === 200 ? '✓' : '✗'} 分类描述：清理临时分类`)
+  }
+  const seoOff = await putSettings({ verifyMetas: '', analyticsScript: '', robotsExtra: '' })
+  results.push(['SEO 链路：还原配置', seoOff.status === 200])
+  console.log(`  ${seoOff.status === 200 ? '✓' : '✗'} SEO 链路：还原配置`)
+  await check('GET', '/robots.txt', 200, undefined, { notContains: 'smoke-drafts' })
+
 } finally {
   if (dev && dev.exitCode === null) dev.kill('SIGTERM')
 }
