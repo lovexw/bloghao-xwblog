@@ -69,6 +69,7 @@
 <p>升级方式：同步本仓库最新代码后重新部署即可，D1 结构自动增量迁移；个别需要手动动作的条目以「⚠️ 升级注意」标出。开发线的完整迭代细节见各仓库 git log——这里是给部署用户的要点。</p>
 </blockquote>
 <h2 id="unreleased"><a href="https://github.com/bloghao/bloghao/compare/v2.5.1...HEAD" target="_blank" rel="noopener noreferrer">Unreleased</a></h2><h3 id="新增">新增</h3><ul>
+<li><strong>微博视频（B19）</strong>：微博（随手记）现在能带 <strong>1 个视频</strong>（mp4 / webm，≤25MB）——前台发布器、前台卡片编辑、后台「微博」页三处都有「视频」按钮，点选 / 粘贴 / 拖拽都行，上传带实时百分比；发布端自动抽视频第一帧当<strong>封面帧</strong>（抓不到就退化成无封面卡，播放不受影响），卡片按原始宽高占位、竖屏自动居中限高，无封面时叠 ▶ 角标（开播即收）。媒体区顺序为 正文 → 视频 → 配图；分享卡用封面帧作图，广场与开放接口取封面帧当缩略图（<strong>视频文件不出站</strong>，也不进 RSS）。API 契约见 docs/API.md（<code>video</code> 字段<strong>缺键即保留</strong>，旧调用点不会把视频清掉）</li>
 <li><strong>站长 SEO 自定义（B20）</strong>：后台「设置 → 站点 → SEO 与统计」新增三项——<strong>站点验证标签</strong>（一行一个 <code>&lt;meta&gt;</code>，支持 Google / Bing / 百度 / 搜狗 / 360 / Yandex 等验证字段）、<strong>统计脚本</strong>（provider 给的 <code>&lt;script src=&quot;…&quot;&gt;</code> 片段或脚本地址，仅 https；Umami / Plausible / CF Web Analytics / 51la 这类「地址 + data-* 配置」的都能用，需要内联配置代码的 GA4 / GTM 不支持）、<strong>robots.txt 追加段</strong>（额外 Sitemap、屏蔽目录等，附在内置规则之后）。服务端只做「解析 → 结构化重放」，不开裸 HTML 注入口；统计脚本域自动同步进 CSP</li>
 <li><strong>分类描述 + 面包屑结构化数据（B23）</strong>：分类可填一行描述（后台「文章 → 分类标签 → 编辑」），显示在分类归档页页头并作为该页的搜索引擎摘要；文章页与分类页输出 <code>BreadcrumbList</code> 结构化数据（与既有 BlogPosting 并列），搜索结果里能出路径层级</li>
 <li><strong>链接预取 Speculation Rules（B24）</strong>：前台自动声明同源链接预渲染（conservative 档——鼠标按下链接才触发，排除后台 / 开放 API / 外链中间页 / 订阅端点），点进去几乎瞬开；Chrome / Safari 新版生效、老浏览器静默忽略。配套保证统计诚实：预取与预渲染请求<strong>不计文章阅读量</strong>，访客打点在预渲染期间不报、页面被真正打开时补报</li>

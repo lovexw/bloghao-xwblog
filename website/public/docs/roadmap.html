@@ -66,7 +66,7 @@
     <article class="doc-md">
 <h1 id="开发方向备忘">开发方向备忘</h1><p>记录<strong>已调研、尚未启动</strong>的功能方向。每项保留调研结论与待决策点，启动开发时不必重新摸底；一旦定案实现，具体用法移入 GUIDE / API / THEMES 等功能文档，本文件只留条目与状态；拍板「不做」的进文末不做清单，编号永久空缺不回收。</p>
 <p>2026-10 对标 WordPress / emlog 等系统做过一轮全量能力盘点，方向按三档优先级管理：<strong>A = 一定要做</strong>（下一步就做，多数成本低、确定性强）；<strong>B = 未来一定要做</strong>（重要，但有前置依赖或需先拍板）；<strong>C = 加分项</strong>（可有可无，有富余再做）。</p>
-<p><strong>建议执行顺序（2026-10-13 更新）</strong>：<del>A 区</del>（已收官，A8 随本日落进 AGENTS.md）。B 区已落地 <strong>B9 主题外观变量（内测 v1）</strong> 与 <strong>B10 MCP 服务器（2026-10-11）</strong>；下一批：<strong>B19 微博视频（站长 2026-10-12 提级，本周末动工，调研结论已入档）</strong>；<del><strong>B20 站长 SEO 自定义两小件</strong></del> 与同批立项的 <strong>B23 分类描述 + 面包屑 / B24 链接预取</strong> 已于 2026-10-13 一并落地（B21 IndexNow 与 B22 旧 slug 301 待排）；随后 B3 通知渠道抽象（国内触达）；再往后 B6 备份异地化 / B13 管理员安全包；<strong>B5 WXR 导入是下个战略大件候选</strong>（获客价值大于一切 SEO 微优化，2026-10-13 调研结论已入档，启动时机与 B3 的先后由站长拍板）。B8 主题 / 插件市场 2026-10-08 立项（调研结论已入档），排期等「主题可安装形态」拍板后插入。C 区按富余随缘挑。</p>
+<p><strong>建议执行顺序（2026-10-13 更新）</strong>：<del>A 区</del>（已收官，A8 随本日落进 AGENTS.md）。B 区已落地 <strong>B9 主题外观变量（内测 v1）</strong>、<strong>B10 MCP 服务器（2026-10-11）</strong> 与 <strong>B19 微博视频（2026-10-13）</strong>；下一批：<strong>B21 IndexNow</strong> 与 <strong>B22 旧 slug 301</strong>（均为 2026-10-13 立项，归宿见条目）；<del><strong>B20 站长 SEO 自定义两小件</strong></del> 与同批立项的 <strong>B23 分类描述 + 面包屑 / B24 链接预取</strong> 已于 2026-10-13 一并落地；随后 B3 通知渠道抽象（国内触达）；再往后 B6 备份异地化 / B13 管理员安全包；<strong>B5 WXR 导入是下个战略大件候选</strong>（获客价值大于一切 SEO 微优化，2026-10-13 调研结论已入档，启动时机与 B3 的先后由站长拍板）。B8 主题 / 插件市场 2026-10-08 立项（调研结论已入档），排期等「主题可安装形态」拍板后插入。C 区按富余随缘挑。</p>
 <h2 id="优先级总览2026-10-07-更新">优先级总览（2026-10-07 更新）</h2><h3 id="a-区-一定要做">A 区 · 一定要做</h3><div class="table-wrap"><table>
 <thead>
 <tr>
@@ -216,8 +216,8 @@
 </tr>
 <tr>
 <td>B19</td>
-<td>微博视频（<strong>2026-10-12 站长提级，计划本周末动工</strong>；文章侧视频已现成，本条只补微博侧）</td>
-<td><strong>现状（2026-10-12 调研）</strong>：文章系统视频链路已全通——编辑器「视频」按钮 + 粘贴/拖拽（editor.js:598/841，<code>pickVideoFile</code> 只收 mp4/webm）、上传端点魔数识别 mp4/webm（store.ts <code>sniffUploadExt</code>，25MB 上限）、净化白名单放行 <code>video</code>/<code>source</code>（sanitize.ts:43）、媒体库 video 缩略图；本条范围是<strong>微博侧从零补</strong>：① schema——weibo 表加视频字段（sql 与 db.ts SCHEMA_COLUMNS 两处同步，确认走独立列还是并入 images 数组的口径）；② 发布器——site.js 两处 <code>pickFiles</code>（:969 / :1254，现只收 image/jpeg,png,webp,gif）放开 video accept，ES5 老规矩；③ 渲染——<code>weiboImageGrid</code>（render.ts:683）要处理视频格（<code>&lt;video controls playsinline&gt;</code>，图片九宫格 + 视频混排的分列规则），site.js 微博卡编辑 / 评论渲染的 ES5 手工镜像两侧同改；④ 周边对齐——备份（uploads 表自动覆盖）、媒体体检 <code>pullReferenceTexts</code>（新增存视频地址的字段要登记）、demo 种子不变量、RSS/广场插件出参口径（微博同步是否带视频先按不带处理）。<strong>待拍板</strong>：一条微博几条视频（建议 1 条）、是否复用 25MB 上传上限（Workers 免费档 R2 无流量费但浏览器上传大文件体验一般，建议先沿用）</td>
+<td>✅ 微博视频（2026-10-13 落地）</td>
+<td><strong>站长拍板</strong>：一条微博只能 1 个视频、≤ 25MB（复用 store.ts <code>MAX_UPLOAD_BYTES</code> 与既有上传白名单）。<strong>实现</strong>：<code>weibo.video</code> 单列 JSON <code>{url, poster, w, h}</code>（schema.sql + db.ts <code>SCHEMA_COLUMNS</code> 两处同步；解析/读侧过滤 <code>parseWeiboVideo</code> / <code>weiboVideoView</code>）；渲染 <code>render.ts weiboVideoHtml</code>（单行输出，媒体区顺序正文 → 视频 → 配图，竖屏居中限高，无封面帧时 ▶ 角标）；发布端三入口（前台发布器 / 前台卡片编辑 / 后台「微博」页）都有视频按钮、XHR 上传进度、类型/体积前置校验、在途守卫，并<strong>自动抽第一帧当封面帧</strong>（best-effort，失败退化成无封面卡）；PUT 的 <code>video</code> 键<strong>缺键即保留</strong>（后台列表上下架、老调用点不会静默清视频）；周边：媒体体检引用源加 <code>weibo.video</code>、分享卡用封面帧、广场/开放接口用封面帧当缩略图（视频文件不出站）、site.js <code>wbVideoHtmlJs</code> 与后台 app.js 各一份手工镜像（tests/weibo-admin.test.ts 逐字节守住）。机制见 AGENTS.md「微博视频」防线节，API 契约见 docs/API.md，用法见 GUIDE §5</td>
 </tr>
 <tr>
 <td>B20</td>

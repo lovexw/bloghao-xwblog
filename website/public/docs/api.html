@@ -222,12 +222,12 @@
 <tbody><tr>
 <td>GET</td>
 <td><code>/api/admin/weibo?status=all|published|draft&amp;page=1&amp;limit=20</code></td>
-<td>列表（置顶优先；元素附 <code>imageList</code>、<code>topicList</code>、<code>commentCount</code>）</td>
+<td>列表（置顶优先；元素附 <code>imageList</code>、<code>topicList</code>、<code>videoView</code>、<code>commentCount</code>）</td>
 </tr>
 <tr>
 <td>GET</td>
 <td><code>/api/admin/weibo/:id</code></td>
-<td>单条原稿（前台卡片「编辑」的数据源，附 <code>imageList</code>、<code>topicList</code>）</td>
+<td>单条原稿（前台卡片「编辑」的数据源，附 <code>imageList</code>、<code>topicList</code>、<code>videoView</code>）</td>
 </tr>
 <tr>
 <td>POST</td>
@@ -254,8 +254,17 @@
 <div class="codeblock" data-lang="json"><pre><code>{
   &quot;content&quot;: &quot;文字内容，可含 #话题&quot;,
   &quot;images&quot;: [&quot;/images/u/202610/xxx.jpg&quot;],
+  &quot;video&quot;: { &quot;url&quot;: &quot;/images/u/202610/xxx.mp4&quot;, &quot;poster&quot;: &quot;/images/u/202610/xxx-poster.jpg&quot;, &quot;w&quot;: 1280, &quot;h&quot;: 720 },
   &quot;status&quot;: &quot;published | draft&quot;
-}</code></pre></div><p>约束：<code>content</code> ≤ 5000 字；<code>images</code> ≤ 9 张、只接受站内 <code>/images/</code> 与 <code>http(s)</code> 外链；<code>content</code> 与 <code>images</code> 不能同时为空；<strong>话题不接受直传</strong>——服务端从正文 <code>#话题</code>（兼容成对 <code>#话题#</code> 与 <code>#层级/标签</code>）自动提取；置顶最多 3 条，草稿不能置顶。</p>
+}</code></pre></div><p>约束：<code>content</code> ≤ 5000 字；<code>images</code> ≤ 9 张、只接受站内 <code>/images/</code> 与 <code>http(s)</code> 外链；<code>content</code> / <code>images</code> / <code>video</code> 不能同时为空；<strong>话题不接受直传</strong>——服务端从正文 <code>#话题</code>（兼容成对 <code>#话题#</code> 与 <code>#层级/标签</code>）自动提取；置顶最多 3 条，草稿不能置顶。</p>
+<p>微博视频（B19，选填，<strong>一条微博最多 1 个</strong>）：</p>
+<ul>
+<li><code>video.url</code> 必填：站内 <code>/images/</code> 或 <code>http(s)</code> 外链（其余 scheme 整体 400）；建议经 <code>POST /admin/upload</code> 上传 mp4 / webm 后再落库（≤25MB，服务端只认文件魔数，不信任 Content-Type）</li>
+<li><code>video.poster</code> 封面帧（选填，同白名单口径，非法当没填）；<code>video.w</code> / <code>video.h</code> 原始宽高（选填，渲染期按它写占位比例，非数字或越界归 0）</li>
+<li><strong>缺键即保留</strong>：PUT 不带 <code>video</code> 键时原值不动（后台列表「发布 / 下架」、前台旧编辑器等只发 content+images+status 的调用点不会把视频静默清掉）；显式传 <code>null</code> 或空串 = 清除</li>
+<li>出参里 <code>video</code> 是原始 JSON 字符串（与 <code>images</code> / <code>topics</code> 同口径），解析后的对象在 <code>videoView</code>（<code>{url, poster, w, h}</code>，无视频 = <code>null</code>）</li>
+<li>防泄漏口径：视频文件不进 RSS，也不随插件同步出站——发布事件 payload 的 <code>video</code> 只带 <code>{url, poster}</code>，广场同步与 <code>GET /api/public/weibo</code> 取封面帧当缩略图</li>
+</ul>
 <h3 id="友情链接">友情链接</h3><div class="table-wrap"><table>
 <thead>
 <tr>
