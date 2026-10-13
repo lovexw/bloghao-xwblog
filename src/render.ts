@@ -1234,15 +1234,19 @@ export function onThisDayCard(items: OnThisDayItemView[] | null | undefined, en 
 </section>`
 }
 
-/** 前台微博页发布框：管理员登录时由主题渲染在时间线顶部（访客不可见），交互在 site.js，与后台发布器同款能力 */
+/** 前台微博页发布框：管理员登录时由主题渲染在时间线顶部（访客不可见），交互在 site.js，与后台发布器同款能力。
+ *  按钮顺序是契约：site.js 用 `querySelector('.wb-composer-add')` 取「加图」（编辑器还要管计数与上传进度），
+ *  所以加图必须在视频按钮与 JS 后插的表情按钮之前；tests/weibo-admin.test.ts 有守卫。 */
 export function weiboComposer(o: { adminName: string; en?: boolean }): string {
   const en = !!o.en
   return `<form class="wb-composer" data-wb-composer>
   <p class="wb-composer-as">${en ? 'Posting as' : '以作者'} <b>${esc(o.adminName)}</b>${en ? '' : ' 的身份发布'}</p>
   <textarea class="wb-composer-textarea" name="content" maxlength="5000" rows="3" placeholder="${tr(en, '有什么新鲜事？写 #话题 即可归类')}"></textarea>
   <div class="wb-composer-tiles" hidden></div>
+  <div class="wb-composer-video" hidden></div>
   <div class="wb-composer-foot">
     <button class="wb-composer-add" type="button">${tr(en, '加图（0/9）')}</button>
+    <button class="wb-composer-add wb-composer-add-video" type="button" title="${tr(en, '最大 25MB，MP4 / WebM')}">${tr(en, '视频')}</button>
     <span class="wb-composer-count" data-count>0 / 5000</span>
     <span class="wb-composer-tip" data-tip aria-live="polite"></span>
     <span class="wb-composer-actions">

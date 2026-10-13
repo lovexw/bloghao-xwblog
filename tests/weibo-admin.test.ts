@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { friendLinkCards, weiboCards, weiboHomeEntry, weiboVideoHtml, type WeiboItemView } from '../src/render.ts'
+import { friendLinkCards, weiboCards, weiboComposer, weiboHomeEntry, weiboVideoHtml, type WeiboItemView } from '../src/render.ts'
 import { DEFAULT_SETTINGS, parseWeiboVideo, weiboImageList, weiboVideoView } from '../src/db.ts'
 import { MAX_UPLOAD_BYTES } from '../src/store.ts'
 import { esc } from '../src/utils.ts'
@@ -229,4 +229,25 @@ test('两个客户端的选择器都写 video/*，且都带 ftyp 归一化（acc
     assert.match(src, /VIDEO_ACCEPT = 'video\/\*'/, file + ' 的 VIDEO_ACCEPT 必须是 video/*')
     assert.ok(src.includes('function patchFtypBrand'), file + ' 缺少 ftyp 容器归一化')
   }
+})
+
+// 回归（2026-10-13 站长实测）：B19 落地时三处入口只接了两处——前台 /weibo 的发布框
+// （render.ts weiboComposer）漏了视频按钮与视频容器，于是「想传视频只能点加图」：
+// iOS 图库里看不到视频、桌面端也选不出 mp4。这里把「三入口齐备 + 按钮顺序契约」钉死。
+test('前台发布框必须带视频按钮与视频容器，且「加图」仍是第一个 .wb-composer-add', () => {
+  const html = weiboComposer({ adminName: '站长' })
+  assert.ok(html.includes('wb-composer-add-video'), '前台发布框缺视频按钮')
+  assert.ok(html.includes('class="wb-composer-video"'), '前台发布框缺视频预览容器')
+  // site.js 用 querySelector('.wb-composer-add') 取「加图」（要管计数与上传进度）：加图必须排最前
+  const iAdd = html.indexOf('class="wb-composer-add"')
+  const iVideo = html.indexOf('wb-composer-add-video')
+  assert.ok(iAdd >= 0 && iVideo > iAdd, '「加图」必须是第一个 .wb-composer-add')
+  // 两侧类名对齐：site.js 查的按钮 / 容器类名必须真的渲染出来了
+  const site = readFileSync(new URL('../public/site.js', import.meta.url), 'utf8')
+  for (const cls of ['wb-composer-video', 'wb-composer-add-video']) {
+    assert.ok(site.includes('.' + cls), 'site.js 未接线 .' + cls)
+    assert.ok(html.includes(cls), 'weiboComposer 未渲染 ' + cls)
+  }
+  // 卡片编辑器（site.js 手写表单）同样要有这两个东西
+  assert.ok(site.includes('wb-composer-add-video'), 'site.js 卡片编辑器缺视频按钮')
 })
