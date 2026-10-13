@@ -158,6 +158,11 @@ const ZH_EN: Record<string, string> = {
   '密码一旦遗失无法找回，请务必记好': 'Passwords cannot be recovered — remember yours',
   '已有账号？': 'Already have an account?',
   '去登录': 'Log in',
+  // 微博视频（B19）
+  '视频': 'Video',
+  '最大 25MB，MP4 / WebM': 'Up to 25MB, MP4 / WebM',
+  '只支持 MP4 / WebM 视频': 'Only MP4 / WebM videos are supported',
+  '写点什么，或者配张图 / 加段视频吧': 'Write something, or attach a photo / video first',
   // 闭站页
   '站点暂时关闭': 'Temporarily closed',
 }

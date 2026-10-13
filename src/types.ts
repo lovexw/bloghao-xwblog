@@ -80,6 +80,8 @@ export interface WeiboRow {
   id: number
   content: string
   images: string
+  /** 单条视频（B19，解析/读侧过滤见 src/db.ts parseWeiboVideo / weiboVideoView）：JSON 串，空串 = 无视频 */
+  video: string
   topics: string
   status: PostStatus
   pinned: number

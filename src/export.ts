@@ -4,11 +4,11 @@
  * - Markdown 包：全部文章（含草稿，front-matter 带 status）+ 微博 + 独立页面 + 被引用的图片。
  *   正文服务端 HTML→MD（src/html-md.ts），图片从 R2 流式打进 zip（src/zip.ts），整包不过内存。
  * - WXR：WordPress eXtended RSS 1.2，文章（HTML 正文）+ 分类 + 标签，供 WordPress / emlog 等导入器使用；
- *   微博不进 WXR（两边无对应模型），用 Markdown 包携带。
+ *   微博（含 B19 视频）不进 WXR（两边无对应模型），用 Markdown 包携带（视频文件与封面帧进 zip 的 images/）。
  * 挂载于 /api/admin/export（api.ts），受登录中间件保护，GET + 会话 Cookie 即下载。
  */
 import { Hono } from 'hono'
-import { getSettings, listPages, parseTags } from './db'
+import { getSettings, listPages, parseTags, weiboVideoView } from './db'
 import { htmlToMd } from './html-md'
 import { siteBase } from './render'
 import { extractOgImage, sanitizeHtml } from './sanitize'
@@ -151,6 +151,14 @@ exportRoutes.get('/markdown', async (c) => {
     } catch {
       /* images 列损坏就跳过这条微博的图 */
     }
+    // 微博视频（B19）：视频本体与封面帧一起打包——导出要能完整还原，坏 JSON 由解析层兜底成 null
+    const vid = weiboVideoView(w)
+    if (vid) {
+      for (const src of [vid.url, vid.poster]) {
+        const k = keyOf(src)
+        if (k) keys.add(k)
+      }
+    }
   }
 
   const stream = new TransformStream<Uint8Array>()
@@ -187,7 +195,10 @@ exportRoutes.get('/markdown', async (c) => {
           } catch {
             /* 同上，损坏跳过 */
           }
-          return `## ${fmtDateTimeCst(w.published_at ?? w.created_at)}\n\n${w.content}${imgs ? '\n\n' + imgs : ''}`
+          // 视频（B19）：给链接而不是内嵌播放器，封面帧按图片贴出；文件本体在 zip 的 images/ 里
+          const vid = weiboVideoView(w)
+          const vidLine = vid ? `[视频](${relativeOf(vid.url)})` + (vid.poster ? `\n\n![](${relativeOf(vid.poster)})` : '') : ''
+          return `## ${fmtDateTimeCst(w.published_at ?? w.created_at)}\n\n${w.content}${vidLine ? '\n\n' + vidLine : ''}${imgs ? '\n\n' + imgs : ''}`
         })
         await zip.add('weibo.md', new TextEncoder().encode('# 微博\n\n' + lines.join('\n\n') + '\n'), now)
       }

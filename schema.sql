@@ -134,6 +134,7 @@ CREATE TABLE IF NOT EXISTS weibo (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   content      TEXT    NOT NULL DEFAULT '',
   images       TEXT    NOT NULL DEFAULT '[]', -- JSON 数组，如 ["/images/u/202510/xxx.jpg"]
+  video        TEXT    NOT NULL DEFAULT '',   -- 单条视频（B19）：JSON 串 {"url":"/images/u/…mp4","poster":"…jpg","w":1280,"h":720}，空串 = 无视频
   topics       TEXT    NOT NULL DEFAULT '[]', -- JSON 数组，从正文 #话题# 自动提取
   status       TEXT    NOT NULL DEFAULT 'published', -- draft | published
   pinned       INTEGER NOT NULL DEFAULT 0,          -- 置顶（最多 3 条，应用层限制）

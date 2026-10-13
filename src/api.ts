@@ -50,6 +50,7 @@ import {
   MAX_CONTENT_BYTES,
   parseTags,
   parseWeiboImages,
+  parseWeiboVideo,
   postAdminView,
   saveSettings,
   seedWelcomePost,
@@ -61,7 +62,9 @@ import {
   weiboCommentCountMap,
   weiboImageList,
   weiboTopicList,
+  weiboVideoView,
   WEIBO_MAX_CHARS,
+  type WeiboVideoView,
 } from './db'
 import { mdToHtml } from './markdown'
 import { appearanceMeta, cleanAppearanceSettings } from './appearance'
@@ -820,13 +823,27 @@ async function readWeiboPayload(c: { req: { json: () => Promise<unknown> } }) {
   if (!raw || typeof raw !== 'object') return null
   const b = raw as Record<string, unknown>
   const content = String(b.content ?? '').trim().slice(0, WEIBO_MAX_CHARS)
+  const video = readWeiboVideoField(b)
+  if (video === 'bad') return null
   return {
     content,
     // 话题从正文 #话题（或成对 #话题#）自动提取，不接受客户端直传
     topics: extractWeiboTopics(content),
     images: parseWeiboImages(b.images),
+    video,
     status: b.status === 'published' ? 'published' : 'draft',
   }
+}
+
+/** 微博视频字段（B19）：缺键 = undefined（保留原值）——前台卡片编辑与后台旧调用点只发
+ *  content+images+status，全量覆盖语义会把已有视频静默清掉；null / 空串 = 清除；
+ *  其余必须是合法视频对象，非法回 'bad'（端点整体 400：宁可不保存，也不悄悄清视频）。
+ *  「一条微博最多 1 个视频」由单值字段本身 + 前端入口共同保证。 */
+function readWeiboVideoField(b: Record<string, unknown>): WeiboVideoView | null | undefined | 'bad' {
+  if (!('video' in b)) return undefined
+  const v = b.video
+  if (v === null || v === '') return null
+  return parseWeiboVideo(v) ?? 'bad'
 }
 
 api.get('/admin/weibo', async (c) => {
@@ -844,6 +861,7 @@ api.get('/admin/weibo', async (c) => {
       ...w,
       imageList: weiboImageList(w),
       topicList: weiboTopicList(w),
+      videoView: weiboVideoView(w),
       commentCount: cmtCounts.get(w.id) || 0,
     })),
     total: r.total,
@@ -858,25 +876,36 @@ api.get('/admin/weibo/:id', async (c) => {
   if (!id) return jsonError('这条微博不存在', 404)
   const row = await getWeiboById(c.env.DB, id)
   if (!row) return jsonError('这条微博不存在', 404)
-  return c.json({ weibo: { ...row, imageList: weiboImageList(row), topicList: weiboTopicList(row) } })
+  return c.json({ weibo: { ...row, imageList: weiboImageList(row), topicList: weiboTopicList(row), videoView: weiboVideoView(row) } })
 })
 
 api.post('/admin/weibo', async (c) => {
   const p = await readWeiboPayload(c)
   if (!p) return jsonError('请求格式错误')
-  if (!p.content && !p.images.length) return jsonError('写点什么，或者配张图吧')
+  if (!p.content && !p.images.length && !p.video) return jsonError('写点什么，或者配张图 / 加段视频吧')
   const now = Date.now()
   const res = await c.env.DB.prepare(
-    'INSERT INTO weibo (content, images, topics, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO weibo (content, images, video, topics, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   )
-    .bind(p.content, JSON.stringify(p.images), JSON.stringify(p.topics), p.status, p.status === 'published' ? now : null, now, now)
+    .bind(
+      p.content,
+      JSON.stringify(p.images),
+      p.video ? JSON.stringify(p.video) : '',
+      JSON.stringify(p.topics),
+      p.status,
+      p.status === 'published' ? now : null,
+      now,
+      now
+    )
     .run()
   const row = await getWeiboById(c.env.DB, Number(res.meta.last_row_id))
   // 广播微博发布事件（服务端插件钩子，见 src/hooks.ts）：新建即发布才算
   if (p.status === 'published' && row) {
-    c.executionCtx.waitUntil(fireWeiboPublished(c.env, { id: row.id, content: row.content, images: weiboImageList(row), via: 'admin' }))
+    c.executionCtx.waitUntil(
+      fireWeiboPublished(c.env, { id: row.id, content: row.content, images: weiboImageList(row), video: weiboVideoView(row) ?? undefined, via: 'admin' })
+    )
   }
-  return c.json({ ok: true, weibo: row ? { ...row, imageList: weiboImageList(row), topicList: weiboTopicList(row) } : null })
+  return c.json({ ok: true, weibo: row ? { ...row, imageList: weiboImageList(row), topicList: weiboTopicList(row), videoView: weiboVideoView(row) } : null })
 })
 
 api.put('/admin/weibo/:id', async (c) => {
@@ -886,21 +915,25 @@ api.put('/admin/weibo/:id', async (c) => {
   if (!existing) return jsonError('这条微博不存在', 404)
   const p = await readWeiboPayload(c)
   if (!p) return jsonError('请求格式错误')
-  if (!p.content && !p.images.length) return jsonError('写点什么，或者配张图吧')
+  if (!p.content && !p.images.length && !p.video) return jsonError('写点什么，或者配张图 / 加段视频吧')
   const publishedAt = p.status === 'published' ? (existing.published_at ?? Date.now()) : null
   // 转回草稿时自动取消置顶
   const pinned = p.status === 'published' ? existing.pinned : 0
+  // video 缺键即保留（undefined）：老调用点不发这个键，不能把已有视频清掉
+  const video = p.video === undefined ? existing.video : p.video ? JSON.stringify(p.video) : ''
   await c.env.DB.prepare(
-    'UPDATE weibo SET content = ?, images = ?, topics = ?, status = ?, pinned = ?, published_at = ?, updated_at = ? WHERE id = ?'
+    'UPDATE weibo SET content = ?, images = ?, video = ?, topics = ?, status = ?, pinned = ?, published_at = ?, updated_at = ? WHERE id = ?'
   )
-    .bind(p.content, JSON.stringify(p.images), JSON.stringify(p.topics), p.status, pinned, publishedAt, Date.now(), id)
+    .bind(p.content, JSON.stringify(p.images), video, JSON.stringify(p.topics), p.status, pinned, publishedAt, Date.now(), id)
     .run()
   const row = await getWeiboById(c.env.DB, id)
   // 广播微博发布事件（服务端插件钩子，见 src/hooks.ts）：仅草稿 → 发布的跃迁，编辑已发布微博不触发
   if (p.status === 'published' && row && existing.status !== 'published') {
-    c.executionCtx.waitUntil(fireWeiboPublished(c.env, { id: row.id, content: row.content, images: weiboImageList(row), via: 'draft' }))
+    c.executionCtx.waitUntil(
+      fireWeiboPublished(c.env, { id: row.id, content: row.content, images: weiboImageList(row), video: weiboVideoView(row) ?? undefined, via: 'draft' })
+    )
   }
-  return c.json({ ok: true, weibo: row ? { ...row, imageList: weiboImageList(row), topicList: weiboTopicList(row) } : null })
+  return c.json({ ok: true, weibo: row ? { ...row, imageList: weiboImageList(row), topicList: weiboTopicList(row), videoView: weiboVideoView(row) } : null })
 })
 
 api.post('/admin/weibo/:id/pin', async (c) => {
@@ -2083,7 +2116,8 @@ api.get('/public/weibo', async (c) => {
   const origin = new URL(c.req.url).origin
   return c.json({
     weibo: r.items.map((w) => {
-      const img = weiboImageList(w)[0]
+      // 视频卡无配图时用封面帧充当缩略图（视频文件本身不进 hub，与插件推送同口径，见 src/hooks.ts）
+      const img = weiboImageList(w)[0] || (weiboVideoView(w)?.poster ?? '')
       return {
         ref: String(w.id),
         title: excerpt(w.content, 80),

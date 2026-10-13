@@ -326,6 +326,47 @@ try {
     console.log(`  ${wbEdit.status === 200 ? '✓' : '✗'} 微博管理：编辑保存`)
     await check('GET', `/api/admin/weibo/${wbId}`, 200, '冒烟管理链路已编辑', wbCookie)
     await check('GET', `/weibo?wb=${wbId}`, 200, '冒烟管理链路已编辑', wbCookie)
+
+    // 微博视频（B19）：一条微博最多 1 个视频，url / poster 过 scheme 白名单，缺键即保留
+    const vidUrl = '/images/u/smoke/smoke-video.mp4'
+    const wbVid = await raw('PUT', `/api/admin/weibo/${wbId}`, {
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({
+        content: '冒烟视频微博 #冒烟话题#',
+        images: [],
+        video: { url: vidUrl, poster: '', w: 640, h: 360 },
+        status: 'published',
+      }),
+    })
+    const wbVidBody = await wbVid.json().catch(() => null)
+    const vidSaved = !!(wbVidBody && wbVidBody.weibo && wbVidBody.weibo.videoView && wbVidBody.weibo.videoView.url === vidUrl)
+    results.push(['微博视频：带 video 保存', wbVid.status === 200 && vidSaved])
+    console.log(`  ${wbVid.status === 200 && vidSaved ? '✓' : '✗'} 微博视频：带 video 保存`)
+    // 前台卡片：播放器 + 按原始宽高写的占位比例（断言数据而不是类名——类名在主题 CSS 里恒在）
+    await check('GET', `/weibo?wb=${wbId}`, 200, `src="${vidUrl}"`, wbCookie)
+    await check('GET', `/weibo?wb=${wbId}`, 200, 'aspect-ratio:640/360', wbCookie)
+
+    // 缺键即保留：后台列表「发布/下架」与前台老编辑器只发 content+images+status，视频不能被静默清掉
+    const wbKeep = await raw('PUT', `/api/admin/weibo/${wbId}`, {
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ content: '冒烟视频微博 · 缺键保留 #冒烟话题#', images: [], status: 'published' }),
+    })
+    const wbKeepBody = await wbKeep.json().catch(() => null)
+    const kept = !!(wbKeepBody && wbKeepBody.weibo && wbKeepBody.weibo.videoView && wbKeepBody.weibo.videoView.url === vidUrl)
+    results.push(['微博视频：PUT 缺 video 键 = 保留原视频', wbKeep.status === 200 && kept])
+    console.log(`  ${wbKeep.status === 200 && kept ? '✓' : '✗'} 微博视频：PUT 缺 video 键 = 保留原视频`)
+    await check('GET', `/weibo?wb=${wbId}`, 200, `src="${vidUrl}"`, wbCookie)
+
+    // 显式 null = 清除
+    const wbClear = await raw('PUT', `/api/admin/weibo/${wbId}`, {
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ content: '冒烟视频微博 · 已清除 #冒烟话题#', images: [], video: null, status: 'published' }),
+    })
+    const wbClearBody = await wbClear.json().catch(() => null)
+    const cleared = !!(wbClearBody && wbClearBody.weibo && wbClearBody.weibo.videoView === null)
+    results.push(['微博视频：显式 null = 清除', wbClear.status === 200 && cleared])
+    console.log(`  ${wbClear.status === 200 && cleared ? '✓' : '✗'} 微博视频：显式 null = 清除`)
+    await check('GET', `/weibo?wb=${wbId}`, 200, undefined, { notContains: `src="${vidUrl}"`, headers: { Cookie: cookie } })
     // 删除 → 单条 404、深链定位失效但页面仍 200
     const wbDel = await raw('DELETE', `/api/admin/weibo/${wbId}`, wbCookie)
     results.push(['微博管理：删除', wbDel.status === 200])

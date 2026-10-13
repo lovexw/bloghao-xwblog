@@ -49,7 +49,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   verifyMetas: '',
   analyticsScript: '',
   robotsExtra: '',
-  // 外部发布（见 src/external.ts）：空 Token = 开放接口关闭
+  // 外部发布（见 src/external.ts）：空 Token  则 开放接口关闭
   externalToken: '',
   telegramBotToken: '',
   telegramAllowFrom: '',
@@ -368,6 +368,8 @@ export interface OnThisDayRow {
   title: string
   content: string
   images: string
+  /** 微博视频 JSON 列（B19）：无正文时给「发了一段视频」兜底文案用；posts 侧恒为空串 */
+  video: string
   ts: number
 }
 
@@ -393,7 +395,8 @@ export function buildOnThisDayItems(postRows: OnThisDayRow[], weiboRows: OnThisD
   }
   for (const r of weiboRows) {
     const imgs = weiboImageList(r)
-    const text = r.content.trim() || (imgs.length ? `发了 ${imgs.length} 张图` : '')
+    // 无正文时给媒体兜底文案：与首页微博入口卡同口径（视频优先，其次配图数；B19）
+    const text = r.content.trim() || (weiboVideoView(r) ? '发了一段视频' : imgs.length ? `发了 ${imgs.length} 张图` : '')
     if (!text) continue
     items.push({ kind: 'weibo', href: `/weibo?wb=${r.key}#wb-${r.key}`, text: excerpt(text, 64), ts: r.ts, yearsAgo: thisYear - cstDate(r.ts).getUTCFullYear() })
   }
@@ -413,14 +416,14 @@ export async function listOnThisDay(db: D1Database): Promise<OnThisDayItem[]> {
   const [postsRes, weiboRes] = await db.batch([
     db
       .prepare(
-        `SELECT slug AS key, title, '' AS content, '' AS images, COALESCE(published_at, created_at) AS ts
+        `SELECT slug AS key, title, '' AS content, '' AS images, '' AS video, COALESCE(published_at, created_at) AS ts
          FROM posts
          WHERE status = 'published' AND deleted_at IS NULL AND ${ON_THIS_DAY_MD} = strftime('%m-%d', 'now', '28800 seconds') AND ${ON_THIS_DAY_Y} < CAST(strftime('%Y', 'now', '28800 seconds') AS INTEGER)
          ORDER BY ts DESC LIMIT ${ON_THIS_DAY_SOURCE_LIMIT}`
       ),
     db
       .prepare(
-        `SELECT id AS key, '' AS title, content, images, COALESCE(published_at, created_at) AS ts
+        `SELECT id AS key, '' AS title, content, images, video, COALESCE(published_at, created_at) AS ts
          FROM weibo
          WHERE status = 'published' AND deleted_at IS NULL AND ${ON_THIS_DAY_MD} = strftime('%m-%d', 'now', '28800 seconds') AND ${ON_THIS_DAY_Y} < CAST(strftime('%Y', 'now', '28800 seconds') AS INTEGER)
          ORDER BY ts DESC LIMIT ${ON_THIS_DAY_SOURCE_LIMIT}`
@@ -599,6 +602,56 @@ export function weiboImageList(row: Pick<WeiboRow, 'images'>): string[] {
   }
 }
 
+/* ---------------- 微博视频（B19） ----------------
+ * 一条微博最多 1 个视频，存 weibo.video 单列 JSON：{ url, poster, w, h }，空串 = 无视频。
+ * 上传走 /admin/upload（≤25MB，mp4/webm 只认文件魔数，见 store.ts）；poster 是发布端从视频里
+ * 抽的第一帧（best-effort，抓不到就留空，渲染退化成无封面卡）。写侧 parseWeiboVideo、
+ * 读侧 weiboVideoView 两道 scheme 白名单，与图片 parseWeiboImages / weiboImageList 同口径。
+ */
+export interface WeiboVideoView {
+  /** 站内 /images/ 地址或 http(s) 外链 */
+  url: string
+  /** 封面帧地址（可空串）：卡片首帧、分享卡与后台缩略图用 */
+  poster: string
+  /** 原始宽高（未知 = 0）：渲染期换算占位比例，避免视频加载时的布局抖动 */
+  w: number
+  h: number
+}
+
+/** 视频地址白名单：站内图床或 http(s)（同 weiboImageList 的读侧口径） */
+function videoUrlOk(s: string): boolean {
+  return s.startsWith('/images/') || /^https?:\/\//i.test(s)
+}
+
+/** 写侧：校验并规整单个视频对象（POST/PUT /admin/weibo 的 video 字段）。
+ *  只认 { url, poster?, w?, h? }，多余键丢弃；url 必填且过白名单，poster 同口径（非法当没填），
+ *  w/h 取整并限幅（未知 / 越界 = 0）。任一硬性条件不满足返回 null（= 无视频），不抛错。 */
+export function parseWeiboVideo(v: unknown): WeiboVideoView | null {
+  if (!v || typeof v !== 'object') return null
+  const b = v as Record<string, unknown>
+  const url = typeof b.url === 'string' ? b.url.trim().slice(0, 500) : ''
+  if (!url || !videoUrlOk(url)) return null
+  const rawPoster = typeof b.poster === 'string' ? b.poster.trim().slice(0, 500) : ''
+  const poster = rawPoster && videoUrlOk(rawPoster) ? rawPoster : ''
+  const dim = (x: unknown) => {
+    const n = clampInt(x, 0, 10000, 0)
+    return n > 0 ? n : 0
+  }
+  return { url, poster, w: dim(b.w), h: dim(b.h) }
+}
+
+/** 读侧：解析 weibo.video 列 → 视频视图；空串 / 脏 JSON / 非法 scheme 一律 null
+ *  （纵深防御，同 weiboImageList：备份恢复、手工改库进来的异常值不会流进 <video src>） */
+export function weiboVideoView(row: Pick<WeiboRow, 'video'>): WeiboVideoView | null {
+  const raw = (row.video || '').trim()
+  if (!raw) return null
+  try {
+    return parseWeiboVideo(JSON.parse(raw))
+  } catch {
+    return null
+  }
+}
+
 export function weiboTopicList(row: Pick<WeiboRow, 'topics'>): string[] {
   try {
     const a = JSON.parse(row.topics || '[]')
@@ -769,6 +822,8 @@ const SCHEMA_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: 'weibo', column: 'likes', ddl: 'ALTER TABLE weibo ADD COLUMN likes INTEGER NOT NULL DEFAULT 0' },
   { table: 'weibo', column: 'topics', ddl: "ALTER TABLE weibo ADD COLUMN topics TEXT NOT NULL DEFAULT '[]'" },
   { table: 'weibo', column: 'pinned', ddl: 'ALTER TABLE weibo ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0' },
+  // 微博视频（B19）：一列存单个视频的 JSON（url + 封面帧 + 宽高），空串 = 无视频；写侧解析 parseWeiboVideo / 读侧过滤 weiboVideoView
+  { table: 'weibo', column: 'video', ddl: "ALTER TABLE weibo ADD COLUMN video TEXT NOT NULL DEFAULT ''" },
   { table: 'comments', column: 'weibo_id', ddl: 'ALTER TABLE comments ADD COLUMN weibo_id INTEGER NOT NULL DEFAULT 0' },
   { table: 'comments', column: 'parent_id', ddl: 'ALTER TABLE comments ADD COLUMN parent_id INTEGER NOT NULL DEFAULT 0' },
   { table: 'comments', column: 'is_admin', ddl: 'ALTER TABLE comments ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0' },

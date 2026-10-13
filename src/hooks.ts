@@ -50,6 +50,8 @@ export interface WeiboPublishedPayload {
   content: string
   /** 站内图片地址数组（/images/… 或外链），原样入库的 images 列 */
   images: string[]
+  /** 单条视频（B19）：只给封面帧等元数据，视频文件本身不出站（广场用封面帧当缩略图）；无视频 = undefined */
+  video?: { url: string; poster: string }
   /** 触发来源：后台（含前台卡片编辑器）/ 开放 API / Telegram 机器人 / 草稿转发布 */
   via: 'admin' | 'external' | 'telegram' | 'draft'
 }
@@ -189,6 +191,8 @@ const bufferSync: ServerPlugin = {
     const token = (ctx.settings.bufferAccessToken || '').trim()
     const channelId = (ctx.settings.bufferChannelId || '').trim()
     if (!token || !channelId) return
+    // 只有视频、没有正文也没有配图的微博，Buffer 收到的是空帖：跳过（视频不随 Buffer 出站，B19）
+    if (!p.content && !p.images.length) return
     const assets = p.images
       .filter((s) => /^https?:\/\//i.test(s) || (ctx.base && s.startsWith('/images/')))
       .slice(0, 4)
@@ -300,6 +304,8 @@ const plazaSync: ServerPlugin = {
     const endpoint = (ctx.settings.plazaEndpoint || PLAZA_OFFICIAL_HUB).trim().replace(/\/+$/, '')
     const token = (ctx.settings.plazaToken || '').trim()
     if (!/^https:\/\//i.test(endpoint) || !token) return
+    // 既无正文也无任何图（含视频封面帧）的微博在广场上是一张空卡：跳过（B19）
+    if (!p.content && !p.images.length && !p.video?.poster) return
     await plazaIngest(endpoint, token, {
       // 站点头像随上报更新（hub 端 https 校验，空/非法忽略）：后台「站点头像」改了，下一条发布即同步
       avatar: (ctx.settings.avatarUrl || '').trim(),
@@ -310,19 +316,21 @@ const plazaSync: ServerPlugin = {
           title: excerpt(p.content, 80),
           summary: excerpt(p.content, 500),
           url: ctx.base ? `${ctx.base}/weibo#wb-${p.id}` : '',
-          // hub 只收 https 绝对地址：站内 /images/ 补 base 前缀，外链原样，其余置空
-          image: p.images[0]
-            ? p.images[0].startsWith('/images/') && ctx.base
-              ? ctx.base + p.images[0]
-              : /^https:\/\//i.test(p.images[0])
-                ? p.images[0]
-                : ''
-            : '',
+          // hub 只收 https 绝对地址：站内 /images/ 补 base 前缀，外链原样，其余置空。
+          // 视频不出站，但封面帧可当缩略图（与开放接口 /api/public/weibo 同口径）
+          image: plazaHttpsImage(p.images[0] || p.video?.poster || '', ctx.base),
           publishedAt: Date.now(),
         },
       ],
     })
   },
+}
+
+/** 广场缩略图口径：站内 /images/ 补 base 前缀、https 绝对地址原样、其余置空（hub 只收 https） */
+function plazaHttpsImage(u: string, base?: string): string {
+  if (!u) return ''
+  if (u.startsWith('/images/') && base) return base + u
+  return /^https:\/\//i.test(u) ? u : ''
 }
 
 /** 签名上报（fireHook 已吞错，这里失败抛出也只丢这一条同步，不影响发布主流程） */

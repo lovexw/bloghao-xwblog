@@ -110,7 +110,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 **MCP 服务器（tests/mcp.test.ts、冒烟「MCP 链路」，机制在 src/mcp.ts，B10）**
 
 - `POST /mcp` 是 **Streamable HTTP 无状态模式**（JSON-RPC 2.0 进、`application/json` 出，GET/DELETE 405 不开 SSE；通知回 202 空 body，兼容数组批处理逐条派发）——协议层 `dispatchRpc` 是纯函数、工具处理器 db 第一参数依赖注入，Node 测试直接导入（tests/mcp.test.ts 三层：协议 / node:sqlite 真库工具 / hono 薄壳路由）；别往里加会话状态或 SSE，Workers isolate 短生命周期扛不住
-- **鉴权复用 `externalToken`**（与开放 API / TG 机器人同一枚令牌，空 Token = 接口关闭、Bearer/X-Auth-Token 双头、safeEqual）：新增 MCP 工具不准绕过这层；鉴权失败按 IP 限流（`mcpfail:` 10 次/10 分钟防爆破），成功调用按 token 前缀限流（`mcp:` 30 次/分）——改限流口径两处同改
+- **鉴权复用 `externalToken`**（与开放 API / TG 机器人同一枚令牌，留空则接口关闭、Bearer/X-Auth-Token 双头、safeEqual）：新增 MCP 工具不准绕过这层；鉴权失败按 IP 限流（`mcpfail:` 10 次/10 分钟防爆破），成功调用按 token 前缀限流（`mcp:` 30 次/分）——改限流口径两处同改
 - **门控三口径别动**：演示站 `isDemo` → 404（对齐 admin/external token 端点）；**闭站不进白名单**（与 /api/external、/api/telegram 同口径「闭站连写入一起关死」，index.ts 全局中间件自动覆盖，closed.ts 不用改）；token 不进 query（只认 header，防进访问/代理日志）
 - `publish_post` 的正文**必须走「mdToHtml → sanitizeHtml」双段**（= 后台编辑器 MD 模式保存链路，api.ts /admin/tools/md + readPostPayload 口径），html 格式直走 sanitizeHtml；自动摘要同后台（手填优先否则 `excerpt(clean, 80)`）；发布广播**必须透传 `locked`** 并走 `waitUntil(firePostPublished(..., via:'mcp'))`（防锁文泄漏广场，AGENTS 钩子节同口径）；`publish_weibo` 复用 external.ts 导出的 `insertWeibo`，via 沿用 `'external'`
 - 工具出参守**口令/隐私红线**：`get_post`/`list_posts` 一律过 `postAdminView`（`password_hash` 永不出参，只给 `hasPassword`）；`list_comments` 显式列清单，**email / qq / ip / avatar 不出**（qq 是内部记账列）；业务校验失败回 `result.isError:true` 工具错误（不透内部错误堆栈），未知工具 / 缺工具名才是 -32602 协议错误
@@ -147,6 +147,15 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - 微信表情（文本码体系，机制在 `src/emoji.ts` + `public/admin/emoji.js`）：映射表**单一来源 `src/emoji.ts`**，经 `/api/public/emoji` 下发（客户端拉不到就降级纯文本码）；`scripts/fetch-emoji.mjs` 按表拉取 Twemoji PNG 到 `public/emoji/`（改表后重跑，tests/emoji.test.ts 守「表里每个码点 PNG 存在」）。**存库永远是文本码**：editor.js 富文本里插的是带 `data-emoji` 的 img，save()/自动保存的 serialize 过 `stripEmojiImgs` 反替换、htmlToMd 两处 img 分支认 data-emoji 还原码——新增「把 editor.innerHTML 写进 payload」的路径必须同样过它，别让 img 落库。前台表情面板统一走 site.js `wxqAttachButton(foot, ta, anchor)`（发布器 / 卡片编辑走 firstChild；**评论三处——文章 / 留言板 / 微博评论——传 anchor 插到发送按钮前并 `margin-left:auto` 右侧成组**，foot 是 space-between 双孩子布局，改回 firstChild 会把提示语挤到中间；按钮复用 `wb-composer-add` class，七主题样式均不带作用域）。
 - 动态创建 `<input type="file">` 必须走 `pickFiles` 助手（editor.js 导出、app.js 导入；site.js 有同款 ES5 版本，改动两端任一侧记得同步语义）：**游离节点在 iOS Safari 上选图器能打开、照片能选，但 change 不回填**——上传从未开始且全程无提示，手机上表现为「选了图发布出来只有文字」（2026-10 修复，headless 浏览器测不出）；先隐藏挂到 body 再 click，读完文件 / 用户取消即摘除；前台发布器还有在途上传计数守卫，发布 / 保存前必须归零
 - 输入框回车提交必须判 `e.isComposing || e.keyCode === 229`（中文输入法组词回车）
+
+**微博视频（tests/weibo-admin.test.ts、冒烟「微博视频链路」，机制在 src/db.ts + render.ts，B19，2026-10-13）**
+
+- 一条微博最多 1 个视频、≤25MB（写死两个客户端的 `VIDEO_MAX_BYTES`，与 `store.ts MAX_UPLOAD_BYTES` 同口径，tests/weibo-admin.test.ts 守漂移），只收 mp4 / webm——复用 `/admin/upload`（`sniffUploadExt` 魔数白名单），**不新增上传端点**
+- 存 `weibo.video` 单列 JSON `{url, poster, w, h}`：写侧 `parseWeiboVideo`（scheme 白名单 + 宽高限幅 + 未知键丢弃）、读侧 `weiboVideoView`（脏 JSON / 非法 scheme 一律 null，异常值不流进 `<video src>`）；schema.sql 与 db.ts `SCHEMA_COLUMNS` 两处同步的老规矩照旧
+- **PUT 的 `video` 键是缺键即保留**（同 posts 的 `password` 语义）：后台列表上下架、前台旧编辑器只发 content+images+status，别改成全量覆盖——会把视频静默清掉；显式 `null` / 空串才是清除。冒烟「微博视频链路」逐条守着
+- 渲染唯一入口 `render.ts weiboVideoHtml`（**单行输出**：媒体区顺序 正文 → 视频 → 配图，竖屏居中限高，无封面帧时叠 ▶ 角标、开播由 site.js 挂 `is-playing` 收起）；site.js 的 `wbVideoHtmlJs` 是它的手工 ES5 镜像，tests/weibo-admin.test.ts 把 site.js 切片执行后与服务端**逐字节比对**——改任一侧跑它（后台 app.js 只渲染缩略 `<video>`，无镜像义务）
+- 视频文件不出站：RSS 不含；广场同步与开放接口 `/api/public/weibo` 只取**封面帧**当缩略图（插件 payload 的 `video` 只带 `{url, poster}` 元数据）；`audit.ts pullReferenceTexts` 已登记 `weibo.video`（视频与封面帧都在图床里，漏登记会被媒体体检判成「未被引用」）
+- 封面帧是发布端 best-effort 产物（客户端 canvas 抽第一帧、最长边压到 1280、JPEG 0.82；抓不到 / 超时就留空，卡片退化成无封面播放器）：**新增发布入口别把它做成必需步骤**，也不要在服务端做图像解码（Workers 没有）
 
 **前台 site.js 兼容（全文件是一个 IIFE，一处解析错误全站交互瘫痪）**
 

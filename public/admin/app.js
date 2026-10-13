@@ -835,12 +835,16 @@ async function viewWeibo() {
     toast('所编辑的微博不在本页，已切回新建')
   }
   const images = wbEditing ? [...wbEditing.images] : []
+  // 单视频（B19）：编辑态回填，保存时显式回传（null = 清除；缺键 = 服务端保留原值）
+  let wbVideo = wbEditing?.video ? { ...wbEditing.video } : null
+  let wbVideoMeta = ''
   const rows = d.items
     .map(
       (w) => `<div class="wb-row" data-id="${w.id}">
       <div class="wb-row-main">
         <div class="wb-row-text">${w.content ? esc(w.content) : '<span class="dim">（无文字）</span>'}</div>
         ${w.imageList.length ? `<div class="wb-row-thumbs">${w.imageList.map((u) => `<img src="${esc(u)}" loading="lazy" alt="">`).join('')}</div>` : ''}
+        ${w.videoView ? `<div class="wb-row-thumbs">${videoThumbHtml(w.videoView)}</div>` : ''}
         <div class="wb-row-meta">
           ${w.status === 'published' ? '<span class="chip chip-green">已发布</span>' : '<span class="chip chip-gray">草稿</span>'}
           ${w.pinned ? '<span class="chip chip-warn">置顶</span>' : ''}
@@ -869,10 +873,12 @@ async function viewWeibo() {
     `<div class="page-head"><div><div class="page-title">微博</div><div class="page-sub">随手记：短文字 + 图片，不用起标题</div></div></div>
     <div class="panel wb-composer">
       <textarea class="textarea wb-input" id="wb-content" maxlength="${WB_MAX_CHARS}" placeholder="有什么新鲜事？">${esc(wbEditing?.content || '')}</textarea>
-      <div class="wb-hint">支持 ⌘/Ctrl+V 粘贴截图、把图片拖进来，或点下方「加图」；正文里写 #话题 即可归类并高亮，如 #晚餐日记</div>
+      <div class="wb-hint">支持 ⌘/Ctrl+V 粘贴截图或视频、把文件拖进来，或点下方「加图 / 视频」；正文里写 #话题 即可归类并高亮，如 #晚餐日记</div>
       <div class="wb-imgs" id="wb-imgs"></div>
+      <div class="wb-imgs" id="wb-video-box"></div>
       <div class="wb-composer-foot">
         <button class="btn btn-ghost btn-sm" id="wb-add-img" type="button">${I.image} 加图（${images.length}/${WB_MAX_IMAGES}）</button>
+        <button class="btn btn-ghost btn-sm" id="wb-add-video" type="button" title="最大 25MB，MP4 / WebM">视频</button>
         <button class="btn btn-ghost btn-sm" id="wb-emoji" type="button">😊 表情</button>
         <span class="wb-count" id="wb-count">${(wbEditing?.content || '').length} / ${WB_MAX_CHARS}</span>
         <span class="spacer"></span>
@@ -887,6 +893,7 @@ async function viewWeibo() {
 
   const contentEl = document.getElementById('wb-content')
   const addImgBtn = document.getElementById('wb-add-img')
+  const addVideoBtn = document.getElementById('wb-add-video')
   const countEl = document.getElementById('wb-count')
   const composer = $app.querySelector('.wb-composer')
 
@@ -918,6 +925,71 @@ async function viewWeibo() {
       })
     )
     addImgBtn.innerHTML = `${I.image} 加图（${images.length}/${WB_MAX_IMAGES}）`
+  }
+
+  /** 视频预览（单视频，B19）：复用图片格容器（.wb-imgs:empty 自动隐藏） */
+  function renderVideo() {
+    const box = document.getElementById('wb-video-box')
+    box.innerHTML = wbVideo
+      ? `<span class="wb-tile wb-tile--video" title="${esc(wbVideoMeta)}"><video src="${esc(wbVideo.url)}"${
+          wbVideo.poster ? ` poster="${esc(wbVideo.poster)}"` : ''
+        } muted playsinline preload="metadata"></video><button class="wb-tile-del" data-video-del type="button" title="移除">×</button></span>`
+      : ''
+    box.querySelector('[data-video-del]')?.addEventListener('click', () => {
+      wbVideo = null
+      wbVideoMeta = ''
+      renderVideo()
+    })
+    addVideoBtn.disabled = !!wbVideo
+    addVideoBtn.title = wbVideo ? '一条微博只能带一个视频，先移除当前视频' : '最大 25MB，MP4 / WebM'
+  }
+
+  /** 加视频：类型 / 体积前置校验 + 上传进度 + 封面帧（best-effort），与前台发布器同一套口径 */
+  async function addVideoFile(file) {
+    if (wbVideo) return toast('一条微博只能带一个视频，先移除当前视频', true)
+    if (!isVideoFile(file)) return toast('只支持 MP4 / WebM 视频', true)
+    if (file.size > VIDEO_MAX_BYTES) return toast(`视频不能超过 25MB，当前 ${fmtSize(file.size)}`, true)
+    const label = addVideoBtn.innerHTML
+    wbUploading++
+    addVideoBtn.disabled = true
+    try {
+      const up = await uploadFile(file, (p) => (addVideoBtn.textContent = `上传视频 ${p}%`))
+      wbVideo = { url: up.url, poster: '', w: 0, h: 0 }
+      wbVideoMeta = fmtSize(file.size)
+      renderVideo()
+      // 封面帧慢一步补传：拿不到就保持无封面（视频照常可播），不阻塞保存
+      const shot = await grabVideoPoster(file)
+      if (shot && wbVideo && wbVideo.url === up.url) {
+        try {
+          const poster = await uploadFile(new File([shot.blob], 'poster.jpg', { type: 'image/jpeg' }), null)
+          if (wbVideo && wbVideo.url === up.url) {
+            wbVideo.poster = poster.url
+            if (!wbVideo.w) {
+              wbVideo.w = shot.w
+              wbVideo.h = shot.h
+            }
+            renderVideo()
+          }
+        } catch (e) {
+          /* 封面帧失败不算错误：卡片退化成无封面 */
+        }
+      }
+    } catch (e) {
+      toast(e.message, true)
+    } finally {
+      wbUploading--
+      addVideoBtn.innerHTML = label
+      renderVideo()
+    }
+  }
+
+  /** 粘贴 / 拖拽统一入口：视频走单视频通道，其余按图片处理（同一次操作可各收一份） */
+  async function addMediaFiles(files) {
+    const list = [...(files || [])]
+    const vid = list.find((f) => isVideoFile(f))
+    if (vid) await addVideoFile(vid)
+    const rest = list.filter((f) => f !== vid)
+    if (rest.length) await addImageFiles(rest)
   }
 
   /** 加图统一入口：文件选择 / 粘贴 / 拖拽共用，自动过滤非图片并尊重 9 图上限 */
@@ -959,7 +1031,7 @@ async function viewWeibo() {
     const files = [...(e.clipboardData?.files || [])]
     if (!files.length) return
     e.preventDefault()
-    await addImageFiles(files)
+    await addMediaFiles(files)
   })
 
   // 拖拽图片到发布器（拖文本进输入框仍是默认行为）
@@ -974,24 +1046,24 @@ async function viewWeibo() {
     if (!files.length) return
     e.preventDefault()
     composer.classList.remove('is-dragover')
-    await addImageFiles(files)
+    await addMediaFiles(files)
   })
 
   async function saveWeibo(status) {
     const content = contentEl.value.trim()
-    if (!content && !images.length) return toast('写点什么，或者配张图吧', true)
-    // 二道防线：上传未完就点发布，微博会以缺图状态发出（图片还在闭包里推）
-    if (wbUploading > 0) return toast('还有图片在上传中，稍等一下', true)
+    if (!content && !images.length && !wbVideo) return toast('写点什么，或者配张图 / 加段视频吧', true)
+    // 二道防线：上传未完就点发布，微博会以缺媒体状态发出（文件还在闭包里推）
+    if (wbUploading > 0) return toast('还有图片/视频在上传中，稍等一下', true)
     // 请求期间禁用全部按钮：连击会重复发微博
     const btns = ['wb-save', 'wb-publish', 'wb-draft'].map((id) => document.getElementById(id)).filter(Boolean)
     btns.forEach((b) => (b.disabled = true))
     try {
       if (wbEditing) {
-        await api(`/admin/weibo/${wbEditing.id}`, { method: 'PUT', body: { content, images, status: wbEditing.status } })
+        await api(`/admin/weibo/${wbEditing.id}`, { method: 'PUT', body: { content, images, video: wbVideo, status: wbEditing.status } })
         wbEditing = null
         toast('已保存')
       } else {
-        await api('/admin/weibo', { method: 'POST', body: { content, images, status } })
+        await api('/admin/weibo', { method: 'POST', body: { content, images, video: wbVideo, status } })
         toast(status === 'published' ? '已发布 🎉' : '草稿已保存')
       }
       navigate() // 操作后重渲染当前路由（经 navigate 守卫，用户已切页时不拽回）
@@ -1004,9 +1076,17 @@ async function viewWeibo() {
   }
 
   renderImgs()
+  renderVideo()
   if (wbEditing) window.scrollTo({ top: 0 })
   contentEl.addEventListener('input', () => (countEl.textContent = `${contentEl.value.length} / ${WB_MAX_CHARS}`))
   addImgBtn.addEventListener('click', pickImages)
+  addVideoBtn.addEventListener('click', () => {
+    if (wbVideo) return toast('一条微博只能带一个视频，先移除当前视频', true)
+    pickFiles(VIDEO_ACCEPT, false, (files) => {
+      const f = files && files[0]
+      if (f) addVideoFile(f)
+    })
+  })
   document.getElementById('wb-save')?.addEventListener('click', () => saveWeibo(wbEditing?.status || 'draft'))
   document.getElementById('wb-publish')?.addEventListener('click', () => saveWeibo('published'))
   document.getElementById('wb-draft')?.addEventListener('click', () => saveWeibo('draft'))
@@ -1024,7 +1104,7 @@ async function viewWeibo() {
     const id = Number(row.dataset.id)
     const w = d.items.find((x) => String(x.id) === String(id))
     row.querySelector('[data-act=edit]').addEventListener('click', () => {
-      wbEditing = { id: w.id, content: w.content, images: [...w.imageList], status: w.status }
+      wbEditing = { id: w.id, content: w.content, images: [...w.imageList], video: w.videoView || null, status: w.status }
       navigate() // 操作后重渲染当前路由（经 navigate 守卫，用户已切页时不拽回）
     })
     row.querySelector('[data-act=pin]')?.addEventListener('click', async () => {
@@ -3184,6 +3264,63 @@ async function viewSettings() {
  * 已与编辑器策略漂移——现共用一份实现）：JPEG/PNG/WebP 超 150KB 或最长边超 2000px 时先降尺寸再编码，
  * 优先转 WebP（质量 0.75，透明不丢），旧浏览器回退 JPEG/PNG（0.82）；GIF 动图会压丢帧，原样直传；
  * 产物不比原图小用原图；失败回退原文件。 */
+
+/* ---------------- 微博视频工具（B19）：体积上限与 src/store.ts MAX_UPLOAD_BYTES 同口径 ---------------- */
+const VIDEO_MAX_BYTES = 25 * 1024 * 1024
+const VIDEO_ACCEPT = 'video/mp4,video/webm,.mp4,.webm'
+const VIDEO_EXT_RE = /\.(mp4|webm)$/i
+/** 少数安卓浏览器 file.type 为空，按扩展名兜底 */
+const isVideoFile = (f) => !!f && (/^video\/(mp4|webm)$/i.test(f.type || '') || (!f.type && VIDEO_EXT_RE.test(f.name || '')))
+/** 抽视频第一帧当封面帧（最长边压到 1280 省体积）：失败 / 超时 resolve(null)，卡片退化成无封面 */
+function grabVideoPoster(file) {
+  return new Promise((resolve) => {
+    let settled = false
+    let url = ''
+    const finish = (shot) => {
+      if (settled) return
+      settled = true
+      try {
+        URL.revokeObjectURL(url)
+      } catch (e) {
+        /* 忽略 */
+      }
+      resolve(shot)
+    }
+    try {
+      url = URL.createObjectURL(file)
+    } catch (e) {
+      return finish(null)
+    }
+    const v = document.createElement('video')
+    v.preload = 'auto'
+    v.muted = true
+    v.setAttribute('playsinline', '')
+    v.addEventListener('loadeddata', () => {
+      try {
+        const sw = v.videoWidth || 0
+        const sh = v.videoHeight || 0
+        if (!sw || !sh) return finish(null)
+        const scale = Math.min(1, 1280 / Math.max(sw, sh))
+        const cv = document.createElement('canvas')
+        cv.width = Math.max(1, Math.round(sw * scale))
+        cv.height = Math.max(1, Math.round(sh * scale))
+        cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height)
+        cv.toBlob((blob) => finish(blob ? { blob, w: sw, h: sh } : null), 'image/jpeg', 0.82)
+      } catch (e) {
+        finish(null)
+      }
+    })
+    v.addEventListener('error', () => finish(null))
+    setTimeout(() => finish(null), 10000)
+    v.src = url
+  })
+}
+
+/** 列表行里的视频缩略（与图片缩略同尺寸，播放器控件不出现） */
+function videoThumbHtml(v) {
+  const poster = v.poster ? ` poster="${esc(v.poster)}"` : ''
+  return `<video src="${esc(v.url)}"${poster} muted playsinline preload="metadata"></video>`
+}
 
 function uploadFile(file, onProgress) {
   return new Promise((resolve, reject) => {

@@ -1,5 +1,5 @@
 import type { CommentRow, PostRow, SettingsMap } from './types'
-import type { PostSort } from './db'
+import type { PostSort, WeiboVideoView } from './db'
 import { renderFooterHtml } from './hooks'
 import { outHref } from './outlink'
 import { cstDate, esc, excerpt, extractWeiboTopics, fmtDate, fmtDateCN, fmtDateTime, isoDate, NICKNAME_CHANGE_COOLDOWN_MS, nicknameCooldown } from './utils'
@@ -666,6 +666,8 @@ export interface WeiboItemView {
   id: number
   content: string
   images: string[]
+  /** 单条视频（B19）：媒体区先视频后图片；null / 缺省 = 无视频 */
+  video?: WeiboVideoView | null
   created_at: number
   likes: number
   commentCount: number
@@ -691,6 +693,21 @@ export function weiboImageGrid(images: string[]): string {
   const cls = n === 1 ? 'wb-imgs-1' : n === 2 || n === 4 ? 'wb-imgs-2' : 'wb-imgs-3'
   const imgs = images.map((u) => `<img src="${esc(u)}" loading="lazy" alt="">`).join('')
   return `<div class="wb-imgs ${cls}">${imgs}</div>`
+}
+
+/** 微博视频块（B19）：单视频，控件齐全、只预载元数据（不预下整段），有原始宽高时换算占位比例避免加载抖动。
+ *  无封面帧时叠一个 ▶ 角标（播放后由 site.js 给 .wb-video 挂 is-playing 收起）；竖屏视频交主题 CSS 居中限高。
+ *  src 只可能来自 parseWeiboVideo 白名单（站内 /images/ 或 http(s)），仍统一过 esc。 */
+export function weiboVideoHtml(v: WeiboVideoView, en = false): string {
+  const portrait = v.w > 0 && v.h > 0 && v.h > v.w
+  const ratio = v.w > 0 && v.h > 0 ? ` style="aspect-ratio:${v.w}/${v.h}"` : ''
+  const poster = v.poster ? ` poster="${esc(v.poster)}"` : ''
+  const badge = v.poster ? '' : '<span class="wb-video-badge" aria-hidden="true"></span>'
+  const mime = /\.webm(\?|#|$)/i.test(v.url) ? 'video/webm' : 'video/mp4'
+  const src = esc(v.url)
+  // 单行输出（与 weiboImageGrid 一致）：site.js 的 wbVideoHtmlJs 是它的手工 ES5 镜像，
+  // tests/weibo-admin.test.ts 把两侧同输入比对，别为了好看加换行缩进
+  return `<div class="wb-video${portrait ? ' is-portrait' : ''}${v.poster ? '' : ' is-plain'}"><video controls playsinline preload="metadata"${poster}${ratio}><source src="${src}" type="${mime}"><a class="wb-video-fallback" href="${src}" target="_blank" rel="noopener noreferrer">${tr(en, '视频')}</a></video>${badge}</div>`
 }
 
 /** 微博正文链接尾部标点（句读/引号/右括号）留在链接外，括号配对时保留（维基百科类 URL）。
@@ -855,6 +872,7 @@ export function weiboCards(o: {
     ${w.pinned ? `<span class="wb-pin">${tr(en, '置顶')}</span>` : ''}
   </header>
   ${w.content ? `<div class="wb-text">${weiboTextHtml(w.content)}</div>` : ''}
+  ${w.video ? weiboVideoHtml(w.video, en) : ''}
   ${weiboImageGrid(w.images)}
   ${foot}
   ${panel}
@@ -879,11 +897,20 @@ export function weiboHomeEntry(o: { items: WeiboItemView[]; total: number; en?: 
   const en = !!o.en
   const items = o.items
     .map((w) => {
-      // 摘要统一走 excerpt（含空白折叠），与历史上的今天等处同口径
+      // 无正文时用媒体兜底文案：视频优先，其次配图数；视频的封面帧同时充当初图
       const text = w.content || ''
-      const short = text ? excerpt(text, 64) : en ? `Posted ${w.images.length} ${plural(w.images.length, 'photo', 'photos')}` : `发了 ${w.images.length} 张图`
-      const thumb = w.images[0]
-        ? `<span class="wb-home-thumb"><img src="${esc(w.images[0])}" loading="lazy" alt=""></span>`
+      const short = text
+        ? excerpt(text, 64)
+        : w.video
+          ? en
+            ? 'Posted a video'
+            : '发了一段视频'
+          : en
+            ? `Posted ${w.images.length} ${plural(w.images.length, 'photo', 'photos')}`
+            : `发了 ${w.images.length} 张图`
+      const thumbUrl = w.images[0] || (w.video ? w.video.poster : '')
+      const thumb = thumbUrl
+        ? `<span class="wb-home-thumb"><img src="${esc(thumbUrl)}" loading="lazy" alt=""></span>`
         : ''
       return `<a class="wb-home-item" href="/weibo?wb=${w.id}#wb-${w.id}">
   <div class="wb-home-main">

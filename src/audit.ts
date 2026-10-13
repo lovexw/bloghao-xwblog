@@ -10,6 +10,7 @@ import type { Env } from './types'
  *
  * 引用源清单（新增存图片地址的字段时必须同步 pullReferenceTexts）：
  *   posts.content（含 <meta data-og-image>）与 posts.cover、pages.content、weibo.images、
+ *   weibo.video（视频地址与封面帧，B19）、
  *   users.avatar、friend_links.icon、settings.value（favicon/头像/OG 默认图）、tg_buffer（待合并的 TG 相册）。
  *   评论正文是纯文本不存 HTML，不构成引用源。
  */
@@ -139,6 +140,8 @@ async function pullReferenceTexts(db: D1Database): Promise<string[]> {
     ['posts', 'content'],
     ['pages', 'content'],
     ['weibo', 'images'],
+    // 视频列存 JSON（url + poster 都是 /images/ 地址）：不进引用源会被体检误判为「未被引用」（B19）
+    ['weibo', 'video'],
   ] as const) {
     texts.push(...(await bucketedColumnScan(db, table, column)))
   }

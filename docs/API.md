@@ -199,8 +199,8 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 ### 微博（随手记）
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/admin/weibo?status=all\|published\|draft&page=1&limit=20` | 列表（置顶优先；元素附 `imageList`、`topicList`、`commentCount`） |
-| GET | `/api/admin/weibo/:id` | 单条原稿（前台卡片「编辑」的数据源，附 `imageList`、`topicList`） |
+| GET | `/api/admin/weibo?status=all\|published\|draft&page=1&limit=20` | 列表（置顶优先；元素附 `imageList`、`topicList`、`videoView`、`commentCount`） |
+| GET | `/api/admin/weibo/:id` | 单条原稿（前台卡片「编辑」的数据源，附 `imageList`、`topicList`、`videoView`） |
 | POST | `/api/admin/weibo` | 新建（发布或存草稿） |
 | PUT | `/api/admin/weibo/:id` | 更新（转回草稿会自动取消置顶） |
 | POST | `/api/admin/weibo/:id/pin` | Body `{pinned:true/false}` |
@@ -212,11 +212,20 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 {
   "content": "文字内容，可含 #话题",
   "images": ["/images/u/202610/xxx.jpg"],
+  "video": { "url": "/images/u/202610/xxx.mp4", "poster": "/images/u/202610/xxx-poster.jpg", "w": 1280, "h": 720 },
   "status": "published | draft"
 }
 ```
 
-约束：`content` ≤ 5000 字；`images` ≤ 9 张、只接受站内 `/images/` 与 `http(s)` 外链；`content` 与 `images` 不能同时为空；**话题不接受直传**——服务端从正文 `#话题`（兼容成对 `#话题#` 与 `#层级/标签`）自动提取；置顶最多 3 条，草稿不能置顶。
+约束：`content` ≤ 5000 字；`images` ≤ 9 张、只接受站内 `/images/` 与 `http(s)` 外链；`content` / `images` / `video` 不能同时为空；**话题不接受直传**——服务端从正文 `#话题`（兼容成对 `#话题#` 与 `#层级/标签`）自动提取；置顶最多 3 条，草稿不能置顶。
+
+微博视频（B19，选填，**一条微博最多 1 个**）：
+
+- `video.url` 必填：站内 `/images/` 或 `http(s)` 外链（其余 scheme 整体 400）；建议经 `POST /admin/upload` 上传 mp4 / webm 后再落库（≤25MB，服务端只认文件魔数，不信任 Content-Type）
+- `video.poster` 封面帧（选填，同白名单口径，非法当没填）；`video.w` / `video.h` 原始宽高（选填，渲染期按它写占位比例，非数字或越界归 0）
+- **缺键即保留**：PUT 不带 `video` 键时原值不动（后台列表「发布 / 下架」、前台旧编辑器等只发 content+images+status 的调用点不会把视频静默清掉）；显式传 `null` 或空串 = 清除
+- 出参里 `video` 是原始 JSON 字符串（与 `images` / `topics` 同口径），解析后的对象在 `videoView`（`{url, poster, w, h}`，无视频 = `null`）
+- 防泄漏口径：视频文件不进 RSS，也不随插件同步出站——发布事件 payload 的 `video` 只带 `{url, poster}`，广场同步与 `GET /api/public/weibo` 取封面帧当缩略图
 
 ### 友情链接
 | 方法 | 路径 | 说明 |
