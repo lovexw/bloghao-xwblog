@@ -255,11 +255,13 @@ export function cleanRobotsExtra(raw: string): string {
 
 /**
  * 组装 robots.txt：内置段（Allow / Disallow: /admin / Sitemap）+ settings.robotsExtra 追加段。
- * 演示站固定整站 Disallow（种子数据与闭站状态不该进索引），追加段不参与。
- * 未配置追加段时输出与历史版本逐字节一致。
+ * 演示站固定整站 Disallow（种子数据与闭站状态不该进索引），追加段不参与；
+ * 全站 noindex 开关（settings.siteNoindex）同理整站 Disallow——空白模板站 / 镜像站不进索引，
+ * 页面侧 <meta noindex> 由 pages.ts pageOpts 同口径注入。追加段在这两种状态下不参与。
+ * 未配置追加段且未开 noindex 时输出与历史版本逐字节一致。
  */
 export function buildRobotsTxt(settings: SettingsMap, origin: string, demo = false): string {
-  if (demo) return 'User-agent: *\nDisallow: /\n'
+  if (demo || settings.siteNoindex === '1') return 'User-agent: *\nDisallow: /\n'
   const base = `User-agent: *\nAllow: /\nDisallow: /admin\nSitemap: ${origin}/sitemap.xml\n`
   const extra = cleanRobotsExtra(settings.robotsExtra || '')
   return extra ? `${base}\n${extra}\n` : base

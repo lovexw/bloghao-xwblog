@@ -155,6 +155,13 @@ test('robots.txt 组装：未配置与历史版本逐字节一致，配置后追
   )
   // 演示站：整站 Disallow，追加段不参与（种子数据与闭站状态不该进索引）
   assert.equal(buildRobotsTxt({ ...S, robotsExtra: 'Allow: /x' }, 'https://demo.example.com', true), 'User-agent: *\nDisallow: /\n')
+  // 全站 noindex 开关（settings.siteNoindex）：同演示站整站 Disallow，追加段不参与；
+  // 关闭（默认 '0'/缺省）时与历史输出逐字节一致
+  assert.equal(
+    buildRobotsTxt({ ...S, siteNoindex: '1', robotsExtra: 'Allow: /x' }, 'https://blog.example.com'),
+    'User-agent: *\nDisallow: /\n'
+  )
+  assert.equal(buildRobotsTxt({ ...S, siteNoindex: '0' }, 'https://blog.example.com'), builtin)
 })
 
 /* ---------------- 四、Speculation Rules ---------------- */

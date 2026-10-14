@@ -70,9 +70,13 @@ import { analyticsOrigin, breadcrumbJsonLd, isSpeculativeRequest } from './seo'
 type C = Context<{ Bindings: Env; Variables: { user: SessionUser | null } }>
 
 /** 演示站包装：所有公开页强制 noindex（内容是每两小时重置的种子数据，不该进搜索引擎索引），
- *  并公示「演示体验版」横幅（render.ts page() 顶部注入）；生产模式原样透传 */
+ *  并公示「演示体验版」横幅（render.ts page() 顶部注入）；生产模式原样透传。
+ *  全站 noindex 开关（settings.siteNoindex，2026-10 SEO 审计）：空白模板站 / 演示性镜像 /
+ *  临时预览实例不想进搜索引擎索引时，后台「设置 → 站点状态」一键关收录——页面照常可访问，
+ *  robots.txt 同步整站 Disallow（src/seo.ts buildRobotsTxt 同口径）。 */
 function pageOpts(c: C, o: Parameters<typeof page>[0]): Parameters<typeof page>[0] {
-  return isDemo(c.env) ? { ...o, noindex: true, demo: true } : o
+  if (isDemo(c.env)) return { ...o, noindex: true, demo: true }
+  return o.settings.siteNoindex === '1' ? { ...o, noindex: true } : o
 }
 
 /** Cloudflare Turnstile 挑战脚本与 iframe 的固定可信端点（仅会员页放行） */
@@ -476,15 +480,19 @@ async function renderList(
         ])
       : undefined
   c.header('Cache-Control', 'no-cache')
+  // 标签页是自动生成的薄聚合页：noindex 退出索引，canonical 用 /tag/:x 自指（而非此前强制指向
+  // 首页——「sitemap 提交、canonical 却指首页」是自相矛盾信号，2026-10 SEO 审计）；
+  // ?tag= 查询串形态也随之归一到 /tag/ 短链形态。标签页不进 sitemap（rss.ts buildSitemap 同口径）
+  const listPath = opts.mode === 'home' ? (tag ? `/tag/${encodeURIComponent(tag)}` : '/') : url.pathname
   return c.html(
     page(pageOpts(c, {
       settings,
       css: theme.css,
       title,
       description: (opts.mode === 'category' && category?.description) || settings.siteDescription,
-      path: opts.mode === 'home' ? '/' : url.pathname,
+      path: listPath,
       origin: url.origin,
-      noindex: opts.mode === 'search',
+      noindex: opts.mode === 'search' || (opts.mode === 'home' && !!tag),
       jsonLd: listBreadcrumb,
       body: html,
     }))

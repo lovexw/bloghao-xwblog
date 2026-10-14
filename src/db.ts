@@ -86,6 +86,10 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   siteClosed: '0',
   // 闭站页公告文案，空 = 使用内置默认文案
   siteClosedMessage: '',
+  // 全站 noindex（2026-10 SEO 审计）：所有公开页 <meta name="robots" content="noindex"> +
+  // robots.txt 整站 Disallow——用于空白模板站 / 演示性镜像 / 临时预览实例不进搜索引擎索引；
+  // 与闭站不同：页面照常可访问，只是不让收录。默认关闭（正常收录）
+  siteNoindex: '0',
   // 会员体系总开关（契约见 docs/DEVPLAN-2026-10-07.md 附录 A）：关闭时前台无会员入口、/api/member/* 返回 404
   membersEnabled: '0',
   // 排行榜展示条数上限（/rank 页与首页挂件共用，1-50）
@@ -411,7 +415,30 @@ export async function listSitemapPosts(db: D1Database): Promise<{ slug: string; 
   return results ?? []
 }
 
-/** 已发布文章用到的标签聚合（导航菜单/sitemap 用），按使用次数倒序 */
+/** sitemap 用：每个分类下已发布文章的最新更新时间（分类归档页的 lastmod） */
+export async function listSitemapCategoryLastmod(db: D1Database): Promise<{ slug: string; lastmod: number }[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT c.slug, MAX(p.updated_at) AS lastmod
+       FROM post_categories pc
+       JOIN posts p ON p.id = pc.post_id
+       JOIN categories c ON c.id = pc.category_id
+       WHERE p.status = 'published' AND p.deleted_at IS NULL
+       GROUP BY c.slug`
+    )
+    .all<{ slug: string; lastmod: number }>()
+  return results ?? []
+}
+
+/** sitemap 用：最新一条已发布微博的时间（/weibo 页的 lastmod） */
+export async function listWeiboLastmod(db: D1Database): Promise<number> {
+  const row = await db
+    .prepare("SELECT MAX(COALESCE(published_at, created_at)) AS ts FROM weibo WHERE status = 'published' AND deleted_at IS NULL")
+    .first<{ ts: number | null }>()
+  return row?.ts ?? 0
+}
+
+/** 已发布文章用到的标签聚合（导航菜单用），按使用次数倒序 */
 export async function listPublishedTags(db: D1Database): Promise<{ name: string; count: number }[]> {
   const { results } = await db
     .prepare("SELECT tags FROM posts WHERE status = 'published' AND deleted_at IS NULL LIMIT 1000")

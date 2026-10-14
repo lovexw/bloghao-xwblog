@@ -2868,7 +2868,7 @@ async function viewSettings() {
 
     <div class="stab-pane" data-pane="advance" hidden>
     <div class="panel" style="padding:20px;">
-      <div class="form-section"><h3>站点状态</h3><div class="sec-desc">特殊时刻的全站开关：两个都是可逆的，随时保存随时恢复</div>
+      <div class="form-section"><h3>站点状态</h3><div class="sec-desc">特殊时刻的全站开关：都是可逆的，随时保存随时恢复</div>
         <div class="switch-row">
           <div><div class="switch-label">灰度模式</div><div class="switch-sub">全站去色显示（黑白），用于哀悼、纪念等特殊时刻；后台不受影响</div></div>
           <label class="switch"><input type="checkbox" id="st-siteGrayscale" ${s.siteGrayscale === '1' ? 'checked' : ''}><span class="track"></span></label>
@@ -2878,6 +2878,10 @@ async function viewSettings() {
           <label class="switch"><input type="checkbox" id="st-siteClosed" ${s.siteClosed === '1' ? 'checked' : ''} ${state.demo ? 'disabled' : ''}><span class="track"></span></label>
         </div>
         <div class="form-item"><label>闭站公告（展示在闭站页，支持换行；留空使用默认文案）</label><textarea class="textarea" id="st-siteClosedMessage" rows="3" maxlength="1000" placeholder="本站暂时关闭，请稍后再来。" ${state.demo ? 'disabled' : ''}>${esc(s.siteClosedMessage || '')}</textarea></div>
+        <div class="switch-row">
+          <div><div class="switch-label">禁止搜索引擎收录（noindex）</div><div class="switch-sub">开启后全站页面加 noindex 标记、robots.txt 整站禁止抓取：页面照常可访问，只是不再被搜索引擎收录。适合空白模板站、镜像站或临时预览实例；正式运营的博客不要开</div></div>
+          <label class="switch"><input type="checkbox" id="st-siteNoindex" ${s.siteNoindex === '1' ? 'checked' : ''}><span class="track"></span></label>
+        </div>
       </div>
     </div>
 
@@ -3123,6 +3127,7 @@ async function viewSettings() {
       siteGrayscale: g('st-siteGrayscale').checked ? '1' : '0',
       siteClosed: g('st-siteClosed').checked ? '1' : '0',
       siteClosedMessage: g('st-siteClosedMessage').value.trim(),
+      siteNoindex: g('st-siteNoindex').checked ? '1' : '0',
       telegramBotToken: g('st-telegramBotToken').value.trim(),
       telegramAllowFrom: g('st-telegramAllowFrom').value.trim(),
       tgChannelChatId: g('st-tgChannelChatId').value.trim(),

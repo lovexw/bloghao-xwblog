@@ -374,7 +374,13 @@ function pager(activeSlug) {
   return `\n  <nav class="docs-pager">\n    ${parts.join('\n    ')}\n  </nav>`
 }
 
-function page({ title, description, body }) {
+function page({ title, description, body, path }) {
+  // SEO（2026-10 审计补齐）：canonical 自指绝对地址、og:url/og:image 绝对地址——
+  // 相对 og:image（./assets/…）微信 / X / Telegram 抓不到分享图
+  const url = `https://bloghao.com${path}`
+  const seo = `<link rel="canonical" href="${url}">
+<meta property="og:url" content="${url}">
+<meta property="og:image" content="https://bloghao.com/assets/editor.png">`
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -382,6 +388,7 @@ function page({ title, description, body }) {
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>${title}</title>
 <meta name="description" content="${description}">
+${seo}
 <meta property="og:title" content="${title}">
 <meta property="og:description" content="${description}">
 <meta property="og:type" content="article">
@@ -421,6 +428,7 @@ ${html}
     title: `${doc.title} - 博客号文档`,
     description: doc.desc,
     body,
+    path: `/docs/${doc.slug}.html`,
   })
 }
 
@@ -465,6 +473,7 @@ function indexPage() {
     title: '文档中心 - 博客号 BlogHao',
     description: '博客号 BlogHao 全部中文文档：部署教程、使用手册、Cloudflare 基础、主题开发、插件开发、API 参考、排版规范、演示站指南、路线图、版本大事记与逐版本更新日志。',
     body,
+    path: '/docs/',
   })
 }
 
@@ -515,6 +524,17 @@ async function patchHandWrittenPage() {
         const before2 = src
         src = src.replace(/(href=")(?:\.\.\/|\/)favicon\.svg[^"]*(")/g, `$1/favicon.svg${V}$2`)
         src = src.replace(/(src=")(?:\.\.\/|\/)favicon\.svg[^"]*(")/g, `$1/favicon.svg${V}$2`)
+        return src !== before2
+      },
+    },
+    {
+      what: '规范链接与分享图',
+      run: () => {
+        const before2 = src
+        if (!src.includes('<link rel="canonical"')) {
+          const seo = `<link rel="canonical" href="https://bloghao.com/docs/security-audit.html">\n<meta property="og:url" content="https://bloghao.com/docs/security-audit.html">\n<meta property="og:image" content="https://bloghao.com/assets/editor.png">`
+          src = src.replace('</title>', `</title>\n${seo}`)
+        }
         return src !== before2
       },
     },

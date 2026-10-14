@@ -1193,6 +1193,64 @@ try {
   console.log(`  ${seoOff.status === 200 ? '✓' : '✗'} SEO 链路：还原配置`)
   await check('GET', '/robots.txt', 200, undefined, { notContains: 'smoke-drafts' })
 
+  // ── SEO 收录口径链路（2026-10 SEO 审计）：sitemap 收录面收敛、标签页 noindex + canonical 自指、
+  //    全站 noindex 开关（settings.siteNoindex）。与 src/rss.ts buildSitemap / pages.ts renderList /
+  //    seo.ts buildRobotsTxt 三处同口径，改任一侧先跑这段 ──
+  console.log('\n▸ SEO 收录口径链路')
+  {
+    const sm = await raw('GET', '/sitemap.xml')
+    const smBody = await sm.text()
+    const smOk =
+      sm.status === 200 &&
+      smBody.includes('/post/smoke-multi-tag') &&
+      smBody.includes('/about</loc>') &&
+      smBody.includes('/weibo</loc>') &&
+      smBody.includes('<lastmod>') &&
+      // 标签薄页 / 留言板 / 友链不再主动提交；/page/about 是 301 目标，只提交规范地址 /about
+      !smBody.includes('/tag/') &&
+      !smBody.includes('/guestbook') &&
+      !smBody.includes('/links</loc>') &&
+      !smBody.includes('/page/about')
+    results.push(['sitemap 收录口径：文章/关于/微博在，标签页与薄页/301 页不在', smOk])
+    console.log(`  ${smOk ? '✓' : '✗'} sitemap 收录口径（status ${sm.status}）`)
+
+    // 标签页：noindex 退出索引，canonical 用 /tag/短链形态自指（不再指首页）
+    const tagEnc = encodeURIComponent('冒烟测试')
+    const tagPage = await raw('GET', `/tag/${tagEnc}`)
+    const tagHtml = await tagPage.text()
+    const tagOk =
+      tagPage.status === 200 &&
+      tagHtml.includes('<meta name="robots" content="noindex">') &&
+      new RegExp(`rel="canonical" href="[^"]*\\/tag\\/${tagEnc}"`).test(tagHtml)
+    results.push(['标签页 noindex + canonical 自指 /tag/短链', tagOk])
+    console.log(`  ${tagOk ? '✓' : '✗'} 标签页 noindex + canonical 自指（status ${tagPage.status}）`)
+
+    // 全站 noindex 开关：页面出 noindex meta、robots.txt 整站 Disallow；关闭后恢复
+    const nxOn = await putSettings({ siteNoindex: '1' })
+    const nxHome = await raw('GET', bypassUrl('/'))
+    const nxHtml = await nxHome.text()
+    const nxRobotsTxt = await (await raw('GET', '/robots.txt')).text()
+    const nxOk =
+      nxOn.status === 200 &&
+      nxHtml.includes('<meta name="robots" content="noindex">') &&
+      nxRobotsTxt === 'User-agent: *\nDisallow: /\n'
+    results.push(['全站 noindex：页面 meta + robots.txt 整站 Disallow', nxOk])
+    console.log(`  ${nxOk ? '✓' : '✗'} 全站 noindex：页面 meta + robots.txt（status ${nxOn.status}）`)
+
+    const nxOff = await putSettings({ siteNoindex: '0' })
+    const backRobotsTxt = await (await raw('GET', '/robots.txt')).text()
+    const backHome = await raw('GET', bypassUrl('/'))
+    // 恢复后 robots.txt 回到内置段（Allow: / + 仅 Disallow: /admin + Sitemap 行），页面无 noindex
+    const backOk =
+      nxOff.status === 200 &&
+      backRobotsTxt.includes('Allow: /') &&
+      backRobotsTxt.includes('Disallow: /admin') &&
+      backRobotsTxt.includes('Sitemap:')
+    const backNoindex = !(await backHome.text()).includes('<meta name="robots" content="noindex">')
+    results.push(['全站 noindex：关闭后恢复正常收录（robots.txt 还原 + 页面无 noindex）', backOk && backNoindex])
+    console.log(`  ${backOk && backNoindex ? '✓' : '✗'} 全站 noindex：关闭后恢复`)
+  }
+
   // ── 页面边缘缓存链路（src/pagecache.ts）：miss 回填 → 命中 → 设置换代作废 → 一键清理端点 ──
   // wrangler dev 有 caches.default（workerd 模拟），链路可端到端验证；冒烟其余段落全走
   // bypassUrl（带 query 不进缓存），本段是唯一刻意不带旁路参数的页面请求

@@ -5,7 +5,7 @@ import { api } from './api'
 import { cleanBotPath, identifyBot, purgeBots, recordBot, shouldRecordBot } from './bots'
 import { siteClosedResponse } from './closed'
 import { clientIp, getCookie, rateLimit } from './auth'
-import { ensureSchema, getPostBySlug, getSettings, listCategories, listPublishedTags, listPosts, listSitemapPages, listSitemapPosts } from './db'
+import { ensureSchema, getPostBySlug, getSettings, listCategories, listPosts, listSitemapCategoryLastmod, listSitemapPages, listSitemapPosts, listWeiboLastmod } from './db'
 import { isEn, recordEditionFailure } from './i18n'
 import { mcpRoutes } from './mcp'
 import { goPageHtml, isTrustedOutHost } from './outlink'
@@ -19,7 +19,7 @@ import { purgeVisits } from './stats'
 import { purgeTrash } from './trash'
 import { refreshFootStats } from './db'
 import type { Env, SessionUser } from './types'
-import { isDemo } from './utils'
+import { fmtDate, isDemo } from './utils'
 
 const app = new Hono<{ Bindings: Env; Variables: { user: SessionUser | null } }>()
 
@@ -232,16 +232,30 @@ app.get('/feed.json', jsonFeedHandler)
 
 app.get('/sitemap.xml', async (c) => {
   const settings = await getSettings(c.env.DB)
-  const [posts, categories, tags, pages] = await Promise.all([
+  const [posts, categories, catLastmod, pages, wbLastmod] = await Promise.all([
     listSitemapPosts(c.env.DB),
     listCategories(c.env.DB),
-    listPublishedTags(c.env.DB),
+    listSitemapCategoryLastmod(c.env.DB),
     listSitemapPages(c.env.DB),
+    listWeiboLastmod(c.env.DB),
   ])
   const siteUrl = siteBase(settings, new URL(c.req.url).origin)
+  const lastmodBySlug = new Map(catLastmod.map((r) => [r.slug, r.lastmod]))
   c.header('Content-Type', 'application/xml; charset=utf-8')
   c.header('Cache-Control', 'public, max-age=600')
-  return c.body(buildSitemap(settings, posts, siteUrl, categories, tags, pages))
+  return c.body(
+    buildSitemap(
+      settings,
+      posts,
+      siteUrl,
+      categories.map((cat) => {
+        const ts = lastmodBySlug.get(cat.slug) || 0
+        return { ...cat, lastmod: ts ? fmtDate(ts) : '' }
+      }),
+      pages,
+      wbLastmod || undefined
+    )
+  )
 })
 
 /** robots.txt（B20）：内置段 + 后台「设置 → 站点」的 robots 追加段（src/seo.ts buildRobotsTxt）；

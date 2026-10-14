@@ -1740,6 +1740,7 @@ const BOOL_SETTINGS = [
   'statsEnabled',
   'siteGrayscale',
   'siteClosed',
+  'siteNoindex',
   'membersEnabled',
 ]
 
