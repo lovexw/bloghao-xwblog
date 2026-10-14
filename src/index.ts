@@ -9,7 +9,7 @@ import { ensureSchema, getPostBySlug, getSettings, listCategories, listPublished
 import { isEn, recordEditionFailure } from './i18n'
 import { mcpRoutes } from './mcp'
 import { goPageHtml, isTrustedOutHost } from './outlink'
-import { pageCacheMiddleware } from './pagecache'
+import { imageCacheMatch, imageCachePut, pageCacheMiddleware } from './pagecache'
 import { renderAbout, renderArchive, renderCategory, renderGuestbook, renderHome, renderLinks, renderMember, renderNotFound, renderPage, renderPost, renderRank, renderSearch, renderWeibo } from './pages'
 import { mergeUnlockCookie, PP_COOKIE, PP_TTL_MS, verifyPostPassword } from './protect'
 import { buildJsonFeed, buildRss, buildSitemap } from './rss'
@@ -79,7 +79,7 @@ app.use('*', async (c, next) => {
   await next()
 })
 
-/* ---------------- 页面边缘缓存（src/pagecache.ts）：公开页 / 订阅源 / 公开只读 API · 匿名访客 · 5 分钟副本 ----------------
+/* ---------------- 页面边缘缓存（src/pagecache.ts）：公开页 / 订阅源 / 公开只读 API · 匿名访客 · 30 分钟副本 ----------------
  * 命中直接吐响应跳过 SSR/API 与 D1。登录 Cookie / 演示站 / 灰度一律不进缓存；带 query 走受控
  * 白名单（page/limit/wb/topic/q/sort/tag 镜像服务端 clamp 语义进键，未知参数 / sort=random 回源）。
  * 注册位必须在所有页面路由与 /api、/mcp 子应用之前（终点 handler 不调 next），且在闭站 /
@@ -261,6 +261,11 @@ app.get('/images/*', async (c) => {
     /* 保持原样 */
   }
   if (!key.startsWith('u/') && !key.startsWith('og/')) return c.text('Not found', 404)
+  // 图床边缘缓存（src/pagecache.ts imageCacheMatch）：键内容寻址（saveUpload 时间戳+随机数，
+  // 同键永不覆盖），colo 副本命中直接返回，省一次 Worker→R2 的跨境回源；404 不缓存，
+  // If-None-Match 复验也先在边缘层做
+  const hit = await imageCacheMatch(c.req.raw)
+  if (hit) return hit
   const obj = await c.env.IMAGES.get(key)
   if (!obj) return c.text('Not found', 404)
   if (obj.httpEtag && c.req.header('If-None-Match') === obj.httpEtag) {
@@ -277,7 +282,9 @@ app.get('/images/*', async (c) => {
   headers.set('Cache-Control', 'public, max-age=31536000, immutable')
   // 禁止浏览器嗅探内容类型：图床里只允许真正的图片被当图片渲染
   headers.set('X-Content-Type-Options', 'nosniff')
-  return new Response(obj.body, { headers })
+  const res = new Response(obj.body, { headers })
+  imageCachePut(c.req.raw, res, c.executionCtx)
+  return res
 })
 
 /* ---------------- 后台入口 ---------------- */

@@ -5,7 +5,7 @@ import { PP_COOKIE } from './protect'
 import type { Env, SessionUser } from './types'
 import { isDemo } from './utils'
 
-/* ---------------- 页面边缘缓存（公开面 · 匿名访客 5 分钟副本） ----------------
+/* ---------------- 页面边缘缓存（公开面 · 匿名访客 30 分钟副本） ----------------
  * 单文件自洽模块（同 protect.ts / closed.ts 三件套口径），Node 测试可直接导入。
  *
  * 是什么：Cache API（caches.default，colo 级共享）给公开面存一份短 TTL 副本，
@@ -30,15 +30,23 @@ import { isDemo } from './utils'
  *
  * 失效：settings 键 pageCacheEpoch 进缓存键。saveSettings 每次保存自动换新（db.ts 单点，
  * 改设置 = 全站页面即刻作废）；后台「概览 → 系统」一键清理 = purgePageCache 显式写一次。
- * 内容发布/删除【不】自动清理——发布入口太散（后台/开放 API/TG/MCP/定时发布），故意只靠
- * 5 分钟 TTL + 手动按钮；访客最多滞后 5 分钟，新文章直链本身是 miss 即时可见。
+ * 内容变更即时失效（2026-10-14，TTL 随之放宽到 30 分钟）：发布 / 下架 / 评论走 hooks 总线
+ * 单点挂 purgePageCache（firePostPublished / fireWeiboPublished / fireCommentCreated /
+ * firePlazaRetract 四个出口覆盖后台、开放 API、TG、MCP、定时发布全部入口），散口（编辑
+ * 已发布内容、置顶、页面增删改、回收站恢复、评论审核与删除、媒体合并）在 api.ts 各端点
+ * 写库成功后补一次 purge——访客滞后只出现在未挂 purge 的装饰性变化（点赞数等），最长 30 分钟。
+ *
+ * 图床边缘缓存（imageCacheMatch / imageCachePut，/images/* 专用）：R2 键内容寻址
+ * （store.ts saveUpload 时间戳+随机数，同键永不覆盖），首次访问回 R2 后同 colo 后续请求
+ * 直接边缘命中，省掉每次 Worker→R2 的跨境回源（图片是文章页的流量大头）。键不带 epoch：
+ * 内容寻址永不失效，TTL 由 R2 对象自带的 immutable 头（1y）决定。
  *
  * Node 测试与 docker-poc 无 caches.default：整层自动退化为直查直渲染，无需 shim。
  * 访客统计不受影响：visit_log 走 /api/public/track POST（永不缓存），bot_log 中间件注册
  * 在缓存之前照常记录；posts.views 阅读数只在回源渲染时 +1，边缘命中不计数——属预期取舍。
  */
 
-export const PAGE_CACHE_TTL_S = 300
+export const PAGE_CACHE_TTL_S = 1800
 
 /** 可缓存的公开页面路由白名单：新增公开页要过一遍「这个页对匿名访客是否千人一面」 */
 const CACHEABLE_PAGE_RE =
@@ -207,5 +215,76 @@ export function pageCacheMiddleware(): MiddlewareHandler<AppEnv> {
     } catch {
       /* 回填失败不影响本次响应 */
     }
+  }
+}
+
+/* ---------------- 图床边缘缓存（/images/* 专用，同模块第二职责） ---------------- */
+
+/** 图床缓存键（纯函数，tests 直接导入）：query 不进键——/images 路由不读 query，
+ *  ?v= 之类的破缓存参数拿到的也是同一份字节；带 host 防多域名串副本 */
+export function imageCacheKeyFor(url: string): string | null {
+  let u: URL
+  try {
+    u = new URL(url)
+  } catch {
+    return null
+  }
+  return `https://xwblog-internal.invalid/__img/${u.host}${u.pathname}`
+}
+
+/** 只有 200 的图片/视频响应才回填边缘（404 / 带 Set-Cookie 的异常响应不缓存，防负缓存）；
+ *  R2 无 contentType 的兜底 application/octet-stream 不在列——宁可不缓存 */
+export function isImageStorable(res: Response): boolean {
+  if (res.status !== 200) return false
+  if (res.headers.has('set-cookie')) return false
+  return /^(image|video)\//.test((res.headers.get('content-type') || '').split(';')[0].trim())
+}
+
+type WaitUntil = { waitUntil(promise: Promise<unknown>): void }
+
+/** 图床边缘缓存读：命中返回副本（带 If-None-Match 先在边缘复验 304，不再回 R2），未命中
+ *  返回 null 让调用方回 R2。Node / docker-poc 无 caches.default 恒 null（直查直渲染）。
+ *  Range 续传（视频 seek）：cache.match 返回整份 200 或切片 206，都兼容——回源 R2 的
+ *  现状本来就是整份 200，无回归 */
+export async function imageCacheMatch(req: Request): Promise<Response | null> {
+  const cache = sharedCache()
+  if (!cache || req.method !== 'GET') return null
+  const key = imageCacheKeyFor(req.url)
+  if (!key) return null
+  try {
+    const hit = await cache.match(key)
+    if (!hit) return null
+    const etag = hit.headers.get('ETag')
+    if (etag && req.headers.get('If-None-Match') === etag) {
+      // 304 只带复验必需的头（content-length/type 是 200 的内容描述，304 带上反而语义错）
+      const h = new Headers()
+      for (const k of ['ETag', 'Cache-Control', 'X-Content-Type-Options']) {
+        const v = hit.headers.get(k)
+        if (v) h.set(k, v)
+      }
+      return new Response(null, { status: 304, headers: h })
+    }
+    const headers = new Headers(hit.headers)
+    headers.set('X-Image-Cache', 'hit')
+    return new Response(hit.body, { status: hit.status, headers })
+  } catch {
+    /* 缓存层异常按 miss 走 */
+    return null
+  }
+}
+
+/** 图床边缘缓存回填：存副本带上响应自身的 immutable 头（R2 httpMetadata，1y）；
+ *  内容寻址键永不失效，无 epoch。失败静默不影响本次响应 */
+export function imageCachePut(req: Request, res: Response, ctx: WaitUntil): void {
+  const cache = sharedCache()
+  if (!cache || !isImageStorable(res)) return
+  const key = imageCacheKeyFor(req.url)
+  if (!key) return
+  try {
+    const stored = res.clone()
+    ctx.waitUntil(cache.put(key, stored).catch(() => {}))
+    res.headers.set('X-Image-Cache', 'miss')
+  } catch {
+    /* 回填失败不影响本次响应 */
   }
 }

@@ -760,6 +760,9 @@ api.put('/admin/posts/:id', async (c) => {
       id
     )
     .run()
+  // 编辑已发布文章 → 页面边缘缓存整代作废（发布/下架广播只覆盖状态跃迁，重复编辑已发布
+  // 不触发任何广播；草稿自动保存不进这个分支，省无谓的全站换代）
+  if (existing.status === 'published') c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   const row = await getPostById(c.env.DB, id)
   if (p.categoryId != null) {
     const cat = await getCategoryById(c.env.DB, p.categoryId)
@@ -809,6 +812,8 @@ api.post('/admin/posts/:id/pin', async (c) => {
   await c.env.DB.prepare('UPDATE posts SET pinned = ?, updated_at = ? WHERE id = ?')
     .bind(body?.pinned ? 1 : 0, Date.now(), id)
     .run()
+  // 置顶改变首页/列表排序 → 页面边缘缓存整代作废（weibo 置顶同口径）
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true })
 })
 
@@ -934,6 +939,8 @@ api.put('/admin/weibo/:id', async (c) => {
   )
     .bind(p.content, JSON.stringify(p.images), video, JSON.stringify(p.topics), p.status, pinned, publishedAt, Date.now(), id)
     .run()
+  // 编辑已发布微博（含转回草稿）→ 页面边缘缓存作废；草稿→发布的跃迁由 fireWeiboPublished 附带清理
+  if (existing.status === 'published') c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   const row = await getWeiboById(c.env.DB, id)
   // 广播微博发布事件（服务端插件钩子，见 src/hooks.ts）：仅草稿 → 发布的跃迁，编辑已发布微博不触发
   if (p.status === 'published' && row && existing.status !== 'published') {
@@ -961,11 +968,13 @@ api.post('/admin/weibo/:id/pin', async (c) => {
       .bind(Date.now(), id, id, WEIBO_MAX_PINNED)
       .run()
     if ((res.meta.changes ?? 0) !== 1) return jsonError(`最多置顶 ${WEIBO_MAX_PINNED} 条微博，先取消一条吧`)
+    c.executionCtx.waitUntil(purgePageCache(c.env.DB))
     return c.json({ ok: true })
   }
   await c.env.DB.prepare('UPDATE weibo SET pinned = ?, updated_at = ? WHERE id = ?')
     .bind(body?.pinned ? 1 : 0, Date.now(), id)
     .run()
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true })
 })
 
@@ -1286,6 +1295,8 @@ api.post('/admin/pages', async (c) => {
     )
     .bind(title, slug, content, status, showInNav, now, now)
     .run()
+  // 页面进导航与公开面（/page/:slug）→ 新建即发布时页面边缘缓存作废
+  if (status === 'published') c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true, page: await getPageById(c.env.DB, Number(res.meta.last_row_id)) })
 })
 
@@ -1309,6 +1320,8 @@ api.put('/admin/pages/:id', async (c) => {
     .prepare('UPDATE pages SET title = ?, slug = ?, content = ?, status = ?, show_in_nav = ?, updated_at = ? WHERE id = ?')
     .bind(title, slug, content, status, showInNav, Date.now(), id)
     .run()
+  // 页面出现在导航与公开面，改标题/slug/内容/显隐都影响全站导航 → 页面边缘缓存作废
+  if (existing.status === 'published' || status === 'published') c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true, page: await getPageById(c.env.DB, id) })
 })
 
@@ -1317,6 +1330,8 @@ api.delete('/admin/pages/:id', async (c) => {
   if (!id) return jsonError('页面不存在', 404)
   // 软删进回收站（src/trash.ts）；about 页删除后 /about 走 legacy settings 回退分支
   await c.env.DB.prepare('UPDATE pages SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').bind(Date.now(), id).run()
+  // 页面从导航消失 → 页面边缘缓存整代作废
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true })
 })
 
@@ -1331,6 +1346,8 @@ api.post('/admin/pages/reorder', async (c) => {
   if (to < 0 || to >= items.length) return c.json({ ok: true })
   ;[items[idx], items[to]] = [items[to], items[idx]]
   await c.env.DB.batch(items.map((p, i) => c.env.DB.prepare('UPDATE pages SET sort = ? WHERE id = ?').bind(i, p.id)))
+  // 排序改变全站导航顺序 → 页面边缘缓存整代作废
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true })
 })
 
@@ -1381,6 +1398,8 @@ api.post('/admin/trash/:type/:id/restore', async (c) => {
       .run()
     if ((res.meta.changes ?? 0) !== 1) return jsonError('回收站里没有这条内容', 404)
   }
+  // 恢复（posts/weibo/pages 三路汇合）→ 恢复的内容重新出现在公开面，页面边缘缓存整代作废
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true })
 })
 
@@ -1566,7 +1585,10 @@ api.post('/admin/uploads/merge', async (c) => {
   const b = await c.req.json<{ keep?: unknown; remove?: unknown }>().catch(() => null)
   if (!b || typeof b.keep !== 'string' || !Array.isArray(b.remove)) return jsonError('参数不完整')
   try {
-    return c.json({ ok: true, ...(await mergeDuplicate(c.env, b.keep, b.remove)) })
+    const r = await mergeDuplicate(c.env, b.keep, b.remove)
+    // 合并把正文/微博里的重复图地址改写为保留键 → 页面边缘缓存作废（旧副本里的 URL 已失效）
+    c.executionCtx.waitUntil(purgePageCache(c.env.DB))
+    return c.json({ ok: true, ...r })
   } catch (e) {
     return jsonError(e instanceof Error ? e.message : '合并失败')
   }
@@ -1679,6 +1701,8 @@ api.put('/admin/comments/:id', async (c) => {
   const status = body.status
   // 会员评论过审才计积分（awardCommentPoints 按 ref_id 去重，反复 通过↔待审 不重复记）
   await c.env.DB.prepare('UPDATE comments SET status = ? WHERE id = ?').bind(status, id).run()
+  // 审核（通过/退回待审）改变评论在公开页面的可见性 → 页面边缘缓存整代作废
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   if (status === 'approved' && target.member_id) {
     // 封禁会员不记分：批量清理待审时会「通过」违规会员的评论，拉黑后再计分等于违规所得
     // 入账（解封后完整回到排行榜）；计分前核会员仍是 active
@@ -1696,6 +1720,8 @@ api.delete('/admin/comments/:id', async (c) => {
   if (!id) return jsonError('评论不存在', 404)
   // 回复（楼中楼）一并删除
   await c.env.DB.prepare('DELETE FROM comments WHERE id = ? OR parent_id = ?').bind(id, id).run()
+  // 评论从公开页面消失 → 页面边缘缓存整代作废（评论没有回收站，此操作不可恢复）
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true })
 })
 

@@ -169,3 +169,40 @@ test('purgePageCache：显式换 epoch，其他设置原样保留', async () => 
   assert.equal(after.siteTitle, '我的站', '清理只换代不动内容')
   assert.ok(Number(after[PAGE_CACHE_EPOCH_KEY]) > Number(before[PAGE_CACHE_EPOCH_KEY]), 'epoch 必须推进')
 })
+
+// ── 图床边缘缓存（/images/* 专用）：键判定与回填判据 ──
+// 防线核心：键内容寻址（saveUpload 同键永不覆盖）所以无 epoch 永久缓存是安全的；404 /
+// 异常响应绝不回填（防负缓存把「图不存在」钉死 1 年）；query 不进键（/images 不读 query）。
+
+test('imageCacheKeyFor：host+pathname 进键，query 剥离，非法 URL 返回 null', async () => {
+  const { imageCacheKeyFor } = await import('../src/pagecache.ts')
+  assert.equal(
+    imageCacheKeyFor('https://blog.x.com/images/u/202610/abc.png'),
+    'https://xwblog-internal.invalid/__img/blog.x.com/images/u/202610/abc.png',
+  )
+  assert.equal(
+    // query 不进键：/images 路由不读 query，?v= 的破缓存参数拿到的也是同一份字节
+    imageCacheKeyFor('https://blog.x.com/images/u/202610/abc.png?v=2'),
+    'https://xwblog-internal.invalid/__img/blog.x.com/images/u/202610/abc.png',
+  )
+  assert.equal(imageCacheKeyFor('not a url'), null)
+})
+
+test('isImageStorable：只回填 200 的图片/视频，404 与带 Set-Cookie 的响应拒绝', async () => {
+  const { isImageStorable } = await import('../src/pagecache.ts')
+  const img = (init: { status?: number; type?: string; setCookie?: boolean } = {}) =>
+    new Response('x', {
+      status: init.status ?? 200,
+      headers: {
+        'content-type': init.type ?? 'image/png',
+        ...(init.setCookie ? { 'set-cookie': 'a=b' } : {}),
+      },
+    })
+  assert.ok(isImageStorable(img()), '200 图片要回填')
+  assert.ok(isImageStorable(img({ type: 'video/mp4' })), '200 视频要回填（封面帧与微博视频都在图床）')
+  assert.ok(isImageStorable(img({ type: 'image/x-icon; charset=binary' })), '带参数的 mime 取分号前段')
+  assert.ok(!isImageStorable(img({ status: 404 })), '404 不回填（防负缓存）')
+  assert.ok(!isImageStorable(img({ setCookie: true })), '带 Set-Cookie 不回填')
+  assert.ok(!isImageStorable(img({ type: 'application/octet-stream' })), '无 contentType 兜底不回填')
+  assert.ok(!isImageStorable(img({ type: 'text/html' })), 'HTML 不回填')
+})

@@ -9,6 +9,7 @@
  * 页脚注入是同步渲染路径，插件 HTML 原样拼接不做转义（内容来自站长自己，与主题 CSS 同信任级）。
  */
 import { getSettings } from './db'
+import { purgePageCache } from './pagecache'
 import type { Env, SettingsMap } from './types'
 import { excerpt, isDemo } from './utils'
 
@@ -406,27 +407,36 @@ async function fireHook<P>(
   }
 }
 
-/** 发布事件广播：后台发布与定时到点两条路都会调；任何失败都不影响发布本身 */
-export function firePostPublished(env: Env, p: PostPublishedPayload): Promise<void> {
+/** 发布事件广播：后台发布与定时到点两条路都会调；任何失败都不影响发布本身。
+ *  发布动作附带清页面边缘缓存（pagecache.ts）：本函数是所有发布入口的单点漏斗
+ *  （后台 / 开放 API / TG / MCP / 定时发布），这里清一次比在各端点散挂稳；演示站整层
+ *  不缓存，跳过省两次 D1 往返 */
+export async function firePostPublished(env: Env, p: PostPublishedPayload): Promise<void> {
+  if (!isDemo(env)) await purgePageCache(env.DB).catch(() => {})
   return fireHook(env, (plugin) => plugin.onPostPublished, p)
 }
 
 /** 微博发布事件广播：后台、开放 API、TG 机器人与草稿转发布四条路都会调；任何失败都不影响发布本身 */
-export function fireWeiboPublished(env: Env, p: WeiboPublishedPayload): Promise<void> {
+export async function fireWeiboPublished(env: Env, p: WeiboPublishedPayload): Promise<void> {
+  if (!isDemo(env)) await purgePageCache(env.DB).catch(() => {})
   return fireHook(env, (plugin) => plugin.onWeiboPublished, p)
 }
 
-/** 评论事件广播：访客评论/留言三条路（文章、微博、留言板）都会调；任何失败都不影响留言本身 */
-export function fireCommentCreated(env: Env, p: CommentCreatedPayload): Promise<void> {
+/** 评论事件广播：访客评论/留言三条路（文章、微博、留言板）都会调；任何失败都不影响留言本身。
+ *  评论出现在公开页面上，落库即清页面边缘缓存（待审的不在页面上，清了也无害） */
+export async function fireCommentCreated(env: Env, p: CommentCreatedPayload): Promise<void> {
+  if (!isDemo(env)) await purgePageCache(env.DB).catch(() => {})
   return fireHook(env, (plugin) => plugin.onCommentCreated, p)
 }
 
 /** 广场下架广播（条目生命周期闭环）：已发布文章补设密码/升档锁文、转出发布态或软删时，
  *  把对应条目从广场 hub 摘除（hub 的 deleted 协议字段，docs/PLAZA.md）——防「已加密/已删」
  *  的标题与摘要永久滞留公开广场。锁文的 RSS 条目同时带 bloghao:locked 标志（src/rss.ts），
- *  pull 补漏不会再捞回；解锁/恢复后 6h 内 pull 自愈补回。失败只丢一条下架，不影响主流程 */
+ *  pull 补漏不会再捞回；解锁/恢复后 6h 内 pull 自愈补回。失败只丢一条下架，不影响主流程。
+ *  下架同样改变公开可见面 → 先清页面边缘缓存再走广场同步（plaza-sync 停用也不能跳过清理） */
 export async function firePlazaRetract(env: Env, entries: { kind: 'post' | 'weibo'; ref: string }[]): Promise<void> {
   if (isDemo(env) || !entries.length) return
+  await purgePageCache(env.DB).catch(() => {})
   try {
     const settings = await getSettings(env.DB)
     if (!enabledPlugins(settings).some((p) => p.id === 'plaza-sync')) return
