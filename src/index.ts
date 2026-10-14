@@ -9,6 +9,7 @@ import { ensureSchema, getPostBySlug, getSettings, listCategories, listPublished
 import { isEn, recordEditionFailure } from './i18n'
 import { mcpRoutes } from './mcp'
 import { goPageHtml, isTrustedOutHost } from './outlink'
+import { pageCacheMiddleware } from './pagecache'
 import { renderAbout, renderArchive, renderCategory, renderGuestbook, renderHome, renderLinks, renderMember, renderNotFound, renderPage, renderPost, renderRank, renderSearch, renderWeibo } from './pages'
 import { mergeUnlockCookie, PP_COOKIE, PP_TTL_MS, verifyPostPassword } from './protect'
 import { buildJsonFeed, buildRss, buildSitemap } from './rss'
@@ -99,6 +100,12 @@ function enGuard(h: PublicHandler): PublicHandler {
     }
   }
 }
+
+/* ---------------- 页面边缘缓存（src/pagecache.ts）：公开页 · 匿名访客 · 5 分钟副本 ----------------
+ * 命中直接吐 HTML 跳过 SSR 与 D1。登录 Cookie / 带 query / 演示站 / 灰度一律不进缓存；
+ * 设置变更 saveSettings 自动换代作废，后台「概览 → 系统」可一键清理。注册位必须在所有
+ * 页面路由之前（终点 handler 不调 next），且在闭站 / 统计中间件之后（503 与 visit_log 优先） */
+app.use('*', pageCacheMiddleware())
 
 /* ---------------- 公开页面（SSR + 主题渲染） ---------------- */
 // WordPress 风格订阅盲猜（/?feed=rss2 / rss / atom 等）：统一 302 到规范订阅地址

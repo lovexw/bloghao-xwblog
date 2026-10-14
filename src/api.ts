@@ -68,6 +68,7 @@ import {
   type WeiboVideoView,
 } from './db'
 import { mdToHtml } from './markdown'
+import { purgePageCache } from './pagecache'
 import { appearanceMeta, cleanAppearanceSettings } from './appearance'
 import { EMOJI_BASE, WECHAT_EMOJI } from './emoji'
 import { awardCommentPoints, awardPoints, normalizeMinTier } from './points'
@@ -2075,6 +2076,13 @@ async function rehostPasteImages(env: Env, html: string): Promise<{ html: string
   })
   return { html: out, transferred }
 }
+
+// 一键清理页面缓存（src/pagecache.ts）：换 settings epoch，旧边缘副本整代作废。
+// 后台「概览 → 系统」按钮消费；演示站页面本就不缓存，这里无害照常可用
+api.post('/admin/cache/purge', async (c) => {
+  await purgePageCache(c.env.DB)
+  return c.json({ ok: true })
+})
 
 api.post('/admin/tools/sanitize', async (c) => {
   // 演示站守卫：rehostPasteImages 会以本站身份抓请求里任意 http(s) 图片（出网点，

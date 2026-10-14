@@ -368,7 +368,7 @@ async function viewHome() {
       </div>
     </div>
     <div class="panel">
-      <div class="panel-head"><span>系统</span><a class="btn btn-ghost btn-sm" href="#/settings">设置 →</a></div>
+      <div class="panel-head"><span>系统</span><span style="display:flex;gap:8px;"><button class="btn btn-ghost btn-sm" data-act="purge-cache">清理缓存</button><a class="btn btn-ghost btn-sm" href="#/settings">设置 →</a></span></div>
       <div class="panel-body" style="display:flex;gap:24px;align-items:center;flex-wrap:wrap;">
         <div><div class="stat-value" style="font-size:20px;">${s.db.weibo}<small>条微博</small></div></div>
         <div><div class="stat-value" style="font-size:20px;">${s.db.comments}<small>条评论</small></div></div>
@@ -378,6 +378,19 @@ async function viewHome() {
       </div>
     </div>`
   )
+  // 一键清理页面缓存（src/pagecache.ts）：换 epoch 让旧边缘副本整代作废，访客即刻看到最新页面
+  const purgeBtn = $app.querySelector('[data-act=purge-cache]')
+  if (purgeBtn) purgeBtn.addEventListener('click', async () => {
+    purgeBtn.disabled = true
+    try {
+      await api('/admin/cache/purge', { method: 'POST' })
+      toast('页面缓存已清理，访客即刻看到最新页面')
+    } catch (e) {
+      toast(e.message || '清理失败，请重试', true)
+    } finally {
+      purgeBtn.disabled = false
+    }
+  })
 }
 
 /* ---------------- 访客统计（#/stats，数据来自 /api/admin/visits，见 src/stats.ts） ---------------- */

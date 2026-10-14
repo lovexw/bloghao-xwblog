@@ -139,6 +139,18 @@
     }
   }
 
+  /* ---------------- 页面边缘缓存旁路（服务端 src/pagecache.ts：带 query 的请求不进缓存） ----------------
+   * 游客发完评论要立刻看到自己的留言：整页刷新时带 _r 时间戳绕开边缘缓存拿到实时渲染，
+   * 落地后马上把参数从地址栏清掉（不污染分享链接） */
+  function reloadFresh() {
+    location.href = location.pathname + (location.search ? location.search + '&' : '?') + '_r=' + Date.now() + location.hash
+  }
+  try {
+    if (/[?&]_r=\d+/.test(location.search)) history.replaceState(null, '', location.pathname + location.hash)
+  } catch (e) {
+    /* replaceState 不可用就留着参数，无害 */
+  }
+
   /* ---------------- 上传前图片压缩与 WebP 转换（前台发布器；后台 editor.js 是同参数同逻辑的 ES Module 原版，改任一侧记得同步另一侧） ----------------
    * JPEG/PNG/WebP 且「超阈值或最长边超 2000px」：先降尺寸再编码，优先转 WebP（质量 0.75——
    * WebP 压缩率高，0.75 已是业内通行的视觉无损甜点，比同画质 JPEG 约再省三成，透明不丢）；
@@ -686,7 +698,7 @@
           } else {
             if (tipEl) tipEl.textContent = T('留言成功，感谢参与 🙂')
             setTimeout(function () {
-              location.reload()
+              reloadFresh()
             }, 600)
           }
         })
@@ -766,7 +778,7 @@
           } else {
             if (gbTip) gbTip.textContent = T('留言成功，感谢参与 🙂')
             setTimeout(function () {
-              location.reload()
+              reloadFresh()
             }, 600)
           }
         })
@@ -1449,7 +1461,7 @@
       postJSON('/api/admin/weibo', { content: content, images: cpImages, video: cpVideo, status: status })
         .then(function () {
           if (status === 'published') {
-            location.reload()
+            reloadFresh()
             return
           }
           if (cpText) cpText.value = ''
@@ -2535,7 +2547,7 @@
           .then(function () {
             if (tip) tip.textContent = kind === 'register' ? T('注册成功，正在进入…') : T('登录成功，正在进入…')
             setTimeout(function () {
-              location.reload()
+              reloadFresh()
             }, 500)
           })
           .catch(function (err) {
@@ -2568,7 +2580,7 @@
         .then(function () {
           if (tip) tip.textContent = T('昵称已更新，正在刷新…')
           setTimeout(function () {
-            location.reload()
+            reloadFresh()
           }, 500)
         })
         .catch(function (err) {
@@ -2607,7 +2619,7 @@
           } else {
             if (tip) tip.textContent = T('已保存，正在刷新…')
             setTimeout(function () {
-              location.reload()
+              reloadFresh()
             }, 500)
           }
         })
@@ -2663,7 +2675,7 @@
       memLogout.disabled = true
       postJSON('/api/member/logout', {})
         .then(function () {
-          location.reload()
+          reloadFresh()
         })
         .catch(function (err) {
           memLogout.disabled = false

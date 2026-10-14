@@ -73,10 +73,22 @@ async function startDevServer() {
   throw new Error('wrangler dev 启动超时')
 }
 
+/** 页面缓存旁路（src/pagecache.ts）：冒烟大量「写完立即匿名重读同一 URL」的断言，
+ *  会撞上 5 分钟边缘缓存的旧副本。带 query 的请求不进缓存键，这里对所有白名单页面路由的
+ *  GET 自动追加 _smoke 时间戳——SSR 渲染路径与不带参数完全一致，只是绕开边缘层 */
+const PAGE_BYPASS_RE = /^(\/|\/tag\/[^/?]+|\/category\/[^/?]+|\/post\/[^/?]+|\/page\/[^/?]+|\/about|\/archives|\/guestbook|\/weibo|\/links|\/member|\/rank)$/
+function bypassUrl(url) {
+  if (url.includes('?')) return url
+  const q = url.indexOf('#')
+  const path = q >= 0 ? url.slice(0, q) : url
+  const tail = q >= 0 ? url.slice(q) : ''
+  return PAGE_BYPASS_RE.test(path) ? `${path}?_smoke=${Date.now()}${tail}` : url
+}
+
 async function check(method, url, expectStatus, expectBody, opts = {}) {
   const label = `${method} ${url}${expectBody ? '（含内容断言）' : ''}${opts.notContains ? '（不含断言）' : ''}`
   try {
-    const res = await fetch(`http://127.0.0.1:${PORT}${url}`, {
+    const res = await fetch(`http://127.0.0.1:${PORT}${bypassUrl(url)}`, {
       method,
       headers: opts.headers,
       body: opts.body,
@@ -283,7 +295,7 @@ try {
     body: JSON.stringify({ p: '/x', r: '', v: 'smoke-closed-1', t: '' }),
   })
   // 503 + Retry-After：搜索引擎据此暂时保留收录
-  const closedHome = await raw('GET', '/')
+  const closedHome = await raw('GET', bypassUrl('/'))
   const retryAfterOk = closedHome.status === 503 && closedHome.headers.get('retry-after') === '3600'
   results.push(['闭站链路：503 + Retry-After', retryAfterOk])
   console.log(`  ${retryAfterOk ? '✓' : '✗'} 闭站链路：503 + Retry-After（retry-after: ${closedHome.headers.get('retry-after')}）`)
@@ -474,7 +486,7 @@ try {
     })
     const adminPage = await raw('GET', '/post/smoke-multi-tag', { headers: { Cookie: cookie } })
     const adminHtml = await adminPage.text()
-    const anonPage = await raw('GET', '/post/smoke-multi-tag')
+    const anonPage = await raw('GET', bypassUrl('/post/smoke-multi-tag'))
     const anonHtml = await anonPage.text()
 
     const adminHasBtn = adminHtml.includes(dMark) && adminHtml.includes('data-cmt-del')
@@ -1108,7 +1120,7 @@ try {
   results.push(['SEO 链路：非法输入整体 400', rejectOk])
   console.log(`  ${rejectOk ? '✓' : '✗'} SEO 链路：非法输入整体 400（${badVerify.status}/${badScript.status}）`)
   await check('GET', '/robots.txt', 200, 'Disallow: /smoke-drafts/')
-  const seoHome = await raw('GET', '/')
+  const seoHome = await raw('GET', bypassUrl('/'))
   const seoHtml = await seoHome.text()
   const seoCsp = seoHome.headers.get('content-security-policy') || ''
   const injectOk =
@@ -1152,6 +1164,38 @@ try {
   results.push(['SEO 链路：还原配置', seoOff.status === 200])
   console.log(`  ${seoOff.status === 200 ? '✓' : '✗'} SEO 链路：还原配置`)
   await check('GET', '/robots.txt', 200, undefined, { notContains: 'smoke-drafts' })
+
+  // ── 页面边缘缓存链路（src/pagecache.ts）：miss 回填 → 命中 → 设置换代作废 → 一键清理端点 ──
+  // wrangler dev 有 caches.default（workerd 模拟），链路可端到端验证；冒烟其余段落全走
+  // bypassUrl（带 query 不进缓存），本段是唯一刻意不带旁路参数的页面请求
+  console.log('\n▸ 页面边缘缓存链路')
+  {
+    const cacheHome1 = await raw('GET', '/')
+    const h1 = cacheHome1.headers.get('x-page-cache')
+    results.push(['页缓存：首次请求回源（miss 并回填）', cacheHome1.status === 200 && h1 === 'miss'])
+    console.log(`  ${h1 === 'miss' ? '✓' : '✗'} 页缓存：首次请求回源（x-page-cache: ${h1}）`)
+
+    const cacheHome2 = await raw('GET', '/')
+    const h2 = cacheHome2.headers.get('x-page-cache')
+    const sameBody = (await cacheHome2.text()).includes('fc-name')
+    results.push(['页缓存：第二次请求命中边缘副本', cacheHome2.status === 200 && h2 === 'hit' && sameBody])
+    console.log(`  ${h2 === 'hit' ? '✓' : '✗'} 页缓存：第二次请求命中（x-page-cache: ${h2}）`)
+
+    // 登录视角永远实时（不进缓存键），副本在也不能发给登录者
+    const adminHome = await raw('GET', '/', { headers: { Cookie: cookie } })
+    const ah = adminHome.headers.get('x-page-cache')
+    results.push(['页缓存：管理员会话不进缓存（登录视角实时）', adminHome.status === 200 && ah !== 'hit'])
+    console.log(`  ${ah !== 'hit' ? '✓' : '✗'} 页缓存：管理员会话不进缓存（x-page-cache: ${ah}）`)
+
+    const purgeRes = await raw('POST', '/api/admin/cache/purge', { headers: { Cookie: cookie } })
+    results.push(['页缓存：一键清理端点 200', purgeRes.status === 200])
+    console.log(`  ${purgeRes.status === 200 ? '✓' : '✗'} 页缓存：一键清理端点（status ${purgeRes.status}）`)
+
+    const cacheHome3 = await raw('GET', '/')
+    const h3 = cacheHome3.headers.get('x-page-cache')
+    results.push(['页缓存：清理后回源（旧副本整代作废）', cacheHome3.status === 200 && h3 === 'miss'])
+    console.log(`  ${h3 === 'miss' ? '✓' : '✗'} 页缓存：清理后回源（x-page-cache: ${h3}）`)
+  }
 
 } finally {
   if (dev && dev.exitCode === null) dev.kill('SIGTERM')

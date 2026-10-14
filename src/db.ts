@@ -35,6 +35,8 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   // 页脚「站点足迹」统计 JSON（{posts,chars,since}）：每晚 cron 刷新 + 冷启动首次播种
   // （refreshFootStats），前台页脚名片读这里——展示口径滞后一夜可接受，不值得每次渲染都聚合
   siteFoot: '',
+  // 页面边缘缓存的代序号（src/pagecache.ts）：saveSettings 自动换新，后台「一键清理缓存」显式写
+  pageCacheEpoch: '',
   footerText: '由 博客号 驱动 · 住在 Cloudflare 上',
   allowComments: '1',
   moderateComments: '0',
@@ -173,7 +175,15 @@ export async function getSettings(db: D1Database): Promise<SettingsMap> {
 }
 
 export async function saveSettings(db: D1Database, patch: SettingsMap): Promise<void> {
-  const entries = Object.entries(patch)
+  // 设置一变全站页面渲染跟着变：顺手换页缓存 epoch（src/pagecache.ts），旧边缘副本整代作废。
+  // 调用方显式带了 epoch（purgePageCache）就原样落库；没带则读旧值与 now 取 max(old+1)——
+  // 同一毫秒内连续保存也保证严格递增（测试与失效语义都依赖这点）
+  let epoch = patch[PAGE_CACHE_EPOCH_KEY]
+  if (epoch === undefined) {
+    const prev = await db.prepare(`SELECT value FROM settings WHERE key = '${PAGE_CACHE_EPOCH_KEY}'`).first<{ value: string }>()
+    epoch = prev?.value ? String(Math.max(Date.now(), Number(prev.value) + 1)) : String(Date.now())
+  }
+  const entries = Object.entries({ ...patch, [PAGE_CACHE_EPOCH_KEY]: epoch })
   if (!entries.length) return
   const stmts = entries.map(([k, v]) =>
     db
@@ -199,6 +209,10 @@ export function parseTags(row: Pick<PostRow, 'tags'>): string[] {
 
 /** 文章正文长度上限（UTF-8 字节，非字符数）：api.ts readPostPayload 与 mcp.ts publish_post 同口径 */
 export const MAX_CONTENT_BYTES = 1_000_000
+
+/** 页面边缘缓存的代序号（src/pagecache.ts）：进缓存键，换新 = 旧边缘副本整代作废。
+ *  saveSettings 每次保存自动换新（改设置全站页面即刻失效），后台「一键清理缓存」也写这键 */
+export const PAGE_CACHE_EPOCH_KEY = 'pageCacheEpoch'
 
 export type PostSort = 'latest' | 'views' | 'likes' | 'comments' | 'random'
 

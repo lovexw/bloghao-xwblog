@@ -31,6 +31,9 @@ const ZH_EN: Record<string, string> = {
   '由 博客号 驱动 · 住在 Cloudflare 上': 'Powered by BlogHao · Lives on Cloudflare',
   '<p>在这里写下关于你的故事。</p>': '<p>Write your story here.</p>',
   '本站暂时关闭，请稍后再来。': 'This site is temporarily closed. Please check back later.',
+  // 后台概览「系统」卡：一键清理页面缓存按钮与提示（后台界面不走 enGuard，词条暂存备用）
+  '清理缓存': 'Purge cache',
+  '页面缓存已清理，访客即刻看到最新页面': 'Page cache purged — visitors now see the latest pages',
   // 顶部导航 / 共享构建器
   '首页': 'Home',
   '微博': 'Notes',
