@@ -1058,7 +1058,8 @@ const SCHEMA_TRIGGERS = [
     INSERT INTO weibo_fts(rowid, content) VALUES (new.id, new.content);
   END`,
 ]
-const SCHEMA_INDEXES = [
+// 导出供 tests/feed-index.test.ts 做双份登记镜像守卫
+export const SCHEMA_INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_comments_weibo ON comments (weibo_id, created_at)',
   // comments.member_id 与 posts.min_tier 是老库运行时补齐的列，索引只能在这里建（schema.sql 不能建，见该文件内说明）
   'CREATE INDEX IF NOT EXISTS idx_comments_member ON comments (member_id, created_at)',
@@ -1080,6 +1081,12 @@ const SCHEMA_INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_posts_deleted ON posts (deleted_at) WHERE deleted_at IS NOT NULL',
   'CREATE INDEX IF NOT EXISTS idx_weibo_deleted ON weibo (deleted_at) WHERE deleted_at IS NOT NULL',
   'CREATE INDEX IF NOT EXISTS idx_pages_deleted ON pages (deleted_at) WHERE deleted_at IS NOT NULL',
+  // 列表时间线排序索引（P0-1，D1 读放大优化）：ORDER BY 的 COALESCE(published_at, created_at) 与裸 published_at
+  // 列结构不匹配，翻页曾全表扫描 + 临时排序；表达式与 listPosts/listWeibo 排序片段一字不差，
+  // 改排序与 schema.sql / 排序处三同步（tests/feed-index.test.ts 守卫）
+  'CREATE INDEX IF NOT EXISTS idx_weibo_feed ON weibo (status, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL',
+  'CREATE INDEX IF NOT EXISTS idx_weibo_feed_pinned ON weibo (status, pinned DESC, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL',
+  'CREATE INDEX IF NOT EXISTS idx_posts_feed ON posts (status, pinned DESC, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL',
 ]
 
 async function tableColumns(db: D1Database, table: string): Promise<Set<string>> {

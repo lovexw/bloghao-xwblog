@@ -89,6 +89,10 @@ CREATE TABLE IF NOT EXISTS posts (
 );
 CREATE INDEX IF NOT EXISTS idx_posts_status ON posts (status, pinned DESC, published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_updated ON posts (updated_at DESC);
+-- 列表时间线排序索引（D1 读放大优化 P0-1）：listPosts/listWeibo 的 ORDER BY 用 COALESCE(published_at, created_at)，
+-- 与上面裸 published_at 列结构不匹配，翻页会全表扫描 + 临时排序（D1 按行读取计费）。
+-- 表达式必须与 src/db.ts 的排序片段一字不差（含 DESC 与部分索引 WHERE），改排序三处同步（tests/feed-index.test.ts 守卫）
+CREATE INDEX IF NOT EXISTS idx_posts_feed ON posts (status, pinned DESC, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS comments (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -145,6 +149,9 @@ CREATE TABLE IF NOT EXISTS weibo (
   deleted_at   INTEGER                 -- 回收站：非 NULL = 已移入回收站（30 天后 cron 彻底清除，src/trash.ts）
 );
 CREATE INDEX IF NOT EXISTS idx_weibo_status ON weibo (status, published_at DESC);
+-- 时间线排序索引同 posts（P0-1）：pinnedFirst 形态（/weibo 页）与 recency 形态（公开 API / 首页入口卡）各一条
+CREATE INDEX IF NOT EXISTS idx_weibo_feed ON weibo (status, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_weibo_feed_pinned ON weibo (status, pinned DESC, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL;
 
 -- FTS5 全文索引（src/fts.ts，ROADMAP B4）：trigram 分词适配中文（无空格文本按 3 字滑窗成词），
 -- external content 挂原表省一份正文存储。增量同步触发器在 db.ts 的 SCHEMA_TRIGGERS 挂——
