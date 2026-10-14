@@ -37,6 +37,23 @@
   var y = document.getElementById('year')
   if (y) y.textContent = String(new Date().getFullYear())
 
+  // 锚点纠偏：目录卡片异步注入、图片陆续加载会把锚点下方内容顶移，
+  // 落点漂移后用户看到的就是别的区块。资源就绪时若用户没手动滚过，重新对位一次
+  if (location.hash) {
+    var anchorMoved = false
+    var anchorMark = function () { anchorMoved = true }
+    window.addEventListener('wheel', anchorMark, { passive: true, once: true })
+    window.addEventListener('touchmove', anchorMark, { passive: true, once: true })
+    window.addEventListener('keydown', anchorMark, { once: true })
+    window.addEventListener('load', function () {
+      setTimeout(function () {
+        if (anchorMoved) return
+        var target = document.getElementById(location.hash.slice(1))
+        if (target) target.scrollIntoView()
+      }, 80)
+    })
+  }
+
   // 博客号目录：数据来自 data/showcase.json（去仓库提 issue 即可上榜）
   var grid = document.getElementById('showcase-grid')
   if (grid) {
