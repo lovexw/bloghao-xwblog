@@ -12,7 +12,7 @@
 <meta property="og:image" content="https://bloghao.com/assets/editor.png">
 <meta property="og:type" content="website">
 <link rel="icon" href="./favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="./style.css?v=20261014c">
+<link rel="stylesheet" href="./style.css?v=20261014d">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@graph":[
 {"@type":"SoftwareApplication","name":"博客号 BlogHao","url":"https://bloghao.com/","applicationCategory":"WebApplication","operatingSystem":"Cloudflare Workers","description":"完全运行在 Cloudflare Workers + D1 + R2 上的开源博客系统：五分钟部署、免维护、数据 100% 归你。","screenshot":"https://bloghao.com/assets/editor.png","offers":{"@type":"Offer","price":"0","priceCurrency":"CNY"},"author":{"@type":"Organization","name":"博客号 BlogHao","url":"https://bloghao.com/"}},
@@ -408,23 +408,35 @@ npm run deploy</code></pre>
       <div class="support-panel reveal">
         <span class="support-flag">📣 首批赞助位 · 招募中</span>
         <h2 class="sec-title">赞助位，虚位以待</h2>
-        <p class="sec-sub">博客号免费开源，赞助用于服务器、域名与持续开发。想让你的产品出现在这里，被一群爱写作、爱折腾的人看见？加助理微信聊聊。</p>
-        <div class="support-grid" aria-label="赞助位一览">
-          <div class="support-slot">
-            <span class="support-slot-icon" aria-hidden="true">🪴</span>
-            <b>虚位以待</b>
-            <i>官网首页 · 品牌露出</i>
+        <p class="sec-sub">博客号免费开源，所有赞助用于服务器、域名与持续开发——机构冠名展位，个人名字上墙。想让你的品牌或名字出现在这里？加助理微信聊聊。</p>
+        <div class="support-tier">
+          <h3 class="support-tier-title">机构赞助<i>冠名展位 · 被更多写作者看见</i></h3>
+          <div class="support-grid" aria-label="机构赞助展位">
+            <div class="support-slot">
+              <span class="support-slot-icon" aria-hidden="true">🪴</span>
+              <b>虚位以待</b>
+              <i>官网首页 · 品牌露出</i>
+            </div>
+            <div class="support-slot">
+              <span class="support-slot-icon" aria-hidden="true">✨</span>
+              <b>虚位以待</b>
+              <i>广场与文档 · 联合露出</i>
+            </div>
+            <div class="support-slot">
+              <span class="support-slot-icon" aria-hidden="true">🤝</span>
+              <b>虚位以待</b>
+              <i>深度合作 · 玩法一起聊</i>
+            </div>
           </div>
-          <div class="support-slot">
-            <span class="support-slot-icon" aria-hidden="true">✨</span>
-            <b>虚位以待</b>
-            <i>广场与文档 · 联合露出</i>
+        </div>
+        <div class="support-tier">
+          <h3 class="support-tier-title">个人赞助<i>名字 + 金额 · 如实上墙</i></h3>
+          <!-- 个人赞助鸣谢墙：一条数据 = <span class="support-backer"><b>名字</b><i>¥金额</i></span>，
+               按赞助时间往 .support-wall 里加；将来人多放不下时把该容器换成跑马灯滚动 -->
+          <div class="support-wall" aria-label="个人赞助鸣谢名单">
+            <span class="support-backer is-empty">🌱 首批鸣谢 · 虚位以待</span>
           </div>
-          <div class="support-slot">
-            <span class="support-slot-icon" aria-hidden="true">🤝</span>
-            <b>虚位以待</b>
-            <i>深度合作 · 玩法一起聊</i>
-          </div>
+          <p class="support-wall-note">按赞助时间排序，金额如实展示，可要求匿名</p>
         </div>
         <div class="support-contact">
           <span class="support-contact-label">助理微信</span>
@@ -432,7 +444,7 @@ npm run deploy</code></pre>
             <code id="support-wx-id">btcxwly</code>
             <button type="button" class="support-copy" id="support-copy">复制</button>
           </span>
-          <span class="support-contact-note">加好友请备注「赞助」</span>
+          <span class="support-contact-note">加好友请备注「机构赞助」或「个人赞助」</span>
         </div>
       </div>
     </div>
