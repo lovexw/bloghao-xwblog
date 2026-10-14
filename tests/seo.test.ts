@@ -166,7 +166,7 @@ test('robots.txt 组装：未配置与历史版本逐字节一致，配置后追
 
 /* ---------------- 四、Speculation Rules ---------------- */
 
-test('预取声明：JSON 合法、conservative 档、排除后台/API/中间页/订阅端点，且不含 <', () => {
+test('预取声明：JSON 合法、moderate 档、排除后台/API/中间页/订阅端点，且不含 <', () => {
   const html = speculationRulesHtml()
   assert.match(html, /^<script type="speculationrules">/)
   assert.match(html, /<\/script>$/)
@@ -174,7 +174,7 @@ test('预取声明：JSON 合法、conservative 档、排除后台/API/中间页
   assert.ok(!body.includes('<'), '声明体内不得出现 <（防脚本标签逃逸）')
   const rules = JSON.parse(body) as typeof SPECULATION_RULES
   const rule = (rules as any).prerender[0]
-  assert.equal(rule.eagerness, 'conservative')
+  assert.equal(rule.eagerness, 'moderate', '悬停即预渲染（页面边缘缓存已吸收回源成本）')
   const patterns = rule.where.and.map((c: any) => c.href_matches ?? c.not?.href_matches).filter(Boolean)
   for (const p of ['/*', '/admin*', '/api/*', '/go*', '/*.xml', '/feed.json', '/robots.txt']) {
     assert.ok(patterns.includes(p), `缺少排除/包含模式：${p}`)

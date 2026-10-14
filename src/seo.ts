@@ -270,9 +270,11 @@ export function buildRobotsTxt(settings: SettingsMap, origin: string, demo = fal
 /* ---------------- 四、Speculation Rules 预取声明（B24） ---------------- */
 
 /**
- * 同源链接的预渲染声明（conservative：pointerdown 才触发，不抢首屏带宽）。
- * 排除后台 / 开放 API / 外链中间页 / XML 与 JSON 订阅端点，排除新窗口与 nofollow 链接。
- * 老浏览器不认这个 script 类型，静默忽略（纯增强，无兼容风险）。
+ * 同源链接的预渲染声明（moderate：悬停约 200ms 即预渲染，pointerdown 前就把下一页拉好；
+ * 2026-10-14 从 conservative 提档——配合页面边缘缓存，悬停预渲染命中的是边缘副本，
+ * 回源成本已被缓存吸收，对跨境访客的「点开即现」收益明显。admin/会员等登录视角预渲染
+ * 会走真实 SSR，属单人流量可接受）。排除后台 / 开放 API / 外链中间页 / XML 与 JSON
+ * 订阅端点，排除新窗口与 nofollow 链接。老浏览器不认这个 script 类型，静默忽略（纯增强）。
  */
 export const SPECULATION_RULES: Record<string, unknown> = {
   prerender: [
@@ -290,7 +292,7 @@ export const SPECULATION_RULES: Record<string, unknown> = {
           { not: { selector_matches: '[rel~=nofollow]' } },
         ],
       },
-      eagerness: 'conservative',
+      eagerness: 'moderate',
     },
   ],
 }
