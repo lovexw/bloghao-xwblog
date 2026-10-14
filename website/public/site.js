@@ -133,4 +133,44 @@
         plazaStat.textContent = '广场内容实时聚合中。'
       })
   }
+
+  // 赞助位：复制助理微信（微信号以 #sponsor-wx-id 为准）
+  var sponsorCopy = document.getElementById('sponsor-copy')
+  if (sponsorCopy) {
+    var wxIdEl = document.getElementById('sponsor-wx-id')
+    var copyTimer = null
+    sponsorCopy.addEventListener('click', function () {
+      var text = wxIdEl ? String(wxIdEl.textContent || '').trim() : ''
+      if (!text) return
+      var done = function (ok) {
+        sponsorCopy.textContent = ok ? '已复制 ✓' : '复制'
+        sponsorCopy.classList.toggle('is-done', !!ok)
+        if (copyTimer) clearTimeout(copyTimer)
+        if (ok) {
+          copyTimer = setTimeout(function () {
+            sponsorCopy.textContent = '复制'
+            sponsorCopy.classList.remove('is-done')
+          }, 1600)
+        }
+      }
+      var fallback = function () {
+        var ta = document.createElement('textarea')
+        ta.value = text
+        ta.setAttribute('readonly', '')
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        var ok = false
+        try { ok = document.execCommand('copy') } catch (e) {}
+        document.body.removeChild(ta)
+        done(ok)
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { done(true) }, fallback)
+      } else {
+        fallback()
+      }
+    })
+  }
 })()
