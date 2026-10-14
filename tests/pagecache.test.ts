@@ -6,8 +6,9 @@ import { PAGE_CACHE_EPOCH_KEY } from '../src/db.ts'
 import { pageCacheKeyFor, purgePageCache } from '../src/pagecache.ts'
 
 // ── 页面边缘缓存（src/pagecache.ts）：键判定纯函数 + saveSettings 自动换代 ──
-// 防线核心：登录 Cookie（管理员/会员/文章解锁）与带 query 的请求绝不进缓存键——
-// 键判错就是「把 A 的页面发给 B」级别的越权事故；epoch 进键是失效机制的根。
+// 防线核心：登录 Cookie（管理员/会员/文章解锁）绝不进缓存——键判错就是「把 A 的页面发给 B」
+// 级别的越权事故；query 走受控白名单且规范化必须镜像服务端 clamp/trim/slice 语义——镜像错位
+// 同样是把错页发给访客；epoch 进键是失效机制的根。
 
 const SESSION = 'bloghao_session'
 const MEMBER = 'xw_member_session'
@@ -31,15 +32,57 @@ test('pageCacheKeyFor：可缓存页面返回带 epoch 的键', () => {
     assert.ok(k, `公开页 ${p} 必须可缓存`)
     assert.ok(k!.includes('/100/'), '键必须带 epoch 段')
   }
-  assert.equal(keyOf({ url: 'https://x.test/post/hello?_r=123' }), null, '带 query 不缓存（评论刷新旁路依赖这条）')
-  assert.equal(keyOf({ url: 'https://x.test/search?q=x' }), null, '搜索页千人千面不缓存')
+  assert.equal(keyOf({ url: 'https://x.test/post/hello?_r=123' }), null, '未知参数不缓存（评论刷新旁路依赖这条）')
   assert.equal(keyOf({ url: 'https://x.test/go?u=x' }), null)
   assert.equal(keyOf({ url: 'https://x.test/images/u/a.png' }), null, '图床路由有自己的 immutable 缓存')
-  assert.equal(keyOf({ url: 'https://x.test/rss.xml' }), null)
-  assert.equal(keyOf({ url: 'https://x.test/api/public/posts' }), null)
   assert.equal(keyOf({ url: 'https://x.test/admin/' }), null)
   assert.equal(keyOf({ url: 'https://x.test/random' }), null, '/random 每次随机不缓存')
   assert.equal(keyOf({ url: 'https://x.test/post/../etc' }), null, '路径穿越形态不匹配白名单')
+})
+
+test('pageCacheKeyFor：受控 query 进键——weibo 分页/深链、标签页、搜索页（P0-2）', () => {
+  const wbPage = keyOf({ url: 'https://x.test/weibo?page=2' })
+  assert.ok(wbPage && wbPage.includes('page=2'), '/weibo?page=2 必须可缓存（TG/朋友圈深链是爬虫放大器）')
+  const wbDeep = keyOf({ url: 'https://x.test/weibo?wb=123&topic=%E6%97%A5%E5%B8%B8' })
+  assert.ok(wbDeep && wbDeep.includes('wb=123') && wbDeep.includes('topic='), '深链 ?wb= 必须可缓存')
+  assert.equal(
+    keyOf({ url: 'https://x.test/weibo?wb=123&topic=x' }),
+    keyOf({ url: 'https://x.test/weibo?topic=x&wb=123' }),
+    '参数序不影响键（规范化排序）'
+  )
+  assert.ok(keyOf({ url: 'https://x.test/tag/life?page=3' }), '标签页翻页可缓存')
+  const s = keyOf({ url: 'https://x.test/search?q=%E5%8D%9A%E5%AE%A2' })
+  assert.ok(s && s.includes('q='), '搜索页可缓存且键含 q')
+  assert.ok(keyOf({ url: 'https://x.test/search?q=%E5%8D%9A%E5%AE%A2&sort=views' }), '搜索页 + 有效排序可缓存')
+})
+
+test('pageCacheKeyFor：键规范化镜像服务端 clamp/trim 语义（同渲染结果同键）', () => {
+  assert.equal(keyOf({ url: 'https://x.test/?page=abc' }), keyOf({ url: 'https://x.test/' }), '非法 page 服务端按没传处理')
+  assert.equal(keyOf({ url: 'https://x.test/?page=99999' }), keyOf({ url: 'https://x.test/?page=1000' }), '越界 page 服务端夹到 1000')
+  assert.equal(keyOf({ url: 'https://x.test/weibo?wb=x' }), keyOf({ url: 'https://x.test/weibo' }), '非法 wb 服务端忽略')
+  assert.equal(keyOf({ url: 'https://x.test/search?q=%20%20' }), keyOf({ url: 'https://x.test/search' }), '空白 q 服务端按没传处理')
+  assert.equal(keyOf({ url: 'https://x.test/api/public/weibo?limit=abc' }), keyOf({ url: 'https://x.test/api/public/weibo' }), '非法 limit 按没传')
+})
+
+test('pageCacheKeyFor：不可缓存形态回源（宁缺勿错）', () => {
+  assert.equal(keyOf({ url: 'https://x.test/search?q=x&sort=random' }), null, '随机排序 seed 现生成，同 URL 两次结果不同')
+  assert.equal(keyOf({ url: 'https://x.test/?page=1&page=2' }), null, '重复参数语义含糊')
+  assert.equal(keyOf({ url: 'https://x.test/api/public/posts?tag=' + encodeURIComponent('x'.repeat(65)) }), null, '超长 tag 回源')
+})
+
+test('pageCacheKeyFor：订阅源与公开只读 API 纳入（P0-2）', () => {
+  for (const p of ['/rss.xml', '/feed.json', '/sitemap.xml', '/feed/rss.xml', '/atom.xml']) {
+    assert.ok(keyOf({ url: `https://x.test${p}` }), `${p} 必须可缓存（爬虫订阅器高频）`)
+  }
+  assert.ok(keyOf({ url: 'https://x.test/api/public/weibo?limit=50' }), '公开微博 API 可缓存（广场 hub pull 源）')
+  assert.ok(keyOf({ url: 'https://x.test/api/public/posts?tag=%E7%94%9F%E6%B4%BB' }), '公开文章 API + tag 可缓存')
+  assert.equal(keyOf({ url: 'https://x.test/api/public/weibo?foo=1' }), null, '未知参数回源')
+  assert.equal(keyOf({ url: 'https://x.test/api/admin/stats' }), null, '管理 API 永不缓存')
+  assert.equal(keyOf({ url: 'https://x.test/api/public/track' }), null, 'visit 统计端点不缓存')
+})
+
+test('pageCacheKeyFor：键带 hostname（多域名形态不串副本）', () => {
+  assert.notEqual(keyOf({ url: 'https://a.test/' }), keyOf({ url: 'https://b.test/' }))
 })
 
 test('pageCacheKeyFor：任一登录/解锁 Cookie 在场绝不缓存（越权面）', () => {

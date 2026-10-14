@@ -74,9 +74,9 @@ async function startDevServer() {
 }
 
 /** 页面缓存旁路（src/pagecache.ts）：冒烟大量「写完立即匿名重读同一 URL」的断言，
- *  会撞上 5 分钟边缘缓存的旧副本。带 query 的请求不进缓存键，这里对所有白名单页面路由的
+ *  会撞上 5 分钟边缘缓存的旧副本。对页面与订阅源/公开 API 白名单路由的
  *  GET 自动追加 _smoke 时间戳——SSR 渲染路径与不带参数完全一致，只是绕开边缘层 */
-const PAGE_BYPASS_RE = /^(\/|\/tag\/[^/?]+|\/category\/[^/?]+|\/post\/[^/?]+|\/page\/[^/?]+|\/about|\/archives|\/guestbook|\/weibo|\/links|\/member|\/rank)$/
+const PAGE_BYPASS_RE = /^(\/|\/tag\/[^\/?]+|\/category\/[^\/?]+|\/post\/[^\/?]+|\/page\/[^\/?]+|\/about|\/archives|\/guestbook|\/weibo|\/links|\/member|\/rank|\/search|\/rss\.xml|\/feed\.json|\/sitemap\.xml|\/api\/public\/weibo|\/api\/public\/posts)$/
 function bypassUrl(url) {
   if (url.includes('?')) return url
   const q = url.indexOf('#')
@@ -130,6 +130,34 @@ try {
     '写入冒烟夹具（幂等）'
   )
   await startDevServer()
+
+  console.log('\n▸ 页面缓存端到端（src/pagecache.ts）')
+  const probeBase = `http://127.0.0.1:${PORT}`
+  /** 同 URL 连打两次：第一次回源填充（waitUntil 回填），第二次断言 X-Page-Cache 头。
+   *  expectHeader=null 断言「不进缓存键、两次都回源」（未知参数旁路） */
+  const cacheProbe = async (path, expectHeader) => {
+    const label = `缓存探针 ${path} → 第二次 X-Page-Cache: ${expectHeader ?? '（无，回源旁路）'}`
+    try {
+      await fetch(`${probeBase}${path}`, { signal: AbortSignal.timeout(15_000) })
+      await new Promise((r) => setTimeout(r, 300))
+      const res = await fetch(`${probeBase}${path}`, { signal: AbortSignal.timeout(15_000) })
+      const got = res.headers.get('x-page-cache') ?? null
+      if (got !== expectHeader) {
+        console.error(`  ✗ ${label}：实际 ${got}`)
+        results.push([label, false])
+        return
+      }
+      console.log(`  ✓ ${label}`)
+      results.push([label, true])
+    } catch (e) {
+      console.error(`  ✗ ${label}：${e.message}`)
+      results.push([label, false])
+    }
+  }
+  await cacheProbe('/archives', 'hit') // 公开页：第二次命中边缘层
+  await cacheProbe('/api/public/weibo?limit=5', 'hit') // 公开只读 API 同口径（广场 hub pull 源）
+  await cacheProbe('/rss.xml', 'hit') // 订阅源同口径（爬虫订阅器高频）
+  await cacheProbe('/weibo?_smoke=probe', null) // 未知参数不进缓存键：两次都回源
 
   console.log('\n▸ 路由断言')
   await check('GET', '/', 200)
