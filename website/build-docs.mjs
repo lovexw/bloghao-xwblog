@@ -27,7 +27,7 @@ const GITHUB_BLOB = 'https://github.com/bloghao/bloghao/blob/main/'
 
 // 资源缓存版本：改动 style.css / docs.css / docs.js / docs-search-index.js / favicon.svg 后
 // 改这里，重建时统一带上（搜索索引换版本号 = 访客立刻拿到新索引，不必等缓存过期）
-const V = '?v=20261012a'
+const V = '?v=20261014c'
 
 // 文档清单：slug 决定输出文件名与站内路径，顺序即侧栏与上下篇顺序
 const DOCS = [
@@ -513,7 +513,13 @@ async function patchHandWrittenPage() {
           /<link rel="stylesheet" href="(?:\.\.\/|\/)style\.css[^"]*">/,
           `<link rel="stylesheet" href="/style.css${V}">`
         )
-        if (!src.includes(`/docs.css${V}`)) {
+        // docs.css 已有引用先归一到当前 V（V 升位重建的幂等性：否则旧版本残留会让自检
+        // 误报「注入不完整」，或落入插入分支造成重复注入），从未有过才插入
+        src = src.replace(
+          /<link rel="stylesheet" href="(?:\.\.\/|\/)docs\.css[^"]*">/,
+          `<link rel="stylesheet" href="/docs.css${V}">`
+        )
+        if (!src.includes('/docs.css')) {
           src = src.replace(
             new RegExp(`<link rel="stylesheet" href="/style\\.css${V}">`),
             `<link rel="stylesheet" href="/style.css${V}">\n<link rel="stylesheet" href="/docs.css${V}">`

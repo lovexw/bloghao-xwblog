@@ -151,22 +151,22 @@
       })
   }
 
-  // 赞助位：复制助理微信（微信号以 #sponsor-wx-id 为准）
-  var sponsorCopy = document.getElementById('sponsor-copy')
-  if (sponsorCopy) {
-    var wxIdEl = document.getElementById('sponsor-wx-id')
+  // 赞助位：复制助理微信（微信号以 #support-wx-id 为准）
+  var supportCopy = document.getElementById('support-copy')
+  if (supportCopy) {
+    var wxIdEl = document.getElementById('support-wx-id')
     var copyTimer = null
-    sponsorCopy.addEventListener('click', function () {
+    supportCopy.addEventListener('click', function () {
       var text = wxIdEl ? String(wxIdEl.textContent || '').trim() : ''
       if (!text) return
       var done = function (ok) {
-        sponsorCopy.textContent = ok ? '已复制 ✓' : '复制'
-        sponsorCopy.classList.toggle('is-done', !!ok)
+        supportCopy.textContent = ok ? '已复制 ✓' : '复制'
+        supportCopy.classList.toggle('is-done', !!ok)
         if (copyTimer) clearTimeout(copyTimer)
         if (ok) {
           copyTimer = setTimeout(function () {
-            sponsorCopy.textContent = '复制'
-            sponsorCopy.classList.remove('is-done')
+            supportCopy.textContent = '复制'
+            supportCopy.classList.remove('is-done')
           }, 1600)
         }
       }
