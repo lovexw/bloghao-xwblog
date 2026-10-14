@@ -101,13 +101,75 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   editionEnAt: '',
 }
 
+// settings 读取的共享快照层（Cache API）：生产 Workers 上 caches.default 是 colo 级共享——
+// 跨 isolate 同读一份快照，热读省掉每次请求的 D1 查询；写路径 invalidateSharedSettings
+// 推送式 delete（全 colo 立即失效，写返回后任何 isolate 读必见新值，无 TTL 旧值窗口）。
+// Node 测试与 docker-poc 无 caches.default，自动退化为直查（后者单进程天然一致，语义不变）；
+// 并发请求按 in-flight 去重（突发流量只打一发 SQL），按 db 实例（WeakMap）隔离防多站点串租户。
+// 一切写 settings 的路径写完必须 await invalidateSharedSettings(db)：saveSettings /
+// refreshFootStats / ensureSchema 已内置，散落 db.ts 之外的裸写点（setupLock /
+// recordEditionFailure / demo 播种）各自负责——见 AGENTS「SQL / 输入」防线。
+const SETTINGS_SHARED_URL = 'https://xwblog-internal.invalid/__settings-snapshot'
+const SETTINGS_SHARED_TTL_S = 300
+const settingsInflight = new WeakMap<object, Promise<SettingsMap>>()
+
+function sharedCache(): Cache | null {
+  const c = (globalThis as { caches?: { default?: Cache } }).caches
+  return c?.default ?? null
+}
+
+/** 写 settings 后调用（await）：清共享快照，写返回后全 colo 读必见新值 */
+export async function invalidateSharedSettings(db: D1Database): Promise<void> {
+  settingsInflight.delete(db)
+  const cache = sharedCache()
+  if (cache) {
+    try {
+      await cache.delete(SETTINGS_SHARED_URL)
+    } catch {
+      /* 共享层删不掉就等 max-age 过期，不挡写路径 */
+    }
+  }
+}
+
 export async function getSettings(db: D1Database): Promise<SettingsMap> {
-  const { results } = await db
-    .prepare('SELECT key, value FROM settings')
-    .all<{ key: string; value: string }>()
-  const s: SettingsMap = { ...DEFAULT_SETTINGS }
-  for (const r of results ?? []) s[r.key] = r.value
-  return s
+  const inflight = settingsInflight.get(db)
+  if (inflight) return inflight
+  const p = (async () => {
+    const cache = sharedCache()
+    if (cache) {
+      try {
+        const hit = await cache.match(SETTINGS_SHARED_URL)
+        if (hit) {
+          const data = (await hit.json()) as Record<string, string> | null
+          if (data) return { ...DEFAULT_SETTINGS, ...data }
+        }
+      } catch {
+        /* 快照读不出来按 miss 走 D1 */
+      }
+    }
+    const { results } = await db
+      .prepare('SELECT key, value FROM settings')
+      .all<{ key: string; value: string }>()
+    const s: SettingsMap = { ...DEFAULT_SETTINGS }
+    for (const r of results ?? []) s[r.key] = r.value
+    if (cache) {
+      try {
+        await cache.put(
+          SETTINGS_SHARED_URL,
+          new Response(JSON.stringify(s), { headers: { 'Cache-Control': `public, max-age=${SETTINGS_SHARED_TTL_S}` } })
+        )
+      } catch {
+        /* 回填失败不影响本次读 */
+      }
+    }
+    return s
+  })()
+  settingsInflight.set(db, p)
+  try {
+    return await p
+  } finally {
+    settingsInflight.delete(db)
+  }
 }
 
 export async function saveSettings(db: D1Database, patch: SettingsMap): Promise<void> {
@@ -121,6 +183,7 @@ export async function saveSettings(db: D1Database, patch: SettingsMap): Promise<
       .bind(k, String(v ?? ''))
   )
   await db.batch(stmts)
+  await invalidateSharedSettings(db)
 }
 
 export function parseTags(row: Pick<PostRow, 'tags'>): string[] {
@@ -1093,6 +1156,9 @@ export async function ensureSchema(db: D1Database): Promise<void> {
   // upsert 幂等，并发 isolate 重复算也只是同值覆盖
   const footRow = await db.prepare("SELECT value FROM settings WHERE key = 'siteFoot'").first()
   if (!footRow) await refreshFootStats(db).catch(() => {})
+  // 冷启动/cron 期间写过记账位（ftsSeeded / pagesSeeded / siteFoot），清掉共享快照，
+  // 保证紧随其后的业务读取看到播种后的口径
+  await invalidateSharedSettings(db)
 }
 
 /** 页脚「站点足迹」统计：累计已发布篇数 / 正文字符量 / 最早发文时间（北京年口径）。
@@ -1107,6 +1173,7 @@ export async function refreshFootStats(db: D1Database): Promise<void> {
     .prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
     .bind('siteFoot', JSON.stringify({ posts: row?.n ?? 0, chars: row?.c ?? 0, since: row?.since ?? 0 }))
     .run()
+  await invalidateSharedSettings(db)
 }
 
 export async function countUsers(db: D1Database): Promise<number> {

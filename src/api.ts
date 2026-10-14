@@ -52,6 +52,7 @@ import {
   parseWeiboImages,
   parseWeiboVideo,
   postAdminView,
+  invalidateSharedSettings,
   saveSettings,
   seedWelcomePost,
   setPostCategory,
@@ -159,6 +160,7 @@ api.post('/auth/setup', async (c) => {
     .prepare("INSERT INTO settings (key, value) VALUES ('setupLock', '1') ON CONFLICT(key) DO NOTHING")
     .run()
   if ((lock.meta.changes ?? 0) !== 1) return jsonError('管理员已存在', 403)
+  await invalidateSharedSettings(c.env.DB)
   try {
     const { hash, salt } = await hashPassword(password)
     const now = Date.now()

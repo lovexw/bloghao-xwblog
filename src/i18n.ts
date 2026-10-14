@@ -1,4 +1,5 @@
 import type { SettingsMap } from './types'
+import { invalidateSharedSettings } from './db'
 import { cstDate } from './utils'
 
 /* ---------------- 英文版（内部代号 English 0.1，测试版） ----------------
@@ -240,6 +241,8 @@ export async function recordEditionFailure(db: D1Database, err: unknown): Promis
       upsert('editionEnError', msg),
       upsert('editionEnAt', String(Date.now())),
     ])
+    // 立即失效 settings 共享快照：回退必须「下一次 getSettings 起 isEn=false」
+    await invalidateSharedSettings(db)
   } catch (e) {
     console.error('[en-edition] record fallback failed:', e)
   }

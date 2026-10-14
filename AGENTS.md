@@ -58,6 +58,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - `LIKE` 模式里凡是 `\` 转义了 `%`/`_`，SQL 必须声明 `ESCAPE '\'`，且 `\` 本身要先转义成 `\\`（搜索用 `utils.ts likePattern`，JSON 数组列用 `jsonItemLikePattern`，两函数同口径）
 - 正文长度上限按 **UTF-8 字节**（`new TextEncoder().encode(...)`），不是字符数
 - 自定义 slug 落库前过 `cleanSlug`；主题等枚举值校验用 `Object.prototype.hasOwnProperty.call(THEMES, v)`（防原型链属性穿透）
+- settings 读取有 **Cache API 共享快照层**（`db.ts getSettings`：`caches.default` colo 级共享跨 isolate 免 D1 查询 + 并发 in-flight 去重按 db 实例 WeakMap 隔离——docker-poc 单进程多站点与 Node 测试多实例靠这点不串租户，tests/settings-cache.test.ts）——**一切写 settings 的路径写完必须 `await invalidateSharedSettings(db)`**（推送式 delete，写返回后任何 isolate 读必见新值，无 TTL 旧值窗口；不用裸 `cache.put` 回填旧值）：`saveSettings` / `refreshFootStats` / `ensureSchema`（收尾统一清，覆盖 ftsSeeded/pagesSeeded 记账位）已内置；散在 db.ts 之外的裸写点各自负责（setupLock / recordEditionFailure / demo seedAll 收尾）。新增裸写 settings 的代码忘了失效 = 改完设置最多 300s 读旧值。Node / docker-poc 无 caches.default 自动退化直查（后者单进程天然一致）。只读特定键的直查（如 ensureSchema 读记账位）不走快照，无需失效
 
 **全文搜索 FTS5（tests/fts.test.ts、冒烟 /search FTS 命中断言，机制在 src/fts.ts，2026-10-07）**
 
