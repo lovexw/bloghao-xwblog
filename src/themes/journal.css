@@ -830,6 +830,11 @@ img { max-width: 100%; height: auto; }
   padding: 0; margin-left: auto;
 }
 .cmt-reply-btn:hover, .wb-cmt-reply-btn:hover { text-decoration: underline; text-underline-offset: 3px; }
+.cmt-del-btn, .wb-cmt-del-btn {
+  font-size: 12px; color: var(--jrn-accent); background: none; border: none; cursor: pointer;
+  padding: 0 0 0 10px; white-space: nowrap;
+}
+.cmt-del-btn:hover, .wb-cmt-del-btn:hover { color: #c0392b; }
 .cmt-reply-cancel, .wb-cmt-reply-cancel {
   font-size: 12px; color: var(--jrn-accent); background: none; border: none; cursor: pointer;
   padding: 0 0 0 6px; text-decoration: underline dashed; text-underline-offset: 3px;

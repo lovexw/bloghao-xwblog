@@ -461,6 +461,50 @@ try {
     console.log(`  ${cleanup.status === 200 ? '✓' : '✗'} 状态切换：清理临时文章`)
   }
 
+  // ── 前台删评论链路（2026-10-14）──
+  // 管理员在前台（文章 / 留言板 / 微博评论区）直接删评论：SSR 出 data-cmt-del 键，写操作复用
+  // /api/admin/comments/:id（会话鉴权、连带楼中楼、不可恢复——评论没有回收站）。
+  // 三个断言：管理员页有键 / **访客页不得有键**（越权面）/ 删完前台随即不可见。
+  console.log('\n▸ 前台删评论链路')
+  {
+    const dMark = `冒烟前台待删评论 ${Date.now()}`
+    await raw('POST', '/api/public/comments', {
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ slug: 'smoke-multi-tag', content: dMark, nickname: '作者' }),
+    })
+    const adminPage = await raw('GET', '/post/smoke-multi-tag', { headers: { Cookie: cookie } })
+    const adminHtml = await adminPage.text()
+    const anonPage = await raw('GET', '/post/smoke-multi-tag')
+    const anonHtml = await anonPage.text()
+
+    const adminHasBtn = adminHtml.includes(dMark) && adminHtml.includes('data-cmt-del')
+    results.push(['前台删评论：管理员页带 data-cmt-del 键', adminHasBtn])
+    console.log(`  ${adminHasBtn ? '✓' : '✗'} 前台删评论：管理员页带 data-cmt-del 键`)
+
+    const anonLeak = anonHtml.includes('data-cmt-del') || anonHtml.includes('data-reply')
+    results.push(['前台删评论：访客页不含管理键（越权面）', !anonLeak])
+    console.log(`  ${!anonLeak ? '✓' : '✗'} 前台删评论：访客页不含管理键（越权面）`)
+
+    // 从管理员页里取这条评论的 id：内容是 li#cmt-<id> → head（含按钮）→ body（正文），
+    // 所以离标记文本最近的上一个 data-cmt-del 就是它
+    const at = adminHtml.indexOf(dMark)
+    const near = at > 0 ? adminHtml.slice(Math.max(0, at - 3000), at) : ''
+    const ids = [...near.matchAll(/data-cmt-del="(\d+)"/g)]
+    const delId = ids.length ? ids[ids.length - 1][1] : ''
+    results.push(['前台删评论：能从页面拿到待删 id', !!delId])
+    console.log(`  ${delId ? '✓' : '✗'} 前台删评论：能从页面拿到待删 id（${delId || '未取到'}）`)
+
+    if (delId) {
+      const delRes = await raw('DELETE', `/api/admin/comments/${delId}`, { headers: { Cookie: cookie } })
+      results.push(['前台删评论：DELETE 后台端点', delRes.status === 200])
+      console.log(`  ${delRes.status === 200 ? '✓' : '✗'} 前台删评论：DELETE 后台端点（status ${delRes.status}）`)
+      const after = await raw('GET', '/post/smoke-multi-tag', { headers: { Cookie: cookie } })
+      const afterHtml = await after.text()
+      results.push(['前台删评论：删完前台随即不可见', !afterHtml.includes(dMark)])
+      console.log(`  ${!afterHtml.includes(dMark) ? '✓' : '✗'} 前台删评论：删完前台随即不可见`)
+    }
+  }
+
   // ── 回收站（软删除）链路：删除 → 前台/RSS/sitemap/后台列表全部不可见 → 回收站可见
   // → 恢复复活 → 再删 → 彻底删除。防「软删行从某个公开面泄漏」的核心回归守卫 ──
   console.log('\n▸ 回收站（软删除）链路')

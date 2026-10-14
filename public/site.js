@@ -37,6 +37,8 @@
     '删除': 'Delete',
     '删除中…': 'Deleting…',
     '删除失败': 'Failed to delete',
+    '删除这条评论（其下回复一并删除，不可恢复）': 'Delete this comment (its replies go too, and this cannot be undone)',
+    '删除这条评论？其下的回复会一并删除，且不可恢复。': 'Delete this comment? Its replies go too, and this cannot be undone.',
     '保存': 'Save',
     '保存中…': 'Saving…',
     '保存失败': 'Failed to save',
@@ -831,6 +833,71 @@
     })
     .catch(function () {})
 
+  /* ---------------- 管理员在前台删评论（文章 / 留言板 / 微博评论三处共用） ----------------
+   * 按钮由服务端（commentsHtml）或这里（微博评论客户端渲染）只对登录管理员渲染，访客 HTML 里不存在；
+   * 写操作复用后台 /api/admin/comments/:id（会话鉴权，连带删掉其下楼中楼，不可恢复——评论没有回收站）。
+   */
+  function cmtResetReplyIfDeleted(form, id) {
+    if (!form) return
+    var hidden = form.querySelector('[name=parentId]')
+    var target = (hidden && hidden.value) || form.dataset.replyId || ''
+    if (String(target) !== String(id)) return
+    // 复用它自己的「取消」键还原回复态（各表单的状态在各自闭包里，这里不伸手进去）
+    var cancel = form.querySelector('.cmt-reply-cancel, .wb-cmt-reply-cancel')
+    if (cancel) cancel.click()
+  }
+
+  function deleteComment(btn, id) {
+    var item = btn.closest ? btn.closest('.cmt-item, .wb-cmt-item') : null
+    var form = (btn.closest('.cmt-section') || btn.closest('.wb-cmt') || document).querySelector('.cmt-form, .wb-cmt-form')
+    var tipEl = form && form.querySelector('.cmt-tip, .wb-cmt-tip')
+    var tipDefault = tipEl ? tipEl.textContent : ''
+    btn.disabled = true
+    fetch('/api/admin/comments/' + encodeURIComponent(id), { method: 'DELETE' })
+      .then(function (r) {
+        return r.json().then(function (d) {
+          if (!r.ok) throw new Error((d && d.error) || T('删除失败'))
+          return d
+        })
+      })
+      .then(function () {
+        // 删掉的条目连同其子回复一起摘掉，再按 DOM 实际数量修计数（比按 1 减更稳）
+        if (item) item.remove()
+        cmtResetReplyIfDeleted(form, id)
+        var card = btn.closest('.wb-card')
+        if (card) {
+          var wbCount = card.querySelector('.wb-cmt-count')
+          if (wbCount) {
+            var panel = card.querySelector('.wb-cmt')
+            var left = panel ? panel.querySelectorAll('.wb-cmt-item').length : 0
+            wbCount.textContent = String(left)
+          }
+        }
+        var section = btn.closest('.cmt-section')
+        if (section) {
+          var c = section.querySelector('.cmt-count')
+          if (c) c.textContent = String(section.querySelectorAll('.cmt-item').length)
+        }
+      })
+      .catch(function (err) {
+        if (tipEl) {
+          tipEl.textContent = (err && err.message) || T('删除失败')
+          setTimeout(function () { tipEl.textContent = tipDefault }, 4000)
+        }
+        btn.disabled = false
+      })
+  }
+
+  document.addEventListener('click', function (e) {
+    var btn = e.target && e.target.closest ? e.target.closest('.cmt-del-btn, .wb-cmt-del-btn') : null
+    if (!btn) return
+    e.preventDefault()
+    var id = btn.getAttribute('data-cmt-del')
+    if (!id) return
+    if (!confirm(T('删除这条评论？其下的回复会一并删除，且不可恢复。'))) return
+    deleteComment(btn, id)
+  })
+
   /* ---------------- 微博卡片：折叠评论区 ---------------- */
   var authPromise = null
   function authState() {
@@ -874,7 +941,8 @@
         '</span><span class="wb-cmt-time">' + fmtTime(c.created_at) + '</span>' +
         (floor ? '<span class="wb-cmt-floor" style="font-size:11px;opacity:0.45;font-variant-numeric:tabular-nums">#' + floor + '</span>' : '') +
         (isAdmin
-          ? '<button type="button" class="wb-cmt-reply-btn" data-reply="' + c.id + '" data-name="' + esc(c.nickname) + '">' + T('回复') + '</button>'
+          ? '<button type="button" class="wb-cmt-reply-btn" data-reply="' + c.id + '" data-name="' + esc(c.nickname) + '">' + T('回复') + '</button>' +
+            '<button type="button" class="wb-cmt-del-btn" data-cmt-del="' + c.id + '" title="' + T('删除这条评论（其下回复一并删除，不可恢复）') + '">' + T('删除') + '</button>'
           : '') +
         '</div><div class="wb-cmt-body">' + wxqReplace(esc(c.content)) + '</div>'
       var kids = byParent[c.id] || []

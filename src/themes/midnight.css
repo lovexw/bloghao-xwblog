@@ -185,7 +185,7 @@ img { max-width: 100%; height: auto; }
 .cmt-list { list-style: none; }
 .cmt-item { padding: 13px 2px; background: transparent; border: none; border-bottom: 1px solid var(--md-line); border-radius: 0; margin-bottom: 0; }
 .cmt-list > .cmt-item:last-child { border-bottom: none; }
-.cmt-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.cmt-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .cmt-name { font-size: 14px; color: var(--md-accent); font-weight: 600; }
 
 .cmt-avatar { width: 22px; height: 22px; flex: none; align-self: center; border-radius: 50%; background: var(--md-accent); color: #0f1115; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; }
@@ -408,6 +408,11 @@ img { max-width: 100%; height: auto; }
   padding: 0; margin-left: auto; font-family: var(--md-mono);
 }
 .wb-cmt-reply-btn:hover, .cmt-reply-btn:hover { color: var(--md-accent); }
+.cmt-del-btn, .wb-cmt-del-btn {
+  font-size: 12px; color: var(--md-sub); background: none; border: none; cursor: pointer;
+  padding: 0 0 0 10px; white-space: nowrap;
+}
+.cmt-del-btn:hover, .wb-cmt-del-btn:hover { color: #c0392b; }
 .wb-cmt-reply-cancel, .cmt-reply-cancel {
   font-size: 12px; color: var(--md-accent); background: none; border: none; cursor: pointer;
   padding: 0 0 0 6px; text-decoration: underline;

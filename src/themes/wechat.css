@@ -455,6 +455,11 @@ a.wx-account:hover { opacity: 0.75; }
   padding: 0; margin-left: auto; white-space: nowrap;
 }
 .wb-cmt-reply-btn:hover, .cmt-reply-btn:hover { color: var(--wx-accent); }
+.cmt-del-btn, .wb-cmt-del-btn {
+  font-size: 12px; color: #8f887d; background: none; border: none; cursor: pointer;
+  padding: 0 0 0 10px; white-space: nowrap;
+}
+.cmt-del-btn:hover, .wb-cmt-del-btn:hover { color: #c0392b; }
 .wb-cmt-reply-cancel, .cmt-reply-cancel {
   font-size: 12px; color: var(--wx-accent); background: none; border: none; cursor: pointer;
   padding: 0 0 0 6px; text-decoration: underline;

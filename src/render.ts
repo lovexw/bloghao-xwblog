@@ -1360,8 +1360,11 @@ export function commentsHtml(o: {
       : c.member_tier
         ? `<span class="cmt-badge">${en ? 'Member' : '会员'}</span>`
         : ''
-    const replyBtn = o.isAdmin
-      ? `<button class="cmt-reply-btn" type="button" data-reply="${c.id}" data-name="${esc(c.nickname)}">${tr(en, '回复')}</button>`
+    // 管理员前台的操作键：回复（复用现有楼中楼流程）+ 删除（连带其下回复，不可恢复）。
+    // 只对登录管理员渲染（访客 HTML 里不存在）——前台删评论走后台 /api/admin/comments/:id（会话鉴权）
+    const adminBtns = o.isAdmin
+      ? `<button class="cmt-reply-btn" type="button" data-reply="${c.id}" data-name="${esc(c.nickname)}">${tr(en, '回复')}</button>
+    <button class="cmt-del-btn" type="button" data-cmt-del="${c.id}" title="${tr(en, '删除这条评论（其下回复一并删除，不可恢复）')}">${tr(en, '删除')}</button>`
       : ''
     const kids = children.get(c.id) || []
     return `<li class="cmt-item" id="cmt-${c.id}">
@@ -1370,7 +1373,7 @@ export function commentsHtml(o: {
     <span class="cmt-name">${esc(c.nickname)}${badge}</span>
     <span class="cmt-time">${en ? fmtDateTimeEn(c.created_at) : fmtDateTime(c.created_at)}</span>
     ${floor ? `<span class="cmt-floor" style="font-size:11px;opacity:0.45;font-variant-numeric:tabular-nums">#${floor}</span>` : ''}
-    ${replyBtn}
+    ${adminBtns}
   </div>
   <div class="cmt-body">${replaceEmoji(esc(c.content))}</div>
   ${kids.length ? `<ul class="cmt-children">${kids.map((k) => renderItem(k)).join('')}</ul>` : ''}

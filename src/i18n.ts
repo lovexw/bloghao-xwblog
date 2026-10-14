@@ -162,6 +162,7 @@ const ZH_EN: Record<string, string> = {
   '视频': 'Video',
   '最大 25MB，MP4 / WebM': 'Up to 25MB, MP4 / WebM',
   '图片 / 视频，一条微博最多 1 个视频': 'Photos / video — one video per note',
+  '删除这条评论（其下回复一并删除，不可恢复）': 'Delete this comment (its replies go too, and this cannot be undone)',
   '只支持 MP4 / WebM 视频': 'Only MP4 / WebM videos are supported',
   '写点什么，或者配张图 / 加段视频吧': 'Write something, or attach a photo / video first',
   // 闭站页
