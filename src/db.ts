@@ -116,7 +116,10 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
 // refreshFootStats / ensureSchema 已内置，散落 db.ts 之外的裸写点（setupLock /
 // recordEditionFailure / demo 播种）各自负责——见 AGENTS「SQL / 输入」防线。
 const SETTINGS_SHARED_URL = 'https://xwblog-internal.invalid/__settings-snapshot'
-const SETTINGS_SHARED_TTL_S = 300
+// 60s（2026-10-15 审计 F1 止血）：快照键无实例维度，跨部署串设置的暴露窗口随 TTL 走——
+// 压到 1 分钟热读收益基本不损（一分钟内同 isolate/同 colo 仍免 D1），窗口缩到原来的 1/5。
+// 键带实例维度的完整修复需 host 穿过 getSettings/invalidateSharedSettings 调用链，见审计报告
+const SETTINGS_SHARED_TTL_S = 60
 const settingsInflight = new WeakMap<object, Promise<SettingsMap>>()
 
 function sharedCache(): Cache | null {

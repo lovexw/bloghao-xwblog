@@ -27,7 +27,7 @@
 
 | ID | 严重度 | 状态 | 一句话 | 位置 |
 |---|---|---|---|---|
-| F1 | P1 | 存疑（Cache API 跨部署隔离语义待站长在 CF 侧验证） | settings 共享快照缓存键是全部署固定 URL、不含实例标识，同 zone 多实例可能互串含密钥的设置快照 | src/db.ts:118 |
+| F1 | P1 | 存疑（Cache API 跨部署隔离语义待站长在 CF 侧验证） | settings 共享快照缓存键是全部署固定 URL、不含实例标识，同 zone 多实例可能互串含密钥的设置快照 | src/db.ts:118。**处置（2026-10-16）**：止血落地——快照 TTL 300→60s，暴露窗口缩至 1/5；键带实例维度的完整修复需 host 穿过 getSettings/invalidateSharedSettings 全部调用链（且会把「改设置全 colo 即时失效」弱化为 per-host），维持「先核实 Cache API 隔离语义再专项设计」 |
 | F2 | P1 | 确认 | `/images` 图床边缘缓存的两个前提被打破：媒体删除不失效（已删图最长一年可访问）+ favicon 键可覆盖（刷新图标后最长一年取旧图） | src/index.ts:269-302、src/api.ts:1558-1567/1031-1055 |
 | F3 | P1 | 确认 | 演示站 `/api/admin/export/*` 未短路——2026-10-12 审计 B11 标「已修」但修复清单只落了 backup/sanitize/fetch-icon/refresh-icon/approve 五处，export 漏掉；AGENTS.md「export 全部 isDemo 短路」的防线声明与实现不符 | src/export.ts:115/262（对照 api.ts:1907 备份守卫在位） |
 | F4 | P2 | 确认 | /mcp 与 /post/:slug/unlock 不在入站体积预检覆盖内（预检注册在 /api 子应用）；两者 body 解析分别在鉴权 / 限流之后，残余风险仅「持 token 者超大 JSON-RPC 打爆 isolate」 | src/mcp.ts:451、src/index.ts:184 |
