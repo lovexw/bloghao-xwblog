@@ -134,6 +134,26 @@ cctrl -b "$CJAR" -d 'host=smoke-new.localhost' http://ops.localhost:${PORT}/crea
 check "面板开站后新租户立即可访问（热加载）" 200 "$(code smoke-new.localhost /api/health)"
 grep -q '"smoke-new.localhost"' "$SMOKE_CFG" && check "tenants.json 已落盘" 1 1 || check "tenants.json 已落盘" 1 0
 
+# 开站 flash 必须带上前台/后台两个完整地址（发给博主的引导话术）
+CREATE_FLASH=$(cctrl -b "$CJAR" -d "host=flash-check.localhost" http://ops.localhost:${PORT}/create)
+check "开站 flash 含前台地址" 1 "$(printf '%s' "$CREATE_FLASH" | grep -c 'http://flash-check.localhost/' | awk '{print ($1>0)?1:0}')"
+check "开站 flash 含后台地址" 1 "$(printf '%s' "$CREATE_FLASH" | grep -c 'http://flash-check.localhost/admin/' | awk '{print ($1>0)?1:0}')"
+cctrl -b "$CJAR" -d 'host=flash-check.localhost&confirm=flash-check.localhost' http://ops.localhost:${PORT}/delete > /dev/null
+
+# 分站数据统计与详情页：仪表盘出数据列；详情页出完整统计与前台/后台入口
+cctrl -b "$CJAR" http://ops.localhost:${PORT}/ > /tmp/ctrl-dash.html
+check "仪表盘含「数据」列" 1 "$(grep -c '<th>数据</th>' /tmp/ctrl-dash.html | awk '{print ($1>0)?1:0}')"
+check "仪表盘每行有前台/后台/详情按钮" 1 "$(grep -c 'admin/" target="_blank" rel="noopener">后台' /tmp/ctrl-dash.html | awk '{print ($1>0)?1:0}')"
+check "仪表盘空库租户显示零值口径" 1 "$(grep -c '0 文 · 0 微博' /tmp/ctrl-dash.html | awk '{print ($1>0)?1:0}')"
+check "仪表盘零内容租户显示「未发布过」" 1 "$(grep -c '未发布过' /tmp/ctrl-dash.html | awk '{print ($1>0)?1:0}')"
+DET=$(cctrl -b "$CJAR" "http://ops.localhost:${PORT}/tenant?host=smoke-new.localhost")
+check "分站详情页 200 含前台/后台入口" 1 "$([ "$(cctrl -o /dev/null -w '%{http_code}' -b "$CJAR" "http://ops.localhost:${PORT}/tenant?host=smoke-new.localhost")" = 200 ] && printf '%s' "$DET" | grep -c '打开后台管理' | awk '{print ($1>0)?1:0}')"
+check "详情页含统计卡（文章/微博/PV）" 1 "$(printf '%s' "$DET" | grep -c '近 30 日访问' | awk '{print ($1>0)?1:0}')"
+check "详情页含管理员状态" 1 "$(printf '%s' "$DET" | grep -c '管理员账号' | awk '{print ($1>0)?1:0}')"
+check "详情页未知 host 404" 404 "$(cctrl -o /dev/null -w '%{http_code}' -b "$CJAR" "http://ops.localhost:${PORT}/tenant?host=not-in-config.localhost")"
+check "详情页路径穿越形态 404" 404 "$(cctrl -o /dev/null -w '%{http_code}' -b "$CJAR" "http://ops.localhost:${PORT}/tenant?host=..%2F..%2Fetc")"
+check "未登录访问详情页 303" 303 "$(curl -s -o /dev/null -w '%{http_code}' --resolve "ops.localhost:${PORT}:127.0.0.1" "http://ops.localhost:${PORT}/tenant?host=smoke-new.localhost")"
+
 # 首访建管理员 → 面板重置密码 → 新密码可登录
 # （setup 带 JSON 的 POST 走同源校验，curl 默认不发 Origin，天然同源；无 Origin 即放行）
 curl -s -o /dev/null --resolve "smoke-new.localhost:${PORT}:127.0.0.1" -H 'Content-Type: application/json' \

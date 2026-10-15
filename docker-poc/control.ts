@@ -47,6 +47,15 @@ const PLAZA_ADMIN_TOKEN = process.env.PLAZA_ADMIN_TOKEN || ''
 // 与 server.ts 的 HOST_RE 同口径（bundle 后共享同一份；源码各自声明防循环导入）
 const HOST_RE = /^[a-z0-9][a-z0-9.-]*$/
 
+// 域名形态守卫（与 /create 同一正则）：host 会拼进 tenants/<host>/ 路径，
+// 不设防的 ../ 会打出 tenants 目录之外（reset / tenant 详情 / 删除都靠它把门）
+const HOST_SHAPE_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/
+
+/** 浏览器侧真实 scheme（server.ts resolveScheme 的结果经 deps 传入）拼站点地址用 */
+function schemeOf(deps: ControlDeps): string {
+  return deps.scheme === 'https' ? 'https' : 'http'
+}
+
 interface PlazaStats {
   sites?: { total?: number; active?: number; verified?: number }
   items?: { total?: number; posts?: number; weibo?: number; last24h?: number }
@@ -308,6 +317,240 @@ function tenantDir(host: string): string {
   return path.join(process.env.TENANTS_DIR || 'data/tenants', host)
 }
 
+/** 北京时间日期 / 时刻（与主程序 utils.ts fmtDate/fmtDateTime 同口径：+8h 后取 UTC 分量） */
+function bjDate(ts: number): string {
+  if (!ts) return '—'
+  const d = new Date(ts + 8 * 3600_000)
+  const p = (x: number) => String(x).padStart(2, '0')
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`
+}
+
+function bjDateTime(ts: number): string {
+  if (!ts) return '—'
+  const d = new Date(ts + 8 * 3600_000)
+  const p = (x: number) => String(x).padStart(2, '0')
+  return `${bjDate(ts)} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`
+}
+
+/** 距今的口语化时长：判断「博主有没有认真更新」用 */
+function ago(ts: number): string {
+  if (!ts) return '从未'
+  const days = Math.floor((Date.now() - ts) / 86400_000)
+  if (days <= 0) return '今天'
+  if (days < 30) return `${days} 天前`
+  if (days < 365) return `${Math.floor(days / 30)} 个月前`
+  return `${Math.floor(days / 365)} 年前`
+}
+
+// ── 分站数据统计（只读直查租户 blog.db，供仪表盘「数据」列与分站详情页）─────
+// 面板与租户业务进程同机同用户：node:sqlite 只读连接旁路 D1 shim（与 resetAdminPassword
+// 同路数），单租户一次连接全量取完；查询逐条兜底——坏库 / 空库只显示「读不到」，不拖垮面板
+
+interface TenantStats {
+  posts: number
+  drafts: number
+  scheduled: number
+  weibo: number
+  comments: number
+  commentsPending: number
+  members: number
+  visits30d: number
+  media: number
+  mediaBytes: number
+  /** 最近公开发布（文章/微博取最大，含软删过滤与 status='published' 口径） */
+  lastContentAt: number
+  admin: { username: string; createdAt: number } | null
+  siteTitle: string
+}
+
+async function tenantStats(host: string): Promise<TenantStats | null> {
+  const file = path.join(tenantDir(host), 'blog.db')
+  if (!fs.existsSync(file)) return null
+  const { DatabaseSync } = await import('node:sqlite')
+  let db: InstanceType<typeof DatabaseSync>
+  try {
+    db = new DatabaseSync(file, { readOnly: true })
+  } catch {
+    return null
+  }
+  try {
+    const one = (sql: string, ...params: (string | number)[]): number => {
+      try {
+        const r = db.prepare(sql).get(...params) as { n?: unknown } | undefined
+        return Number(r?.n) || 0
+      } catch {
+        return 0
+      }
+    }
+    const lastExpr = 'MAX(COALESCE(published_at, created_at))'
+    const last = db
+      .prepare(
+        `SELECT MAX(t) AS n FROM (
+           SELECT ${lastExpr} AS t FROM posts WHERE deleted_at IS NULL AND status = 'published'
+           UNION ALL
+           SELECT ${lastExpr} AS t FROM weibo WHERE deleted_at IS NULL AND status = 'published'
+         )`,
+      )
+      .get() as { n?: unknown } | undefined
+    const admin = db.prepare('SELECT username, created_at FROM users ORDER BY id LIMIT 1').get() as
+      | { username: string; created_at: number }
+      | undefined
+    const siteTitle = db.prepare("SELECT value FROM settings WHERE key = 'siteTitle'").get() as { value?: unknown } | undefined
+    return {
+      posts: one(`SELECT COUNT(*) AS n FROM posts WHERE deleted_at IS NULL AND status = 'published'`),
+      drafts: one(`SELECT COUNT(*) AS n FROM posts WHERE deleted_at IS NULL AND status = 'draft'`),
+      scheduled: one(`SELECT COUNT(*) AS n FROM posts WHERE deleted_at IS NULL AND status = 'scheduled'`),
+      weibo: one(`SELECT COUNT(*) AS n FROM weibo WHERE deleted_at IS NULL AND status = 'published'`),
+      comments: one(`SELECT COUNT(*) AS n FROM comments WHERE status = 'approved'`),
+      commentsPending: one(`SELECT COUNT(*) AS n FROM comments WHERE status = 'pending'`),
+      members: one('SELECT COUNT(*) AS n FROM members'),
+      visits30d: one('SELECT COUNT(*) AS n FROM visit_log WHERE ts > ?', Date.now() - 30 * 86400_000),
+      media: one('SELECT COUNT(*) AS n FROM uploads'),
+      mediaBytes: one('SELECT COALESCE(SUM(size), 0) AS n FROM uploads'),
+      lastContentAt: Number(last?.n) || 0,
+      admin: admin ? { username: String(admin.username), createdAt: Number(admin.created_at) || 0 } : null,
+      siteTitle: String(siteTitle?.value || ''),
+    }
+  } catch {
+    return null
+  } finally {
+    try {
+      db.close()
+    } catch {
+      /* 已断开不阻塞 */
+    }
+  }
+}
+
+/** 仪表盘「数据」列：一句话看懂该博主有没有在用（软删与草稿不夸大口径） */
+function statsCellHtml(st: TenantStats | null): string {
+  if (!st) return '<td class="tenant-meta">暂无数据<br><span class="muted">库尚未生成</span></td>'
+  const bits = [
+    `${st.posts} 文`,
+    st.drafts ? `${st.drafts} 草稿` : '',
+    st.scheduled ? `${st.scheduled} 定时` : '',
+    `${st.weibo} 微博`,
+    `${st.visits30d} 近30日PV`,
+  ].filter(Boolean)
+  const never = st.posts + st.weibo === 0
+  return `<td class="tenant-meta">${esc(bits.join(' · '))}<br>最近更新 ${esc(never ? '未发布过' : ago(st.lastContentAt))}${
+    st.commentsPending ? `<br><span style="color:var(--accent-dark)">${st.commentsPending} 条评论待审</span>` : ''
+  }</td>`
+}
+
+/** 分站详情页正文：完整数据 + 最近内容 + 前台/后台入口 */
+async function tenantDetailBody(host: string, cfg: TenantConfig, live: boolean, scheme: string): Promise<string> {
+  const st = await tenantStats(host)
+  const siteUrl = `${scheme}://${host}/`
+  const adminUrl = `${siteUrl}admin/`
+  const mode = cfg.demo ? '演示种子站' : '正式站'
+  const storage = cfg.storage === 'r2' ? 'R2 存储' : '本地盘存储'
+  const meta = tenantMeta(host, cfg, live)
+
+  let recentPostsRows = ''
+  let recentWeiboRows = ''
+  let recentErr = ''
+  if (st) {
+    try {
+      const { DatabaseSync } = await import('node:sqlite')
+      const db = new DatabaseSync(path.join(tenantDir(host), 'blog.db'), { readOnly: true })
+      try {
+        const posts = db
+          .prepare(
+            `SELECT title, slug, status, views, COALESCE(published_at, created_at) AS t
+             FROM posts WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 8`,
+          )
+          .all() as { title: unknown; slug: unknown; status: unknown; views: unknown; t: unknown }[]
+        recentPostsRows = posts
+          .map((p) => {
+            const status = String(p.status)
+            const label = status === 'published' ? '已发布' : status === 'scheduled' ? '定时' : '草稿'
+            const title =
+              status === 'published'
+                ? `<a href="${esc(siteUrl)}post/${encodeURIComponent(String(p.slug))}" target="_blank" rel="noopener">${esc(String(p.title))}</a>`
+                : esc(String(p.title))
+            return `<tr><td>${title}</td><td class="tenant-meta">${label}</td><td class="mono hide-sm">${esc(bjDateTime(Number(p.t)))}</td><td class="mono">${Number(p.views) || 0}</td></tr>`
+          })
+          .join('')
+        const weibo = db
+          .prepare(
+            `SELECT content, status, COALESCE(published_at, created_at) AS t
+             FROM weibo WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 5`,
+          )
+          .all() as { content: unknown; status: unknown; t: unknown }[]
+        recentWeiboRows = weibo
+          .map((w) => {
+            const text = String(w.content || '')
+            const label = String(w.status) === 'draft' ? ' <span class="muted">（草稿）</span>' : ''
+            return `<tr><td>${esc(text.slice(0, 80))}${text.length > 80 ? '…' : ''}${label}</td><td class="mono hide-sm" style="white-space:nowrap">${esc(bjDateTime(Number(w.t)))}</td></tr>`
+          })
+          .join('')
+      } finally {
+        try {
+          db.close()
+        } catch {
+          /* 忽略 */
+        }
+      }
+    } catch {
+      recentErr = '最近内容读取失败（库可能正忙），稍后刷新重试。'
+    }
+  }
+
+  return `
+<div class="page-head">
+  <h1>${esc(st?.siteTitle || host)} <span class="muted" style="font-size:14px">· ${esc(host)}</span></h1>
+  <p class="sub">${mode} · ${storage} · ${live ? '运行中' : cfg.disabled ? '已停用' : '未加载'} · ${esc(meta)}</p>
+  <p style="margin-top:12px"><a class="btn btn-primary" href="${esc(siteUrl)}" target="_blank" rel="noopener">打开前台 ↗</a>
+  <a class="btn" href="${esc(adminUrl)}" target="_blank" rel="noopener">打开后台管理 ↗</a></p>
+</div>
+
+${
+  !st
+    ? '<div class="card fade fade-1"><p class="tenant-meta">该站点还没有数据库（开通后从未被访问过），首次访问即自动生成。</p></div>'
+    : `
+<div class="stat-strip fade fade-1">
+  <div class="stat accent"><b>${st.posts}<span style="font-size:13px;font-weight:600;color:var(--sub)"> 篇</span></b><span>已发布文章${st.drafts || st.scheduled ? `（另有 ${[st.drafts ? `${st.drafts} 草稿` : '', st.scheduled ? `${st.scheduled} 定时` : ''].filter(Boolean).join('、')}）` : ''}</span></div>
+  <div class="stat"><b>${st.weibo}</b><span>微博</span></div>
+  <div class="stat"><b>${st.comments}</b><span>评论${st.commentsPending ? `（待审 ${st.commentsPending}）` : ''}</span></div>
+  <div class="stat"><b>${st.visits30d}</b><span>近 30 日访问（PV）</span></div>
+  <div class="stat"><b>${st.members}</b><span>注册会员</span></div>
+  <div class="stat"><b>${esc(fmtBytes(st.mediaBytes))}</b><span>媒体文件 ${st.media} 个</span></div>
+</div>
+
+<div class="card fade fade-1">
+  <h2>活跃度速览</h2>
+  <p class="tenant-meta">最近发布：${
+    st.posts + st.weibo
+      ? `<b>${esc(ago(st.lastContentAt))}</b>（${esc(bjDateTime(st.lastContentAt))}）`
+      : '还没有公开发布过内容'
+  }；管理员账号 ${st.admin ? `<code>${esc(st.admin.username)}</code>（${esc(bjDate(st.admin.createdAt))} 创建）` : '<b>尚未创建</b>（博主首次进后台会引导设置）'}。</p>
+</div>
+
+<div class="card card-flat fade fade-2">
+  <h2>最近文章 <span class="muted">· 按更新时间，最多 8 篇</span></h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>标题</th><th>状态</th><th class="hide-sm">时间</th><th>PV</th></tr></thead>
+    <tbody>${recentPostsRows || '<tr><td colspan="4" class="empty">还没有文章。</td></tr>'}</tbody>
+  </table>
+  </div>
+</div>
+
+<div class="card card-flat fade fade-2">
+  <h2>最近微博 <span class="muted">· 最多 5 条</span></h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>内容</th><th class="hide-sm">时间</th></tr></thead>
+    <tbody>${recentWeiboRows || '<tr><td colspan="2" class="empty">还没有微博。</td></tr>'}</tbody>
+  </table>
+  </div>
+</div>`
+}
+${recentErr ? `<div class="card"><p class="tenant-meta">${esc(recentErr)}</p></div>` : ''}
+<p><a class="btn" href="/">← 返回控制台</a></p>`
+}
+
 function tenantMeta(host: string, cfg: TenantConfig, live: boolean): string {
   const size = fmtBytes(dirSize(tenantDir(host)))
   const mode = cfg.demo ? '演示种子' : '真实站'
@@ -534,6 +777,8 @@ function page(title: string, body: string, flash = '', authed = false): string {
     td.mono { font-size: 13.5px; font-weight: 600; }
     td.actions { text-align: left; white-space: normal; }
     td.actions form { display: inline-block; margin: 8px 8px 0 0; }
+    /* 移动端数据列藏进详情页：卡片式表格里只留域名/状态/动作 */
+    .table-wrap td:nth-child(2) { display: none; }
     .card { padding: 18px 16px; }
   }
 </style>
@@ -610,10 +855,21 @@ function showcaseCardHtml(): string {
 async function dashboard(deps: ControlDeps, flash = ''): Promise<string> {
   // 广场统计按需拉取（4s 超时）：hub 不可达时卡片降级，不影响其余面板
   const plazaStats = PLAZA_HUB_URL && PLAZA_ADMIN_TOKEN ? await fetchPlazaStats() : null
-  return page('控制台', dashboardBody(deps, plazaStats), flash, true)
+  const scheme = deps.scheme === 'https' ? 'https' : 'http'
+  // 数据列涉及逐租户开库查询，与广场统计一样在 async 上下文取好再进纯渲染
+  const statsMap = new Map<string, TenantStats | null>()
+  for (const host of Object.keys(deps.readTenantsConfig().tenants)) {
+    statsMap.set(host, await tenantStats(host))
+  }
+  return page('控制台', dashboardBody(deps, plazaStats, scheme, statsMap), flash, true)
 }
 
-function dashboardBody(deps: ControlDeps, plazaStats: PlazaStats | null): string {
+function dashboardBody(
+  deps: ControlDeps,
+  plazaStats: PlazaStats | null,
+  scheme = 'https',
+  statsMap?: Map<string, TenantStats | null>,
+): string {
   const cfgAll = deps.readTenantsConfig()
   const rows = Object.entries(cfgAll.tenants)
     .sort((a, b) => a[0].localeCompare(b[0]))
@@ -621,7 +877,11 @@ function dashboardBody(deps: ControlDeps, plazaStats: PlazaStats | null): string
       const live = deps.tenants.has(host)
       const meta = tenantMeta(host, cfg, live)
       const pill = live ? '<span class="pill ok">运行中</span>' : cfg.disabled ? '<span class="pill off">已停用</span>' : '<span class="pill wait">未加载</span>'
+      const frontUrl = `${scheme}://${host}/`
       const actions = [
+        `<a class="btn" href="${esc(frontUrl)}" target="_blank" rel="noopener">前台 ↗</a>`,
+        `<a class="btn" href="${esc(frontUrl)}admin/" target="_blank" rel="noopener">后台 ↗</a>`,
+        `<a class="btn" href="/tenant?host=${encodeURIComponent(host)}">详情</a>`,
         live ? `<form method="post" action="/disable"><input type="hidden" name="host" value="${esc(host)}"><button class="btn" type="submit">停用</button></form>` : '',
         cfg.disabled ? `<form method="post" action="/enable"><input type="hidden" name="host" value="${esc(host)}"><button class="btn" type="submit">启用</button></form>` : '',
         `<form method="post" action="/reset"><input type="hidden" name="host" value="${esc(host)}"><button class="btn" type="submit">重置密码</button></form>`,
@@ -629,8 +889,10 @@ function dashboardBody(deps: ControlDeps, plazaStats: PlazaStats | null): string
       ]
         .filter(Boolean)
         .join('')
+      const st = statsMap?.get(host) ?? null
       return `<tr>
-  <td class="mono">${esc(host)}</td>
+  <td class="mono"><a href="/tenant?host=${encodeURIComponent(host)}" style="color:var(--ink);text-decoration:none;font-weight:600">${esc(host)}</a></td>
+  ${statsCellHtml(st)}
   <td class="tenant-meta hide-sm">${esc(meta)}</td>
   <td>${pill}</td>
   <td class="actions">${actions}</td>
@@ -731,12 +993,12 @@ ${showcaseCardHtml()}
 </div>
 
 <div class="card card-flat fade fade-2">
-  <h2>租户（${tenantKeys.length}）<span class="muted">· 数据合计 ${fmtBytes(totalSize)}</span></h2>
+  <h2>租户（${tenantKeys.length}）<span class="muted">· 数据合计 ${fmtBytes(totalSize)} · 域名进详情，前台/后台按钮直接跳转</span></h2>
   <div class="table-wrap">
   <table>
-    <thead><tr><th>域名</th><th class="hide-sm">信息</th><th>状态</th><th style="text-align:right">操作</th></tr></thead>
+    <thead><tr><th>域名</th><th>数据</th><th class="hide-sm">信息</th><th>状态</th><th style="text-align:right">操作</th></tr></thead>
     <tbody>
-    ${rows || '<tr><td colspan="4" class="empty">还没有租户，用上面表单开通第一个网站吧。</td></tr>'}
+    ${rows || '<tr><td colspan="5" class="empty">还没有租户，用上面表单开通第一个网站吧。</td></tr>'}
     </tbody>
   </table>
   </div>
@@ -951,7 +1213,11 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
       deps.writeTenantsConfig(cfgAll2)
       return sendHtml(res, await dashboard(deps, `✗ 开通失败：${String(e)}`))
     }
-    let flash = `✓ ${host} 已开通`
+    const s = schemeOf(deps)
+    let flash = `✓!✓ <b>${esc(host)}</b> 开通成功！两个地址请发给博主：<br>
+    前台 <code style="font-size:15px"><a href="${esc(s)}://${esc(host)}/" target="_blank" rel="noopener">${esc(s)}://${esc(host)}/</a></code><br>
+    后台管理 <code style="font-size:15px"><a href="${esc(s)}://${esc(host)}/admin/" target="_blank" rel="noopener">${esc(s)}://${esc(host)}/admin/</a></code><br>
+    <span class="muted">博主首次打开后台会引导创建管理员账号；证书首次访问自动签发，开箱即写。日常运营情况可在「租户」列表点「详情」查看。</span>`
     if (cfEnabled()) {
       const ip = process.env.SERVER_IP || ''
       const err = ip ? await dnsCreate(host, ip) : '已设置 CF_API_TOKEN 但未设 SERVER_IP（面板用它建 A 记录），请手动加 DNS'
@@ -962,6 +1228,17 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
     }
     opsLog('开通', host + (demo ? '（演示种子）' : ''))
     return sendHtml(res, await dashboard(deps, flash))
+  }
+
+  // 分站详情：完整数据 + 最近内容 + 前台/后台入口（host 白名单校验防路径穿越）
+  if (method === 'GET' && path === '/tenant' && url.searchParams.has('host')) {
+    const target = (url.searchParams.get('host') || '').toLowerCase()
+    if (!HOST_SHAPE_RE.test(target) || !deps.readTenantsConfig().tenants[target]) {
+      return sendHtml(res, page('404', '<div class="card">没有这个站点。</div>', '', true), 404)
+    }
+    const cfg = deps.readTenantsConfig().tenants[target] || {}
+    const live = deps.tenants.has(target)
+    return sendHtml(res, page('分站详情', await tenantDetailBody(target, cfg, live, deps.scheme), '', true))
   }
 
   if (method === 'POST' && path === '/disable' && host) {
@@ -1005,9 +1282,8 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
     return sendHtml(res, await dashboard(deps, `✓ ${host} 已彻底删除（配置 + 数据目录${cfEnabled() ? ' + DNS 记录' : ''}）`))
   }
 
-  // 域名形态守卫（与 /create 同一正则）：host 直接拼进 tenants/<host>/ 路径，
-  // 不设防的 ../ 会打出 tenants 目录之外（reset 是改密+清会话的毁灭性操作）
-  const HOST_SHAPE_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/
+  // 域名形态守卫（与 /create 同一正则，常量 HOST_SHAPE_RE 在模块顶层）：host 直接拼进
+  // tenants/<host>/ 路径，不设防的 ../ 会打出 tenants 目录之外（reset 是改密+清会话的毁灭性操作）
 
   if (method === 'POST' && path === '/reset' && host) {
     if (!HOST_SHAPE_RE.test(host)) {
