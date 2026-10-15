@@ -4,7 +4,7 @@ import { runScheduledPublish } from './scheduler'
 import { api } from './api'
 import { cleanBotPath, identifyBot, purgeBots, recordBot, shouldRecordBot } from './bots'
 import { siteClosedResponse } from './closed'
-import { clientIp, getCookie, rateLimit } from './auth'
+import { clientIp, getCookie, getSessionUser, rateLimit } from './auth'
 import { ensureSchema, getPostBySlug, getSettings, listCategories, listPosts, listSitemapCategoryLastmod, listSitemapPages, listSitemapPosts, listWeiboLastmod } from './db'
 import { isEn, recordEditionFailure } from './i18n'
 import { mcpRoutes } from './mcp'
@@ -12,6 +12,7 @@ import { goPageHtml, isTrustedOutHost } from './outlink'
 import { imageCacheMatch, imageCachePut, pageCacheMiddleware } from './pagecache'
 import { renderAbout, renderArchive, renderCategory, renderGuestbook, renderHome, renderLinks, renderMember, renderNotFound, renderPage, renderPost, renderRank, renderSearch, renderWeibo } from './pages'
 import { mergeUnlockCookie, PP_COOKIE, PP_TTL_MS, verifyPostPassword } from './protect'
+import { installedManifest, pluginFileKey, readInstalled } from './pluginpkg'
 import { buildJsonFeed, buildRss, buildSitemap } from './rss'
 import { siteBase } from './render'
 import { buildRobotsTxt } from './seo'
@@ -263,6 +264,31 @@ app.get('/sitemap.xml', async (c) => {
 app.get('/robots.txt', async (c) => {
   const settings = await getSettings(c.env.DB)
   return c.text(buildRobotsTxt(settings, new URL(c.req.url).origin, isDemo(c.env)))
+})
+
+/* ---------------- 编辑器远程插件下发（B8 插件半边，安装端点在 api.ts） ----------------
+ * /plugins/installed.json 与 /plugin-files/:id 都要求管理员会话（编辑器带着 Cookie 加载），
+ * 未登录 / 未安装一律 404 不透露存在性；静态资源由 wrangler assets 先行，这里只接动态面。
+ * 注意：/plugins/manifest.json 仍是 assets 静态文件，与本路由无关。 */
+app.get('/plugins/installed.json', async (c) => {
+  const user = await getSessionUser(c.env.DB, c.req.raw)
+  if (!user) return c.text('Not found', 404)
+  const list = readInstalled((await getSettings(c.env.DB)).pluginsInstalled)
+  return c.json(installedManifest(list))
+})
+
+app.get('/plugin-files/:id', async (c) => {
+  const user = await getSessionUser(c.env.DB, c.req.raw)
+  if (!user) return c.text('Not found', 404)
+  const id = c.req.param('id')
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return c.text('Not found', 404)
+  const list = readInstalled((await getSettings(c.env.DB)).pluginsInstalled)
+  if (!list.some((p) => p.id === id)) return c.text('Not found', 404)
+  const obj = await c.env.IMAGES.get(pluginFileKey(id))
+  if (!obj) return c.text('Not found', 404)
+  c.header('X-Content-Type-Options', 'nosniff')
+  c.header('Cache-Control', 'no-store')
+  return c.body(obj.body, 200, { 'Content-Type': 'application/javascript; charset=utf-8' })
 })
 
 /* ---------------- R2 图床 ---------------- */

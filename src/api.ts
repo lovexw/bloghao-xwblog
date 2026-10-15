@@ -72,6 +72,15 @@ import { mdToHtml } from './markdown'
 import { purgeImageCache, purgePageCache } from './pagecache'
 import { appearanceMeta, cleanAppearanceSettings } from './appearance'
 import { cleanCustomCss } from './skinpack'
+import {
+  cleanPluginId,
+  pluginFileKey,
+  PLUGIN_SRC_MAX_BYTES,
+  readInstalled,
+  removeInstalled,
+  sanityCheckPluginSource,
+  upsertInstalled,
+} from './pluginpkg'
 import { EMOJI_BASE, WECHAT_EMOJI } from './emoji'
 import { awardCommentPoints, awardPoints, normalizeMinTier } from './points'
 import { collectRoutes } from './collect'
@@ -601,6 +610,53 @@ async function readPostPayload(c: { req: { json: () => Promise<unknown> } }) {
 
 // 服务端插件列表（后台「插件」页展示与启停，见 src/hooks.ts）
 api.get('/admin/server-plugins', (c) => c.json({ plugins: listServerPlugins() }))
+
+/* ---------------- 编辑器插件远程安装（B8 插件半边，机制 src/pluginpkg.ts） ----------------
+ * 安装 = 抓 https 插件文件 → 内容安检 → 落 R2 → 登记 settings.pluginsInstalled；
+ * 下发走 /plugins/installed.json 与 /plugin-files/:id（index.ts，管理员会话门槛）。
+ * 演示站短路（装包是任意 JS 入口，凭据公示的体验站不开）。 */
+
+api.post('/admin/plugins/install', async (c) => {
+  if (isDemo(c.env)) return jsonError('演示站不开放插件安装', 404)
+  if (!rateLimit(`plugin-install:${clientIp(c.req.raw)}`, 5, 60_000)) return jsonError('安装太频繁，请一分钟后再试', 429)
+  const body = await c.req.json<{ url?: string; id?: string }>().catch(() => null)
+  const url = String(body?.url ?? '').trim().slice(0, 2048)
+  if (!/^https:\/\//i.test(url) || !fetchableUrl(url)) return jsonError('插件地址无效（需公网 https 地址）')
+  const r = await fetchPublicResource(url, { maxBytes: PLUGIN_SRC_MAX_BYTES, timeoutMs: 15_000 })
+  const src = r ? new TextDecoder().decode(r.buf) : ''
+  if (!sanityCheckPluginSource(src)) return jsonError('插件文件抓取失败或内容不合法（需 ≤ 256KB 的文本 JS，且调用 registerPlugin）')
+  const derived =
+    cleanPluginId(String(body?.id ?? '').trim()) ||
+    cleanPluginId((url.split('/').pop() || '').replace(/\.js$/i, ''))
+  if (!derived) return jsonError('插件 id 只能包含字母、数字、_ 或 -（从地址文件名推导失败，请显式传 id）')
+  await c.env.IMAGES.put(pluginFileKey(derived), src, {
+    httpMetadata: { contentType: 'application/javascript; charset=utf-8' },
+  })
+  const bytes = new TextEncoder().encode(src).length
+  const list = upsertInstalled(readInstalled((await getSettings(c.env.DB)).pluginsInstalled), {
+    id: derived,
+    url,
+    at: Date.now(),
+    bytes,
+  })
+  await saveSettings(c.env.DB, { pluginsInstalled: JSON.stringify(list) })
+  return c.json({ ok: true, id: derived, bytes })
+})
+
+api.post('/admin/plugins/uninstall', async (c) => {
+  if (isDemo(c.env)) return jsonError('演示站不开放插件卸载', 404)
+  const body = await c.req.json<{ id?: string }>().catch(() => null)
+  const id = cleanPluginId(String(body?.id ?? ''))
+  if (!id) return jsonError('插件 id 不合法')
+  const list = removeInstalled(readInstalled((await getSettings(c.env.DB)).pluginsInstalled), id)
+  await c.env.IMAGES.delete(pluginFileKey(id))
+  await saveSettings(c.env.DB, { pluginsInstalled: JSON.stringify(list) })
+  return c.json({ ok: true })
+})
+
+api.get('/admin/plugins/installed', async (c) => {
+  return c.json({ plugins: readInstalled((await getSettings(c.env.DB)).pluginsInstalled) })
+})
 
 api.get('/admin/posts', async (c) => {
   const statusParam = c.req.query('status')

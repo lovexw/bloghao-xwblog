@@ -26,6 +26,10 @@ export interface PlazaItem {
 
 /** feed 出参：内容 + 来源站点 */
 export interface PlazaFeedEntry extends PlazaItem {
+  /** hub 侧条目 id（点赞动作的目标主键；客户端按它记「已赞」） */
+  id: number
+  /** 匿名点赞累计数（≥1 才值得前台渲染，零赞不显示避免冷清感） */
+  likes: number
   siteId: number
   siteName: string
   siteUrl: string
@@ -183,6 +187,21 @@ export interface ScoreOptions {
   now?: number
   /** 随机源可注入（测试确定性），默认 Math.random */
   rand?: () => number
+}
+
+/** 新站聚光期（P0.4）：注册 7 天内 weight 临时 +2 档，冷启动扶持；到期自动回落，管理员定的档不受影响 */
+export const SPOTLIGHT_DAYS = 7
+export const SPOTLIGHT_BOOST = 2
+
+/**
+ * 聚光加成（纯函数）：站点注册在 SPOTLIGHT_DAYS 天内 → weight + SPOTLIGHT_BOOST（封顶 10）。
+ * created_at 缺失（0）/未来值一律不加成——脏数据宁可不扶持，不让脏值变成常驻加权。
+ */
+export function spotlightWeight(weight: number, siteCreatedAt: number, now = Date.now()): number {
+  const w = Math.min(10, Math.max(0, weight)) || 0
+  if (!Number.isFinite(siteCreatedAt) || siteCreatedAt <= 0 || siteCreatedAt > now) return w
+  if (now - siteCreatedAt > SPOTLIGHT_DAYS * 86_400_000) return w
+  return Math.min(10, w + SPOTLIGHT_BOOST)
 }
 
 /**

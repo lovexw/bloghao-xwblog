@@ -2792,6 +2792,16 @@ async function viewPlugins() {
   const market = (catalog?.plugins || [])
     .map((p) => {
       const has = installed.some((x) => x.id === p.id)
+      // 市场条目带 src（插件文件直链）= 可远程安装；否则只是跳转展示卡
+      if (p.src)
+        return `<div class="pl-row">
+      <span class="pl-ico">${esc((p.name || p.id).charAt(0).toUpperCase())}</span>
+      <div class="pl-main">
+        <div class="pl-name">${esc(p.name || p.id)}</div>
+        <div class="pl-desc">${esc(p.description || '查看介绍与安装说明')}</div>
+      </div>
+      <button class="btn btn-sm" data-mkt-install="${esc(p.id)}" data-src="${esc(safeHttpUrl(p.src))}">安装</button>
+    </div>`
       return `<a class="pl-row mk-row" href="${esc(safeHttpUrl(p.link))}" target="_blank" rel="noopener">
       <span class="pl-ico">${esc((p.name || p.id).charAt(0).toUpperCase())}</span>
       <div class="pl-main">
@@ -2802,6 +2812,30 @@ async function viewPlugins() {
     </a>`
     })
     .join('') || '<div class="empty-box">市场目录暂时空着，更多插件敬请期待</div>'
+
+  // 远程插件（B8）：从市场条目或任意 https 地址安装，文件落站内 R2 随编辑器加载
+  let remoteInstalled = []
+  if (tab === 'market') {
+    try {
+      const r = await api('/admin/plugins/installed')
+      if (Array.isArray(r.plugins)) remoteInstalled = r.plugins
+    } catch {
+      /* 拉取失败不影响页面 */
+    }
+  }
+  const remoteRows =
+    remoteInstalled
+      .map(
+        (p) => `<div class="pl-row">
+      <span class="pl-ico">${esc(String(p.id || '?').charAt(0).toUpperCase())}</span>
+      <div class="pl-main">
+        <div class="pl-name">${esc(p.id)}<span class="pl-ver">${p.bytes ? `${Math.max(1, Math.round(p.bytes / 1024))} KB` : ''}</span></div>
+        <div class="pl-desc">来源 ${esc(p.url || '未知')}</div>
+      </div>
+      <button class="btn btn-sm" data-uninstall="${esc(p.id)}">卸载</button>
+    </div>`
+      )
+      .join('') || '<div class="empty-box">还没有远程插件——粘贴插件文件的 https 地址即可安装</div>'
 
   // 插件配置现值（settings.serverPluginConfig = { 插件id: { 字段键: 值 } }，脏 JSON 当没配）
   const parseSrvCfg = () => {
@@ -2848,10 +2882,57 @@ async function viewPlugins() {
         : `<div class="panel">
       <div class="panel-head">插件市场<span class="panel-head-sub">持续收录中 · 自己动手见 docs/PLUGINS.md</span></div>
       <div class="panel-body">${market}</div>
+    </div>
+    <div class="panel" style="margin-top:16px;">
+      <div class="panel-head">远程插件<span class="panel-head-sub">从 https 地址安装，文件落站内 · 停用/卸载后下次打开编辑器生效</span></div>
+      <div class="panel-body">
+        <div class="pl-row" style="gap:10px;">
+          <input class="input" id="remote-url" placeholder="https://example.com/my-plugin.js" style="flex:1;min-width:200px;">
+          <button class="btn" id="btn-remote-install" type="button">安装</button>
+        </div>
+        ${remoteRows}
+      </div>
     </div>`
     }`
   )
 
+  if (tab === 'market') {
+    const installPlugin = async (url, id) => {
+      try {
+        const d = await api('/admin/plugins/install', { method: 'POST', body: id ? { url, id } : { url } })
+        toast(`插件「${d.id}」已安装，打开或刷新编辑器生效`)
+        navigate()
+      } catch (e) {
+        handleApiErr(e)
+      }
+    }
+    const btnInstall = document.getElementById('btn-remote-install')
+    if (btnInstall)
+      btnInstall.addEventListener('click', () => {
+        const url = (document.getElementById('remote-url').value || '').trim()
+        if (!url) return toast('请先填插件文件的 https 地址', false)
+        installPlugin(url, '')
+      })
+    $app.querySelectorAll('[data-mkt-install]').forEach((btn) =>
+      btn.addEventListener('click', () => installPlugin(btn.getAttribute('data-src') || '', btn.getAttribute('data-mkt-install') || ''))
+    )
+    $app.querySelectorAll('[data-uninstall]').forEach((btn) =>
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-uninstall')
+        if (!(await confirmBox(`卸载插件「${id}」？文件将从站内删除，已打开的编辑器刷新后不再加载。`))) return
+        btn.disabled = true
+        try {
+          await api('/admin/plugins/uninstall', { method: 'POST', body: { id } })
+          toast('插件已卸载')
+          navigate()
+        } catch (e) {
+          btn.disabled = false
+          handleApiErr(e)
+        }
+      })
+    )
+    return
+  }
   if (tab !== 'installed') return
   $app.querySelectorAll('#pl-list input[type=checkbox]').forEach((cb) =>
     cb.addEventListener('change', async () => {
