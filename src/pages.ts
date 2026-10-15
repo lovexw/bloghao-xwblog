@@ -66,6 +66,7 @@ import type { Env, PostRow, SessionUser, SettingsMap } from './types'
 import { packMatrix, qrMatrix } from './qrcode'
 import { clampInt, esc, excerpt, isDemo, readingMinutes, teaserHtml } from './utils'
 import { analyticsOrigin, breadcrumbJsonLd, isSpeculativeRequest } from './seo'
+import { needsFontSrc } from './skinpack'
 
 type C = Context<{ Bindings: Env; Variables: { user: SessionUser | null } }>
 
@@ -91,7 +92,7 @@ const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com'
  *     浏览器按未知源忽略、内联脚本照旧被拦——只开这一扇窗，不放宽任何其它内联脚本；
  *  ③ 会员页 Turnstile：挑战脚本 + 挑战 iframe（frame-src）。
  */
-function buildCsp(opts: { analyticsOrigin?: string | null; turnstile?: boolean } = {}): string {
+function buildCsp(opts: { analyticsOrigin?: string | null; turnstile?: boolean; fontSrc?: boolean } = {}): string {
   const script = ["'self'", "'inline-speculation-rules'"]
   if (opts.analyticsOrigin) script.push(opts.analyticsOrigin)
   if (opts.turnstile) script.push(TURNSTILE_ORIGIN)
@@ -107,6 +108,8 @@ function buildCsp(opts: { analyticsOrigin?: string | null; turnstile?: boolean }
     "object-src 'none'",
   ]
   if (opts.turnstile) parts.push(`frame-src 'self' ${TURNSTILE_ORIGIN}`)
+  // 皮肤包自定义 CSS（src/skinpack.ts）需要外链字体时才放宽，无 CSS 的站点 CSP 字节级不变
+  if (opts.fontSrc) parts.push("font-src 'self' https: data:")
   if (opts.analyticsOrigin) parts.push(`connect-src 'self' ${opts.analyticsOrigin}`)
   return parts.join('; ')
 }
@@ -114,7 +117,7 @@ function buildCsp(opts: { analyticsOrigin?: string | null; turnstile?: boolean }
 /** 公开页通用响应头。settings 可选：传入时按站点配置放宽 CSP（统计脚本域）；各公开页渲染函数都在
  *  读到 settings 之后再调用它——别把调用挪回 settings 之前，否则统计脚本会被 CSP 拦掉 */
 function baseHeaders(c: C, settings?: SettingsMap) {
-  c.header('Content-Security-Policy', buildCsp({ analyticsOrigin: analyticsOrigin(settings?.analyticsScript) }))
+  c.header('Content-Security-Policy', buildCsp({ analyticsOrigin: analyticsOrigin(settings?.analyticsScript), fontSrc: needsFontSrc(settings) }))
   c.header('X-Content-Type-Options', 'nosniff')
   c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
   c.header('X-Frame-Options', 'SAMEORIGIN')
@@ -1014,7 +1017,7 @@ export async function renderMember(c: C): Promise<Response> {
   // 注册人机验证（Turnstile）：仅此页放行挑战脚本与 iframe，sitekey 经 <html data-turnstile>
   // 下发（page() 内按 path==='/member' 注入），site.js 据此懒挂载组件
   if (settings.turnstileSiteKey) {
-    c.header('Content-Security-Policy', buildCsp({ analyticsOrigin: analyticsOrigin(settings.analyticsScript), turnstile: true }))
+    c.header('Content-Security-Policy', buildCsp({ analyticsOrigin: analyticsOrigin(settings.analyticsScript), turnstile: true, fontSrc: needsFontSrc(settings) }))
   }
   const theme = getTheme(settings.theme)
   const en = isEn(settings)

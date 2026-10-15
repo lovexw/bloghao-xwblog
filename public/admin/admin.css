@@ -221,6 +221,24 @@ input, textarea, select { font: inherit; color: inherit; }
   border: 1px solid var(--line); border-radius: 8px; background: var(--card); cursor: pointer;
 }
 .ap-ops { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+/* 外观实时预览（B9 v2）：主题变量经 #ap-preview-style 注入到盒上，卡片只引用 var() */.ap-preview-wrap { margin: 2px 0 14px; }
+.ap-preview {
+  border: 1px dashed var(--line); border-radius: 10px; padding: 18px; background: #f6f4f0;
+  overflow: hidden;
+}
+.apv-card { max-width: 400px; padding: 18px 18px 16px; box-shadow: 0 1px 6px rgba(0, 0, 0, 0.05); }
+.apv-tag { display: inline-block; font-size: 12px; line-height: 1; padding: 4px 10px; margin-bottom: 12px; }
+.apv-title { margin: 0 0 8px; font-size: 17px; line-height: 1.4; font-weight: 600; }
+.apv-text { margin: 0 0 8px; font-size: 15px; line-height: 1.75; }
+.apv-meta { font-size: 12px; margin-bottom: 10px; }
+.apv-link { font-size: 13px; text-decoration: none; }
+.apv-img { margin-top: 12px; height: 84px; max-width: 240px; }
+/* 皮肤包卡片（B8）：色板条 + 应用按钮 */
+.skin-swatches { display: flex; gap: 6px; padding: 12px 12px 0; }
+.skin-swatches i { width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(0, 0, 0, 0.08); }
+.skin-card { display: flex; flex-direction: column; }
+.skin-card .theme-meta { flex: 1; }
+.skin-ops { padding: 0 12px 12px; }
 .theme-preview .tp-card3 { position: absolute; top: 62px; left: 8px; right: 44%; height: 12px; border-radius: 4px; }
 .theme-meta { padding: 10px 12px; }
 .theme-name { font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; }

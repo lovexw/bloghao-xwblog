@@ -32,6 +32,9 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   // 主题外观变量（B9 · 内测）：扁平 JSON（角色键 → 色值 + font/fontSize），渲染期按当前主题
   // 映射回主题自己的 CSS 变量输出覆盖样式，空串 = 未配置，机制见 src/appearance.ts
   appearance: '',
+  // 皮肤包自定义 CSS（B8，机制 src/skinpack.ts）：样式安检门净化后进 <style data-custom-css>，
+  // 空串 = 未配置；皮肤包应用 = appearance + customCss 两键一起写，无独立存储
+  customCss: '',
   // 页脚「站点足迹」统计 JSON（{posts,chars,since}）：每晚 cron 刷新 + 冷启动首次播种
   // （refreshFootStats），前台页脚名片读这里——展示口径滞后一夜可接受，不值得每次渲染都聚合
   siteFoot: '',

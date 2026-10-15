@@ -2412,6 +2412,35 @@ async function fetchCatalog() {
   return null
 }
 
+/* 外观实时预览（B9 v2）：按主题 meta 的变量名生成一张假文章卡，
+ * 覆盖变量声明在 #ap-preview 盒上（作用域干净），子元素用 var(..., 默认值) 引用——
+ * 主题不支持的角色退 --apv-none 空变量名落到兜底色，与 appearanceHeadStyle 的按主题过滤同语义 */
+function apPreviewHtml(ap) {
+  const ref = (key, fb) => {
+    const r = ap.roles.find((x) => x.key === key)
+    return r ? `var(${r.vars[0]}, ${r.default})` : `var(--apv-none, ${fb})`
+  }
+  const accent = ref('accent', '#b23a29')
+  const link = ap.roles.find((x) => x.key === 'link') ? ref('link', '#576b95') : accent
+  const cardBg = ref('card', '#ffffff')
+  const line = ref('line', '#e5e0d8')
+  const rv = ap.radius || { var: '--apv-none', default: 10, lgFactor: 1.6 }
+  return `
+  <div class="ap-preview-wrap">
+    <style id="ap-preview-style"></style>
+    <div class="ap-preview" id="ap-preview">
+      <div class="apv-card" style="background:${cardBg};border:1px solid ${line};border-radius:calc(var(${rv.var}, ${rv.default}px) * ${rv.lgFactor})">
+        <span class="apv-tag" style="color:${accent};background:color-mix(in srgb, ${accent} 10%, transparent)">随笔</span>
+        <h4 class="apv-title" style="color:${ref('ink', '#333333')}">把日子过成自己喜欢的样子</h4>
+        <p class="apv-text" style="color:${ref('ink', '#333333')}">这是一段正文示例文字，用来预览字体、字号与颜色搭配的实际观感——改动上面的任何一项都会立刻反映在这张卡片上。</p>
+        <div class="apv-meta" style="color:${ref('sub', '#999999')}">2026-10-16 · 阅读 128</div>
+        <a class="apv-link" style="color:${link}" href="javascript:void(0)">阅读全文 →</a>
+        <div class="apv-img" style="border-radius:var(${rv.var}, ${rv.default}px);background:color-mix(in srgb, ${accent} 14%, ${cardBg})"></div>
+      </div>
+    </div>
+  </div>`
+}
+
 async function viewAppearance() {
   const q = new URLSearchParams(location.hash.split('?')[1] || '')
   const tab = q.get('tab') === 'market' ? 'market' : 'mine'
@@ -2442,6 +2471,22 @@ async function viewAppearance() {
     })
     .join('') || '<div class="empty-box">市场目录暂时空着，更多皮肤敬请期待</div>'
 
+  // 皮肤包（B8）：市场目录内联数据，一键应用 = PUT appearance + customCss 两键，
+  // CSS 由服务端样式安检门（src/skinpack.ts）净化后才进页面
+  const skinCards =
+    (catalog?.skins || [])
+      .map((s) => {
+        const p = s.pack && typeof s.pack === 'object' ? s.pack : null
+        if (!p) return ''
+        const colors = Array.isArray(s.colors) ? s.colors.slice(0, 5) : []
+        return `<div class="theme-card skin-card" data-skin="${esc(s.id || '')}">
+      <div class="skin-swatches">${colors.map((c) => `<i style="background:${esc(String(c))}"></i>`).join('')}</div>
+      <div class="theme-meta"><div class="theme-name"><span>${esc(s.name || s.id || '未命名')}</span></div><div class="theme-desc">${esc(s.description || '')}</div></div>
+      <div class="skin-ops"><button class="btn btn-sm sk-apply" type="button" data-skin="${esc(s.id || '')}">应用皮肤包</button></div>
+    </div>`
+      })
+      .join('') || '<div class="empty-box">市场暂时没有皮肤包</div>'
+
   // 外观变量（B9 · 内测）：按当前皮肤的能力出表单——主题不支持的角色（如 minimal 无主色）不出现
   const curTheme = list.find((t) => t.id === state.settings.theme) || null
   const ap = curTheme && curTheme.appearance
@@ -2471,7 +2516,7 @@ async function viewAppearance() {
     <div class="panel" style="padding:20px;margin-top:16px;" id="ap-panel">
       <div class="form-section" style="margin-bottom:0;">
         <h3>外观变量 <span class="mk-badge">内测</span></h3>
-        <div class="sec-desc">不改代码微调当前皮肤「${esc(curTheme.name)}」的颜色、字体与正文字号，保存后全站即时生效、可随时恢复默认；圆角等更多变量在后续版本开放。只列出当前皮肤支持的项目，换皮肤后请回到这里重调</div>
+        <div class="sec-desc">不改代码微调当前皮肤「${esc(curTheme.name)}」的颜色、字体、正文字号与圆角，保存后全站即时生效、可随时恢复默认；只列出当前皮肤支持的项目，换皮肤后请回到这里重调</div>
         <div class="ap-grid">${apRows}</div>
         <div class="form-row">
           <div class="form-item"><label>正文字体</label>
@@ -2483,8 +2528,10 @@ async function viewAppearance() {
           </div>
           <div class="form-item"><label>自定义字体栈（逗号分隔，选「自定义」时生效）</label><input class="input" id="ap-font-custom" value="${esc(customFont)}" placeholder='"HarmonyOS Sans", sans-serif'></div>
           <div class="form-item"><label>正文字号 px（主题默认 ${ap.richSize}，留空跟随主题）</label><input class="input" type="number" id="ap-size" min="14" max="22" step="0.5" value="${typeof picks.fontSize === 'number' && picks.fontSize ? picks.fontSize : ''}"></div>
+          <div class="form-item"><label>圆角 px（主题默认 ${ap.radius ? ap.radius.default : '-'}，留空跟随主题；0 = 直角风格）</label><input class="input" type="number" id="ap-radius" min="0" max="24" step="1" value="${typeof picks.radius === 'number' ? picks.radius : ''}"></div>
         </div>
-        <div class="switch-sub" style="margin-bottom:12px;">取色器初始显示主题默认值；与默认相同的项保存后不会产生任何覆盖样式</div>
+        ${apPreviewHtml(ap)}
+        <div class="switch-sub" style="margin-bottom:12px;">取色器初始显示主题默认值；与默认相同的项保存后不会产生任何覆盖样式；预览即所见，点「保存外观」后全站生效</div>
         <div class="ap-ops">
           <button class="btn" id="btn-ap-save" type="button">保存外观</button>
           <button class="btn btn-ghost" id="btn-ap-reset" type="button">全部恢复默认</button>
@@ -2494,6 +2541,25 @@ async function viewAppearance() {
     </div>`
   }
 
+  // 皮肤包 & 自定义 CSS（B8）：customCss 过服务端样式安检门后进每页 <style data-custom-css>
+  const cssVal = typeof state.settings.customCss === 'string' ? state.settings.customCss : ''
+  const cssPanel = `
+    <div class="panel" style="padding:20px;margin-top:16px;" id="sk-panel">
+      <div class="form-section" style="margin-bottom:0;">
+        <h3>皮肤包与自定义 CSS</h3>
+        <div class="sec-desc">市场里的一键配色就是皮肤包——粘贴包 JSON 也能导入；自定义 CSS 追加在主题样式之后全站生效（服务端净化：@import、脚本类内容、外链非 https 资源不允许，url() 只收 https 与站内地址）</div>
+        <div class="form-item"><label>导入皮肤包（粘贴包 JSON）</label>
+          <textarea class="input" id="sk-pack" rows="3" placeholder='{"name":"苔原","appearance":{"accent":"#3d7a5f","radius":12},"css":""}'></textarea></div>
+        <div class="form-item"><label>自定义 CSS（留空 = 不启用；皮肤包自带的 CSS 会填到这里）</label>
+          <textarea class="input" id="sk-css" rows="6" placeholder='.rich img { border-radius: 8px; }'>${esc(cssVal)}</textarea></div>
+        <div class="ap-ops">
+          <button class="btn" id="btn-sk-apply" type="button">应用皮肤包</button>
+          <button class="btn" id="btn-sk-css" type="button">保存自定义 CSS</button>
+          <button class="btn btn-ghost" id="btn-sk-clear" type="button">清空自定义 CSS</button>
+        </div>
+      </div>
+    </div>`
+
   await shellView(
     'appearance',
     `<div class="page-head"><div><div class="page-title">皮肤</div><div class="page-sub">给博客换一身好看的衣服，选中即刻生效</div></div>
@@ -2502,9 +2568,36 @@ async function viewAppearance() {
       <a class="tab${tab === 'mine' ? ' is-active' : ''}" href="#/appearance">我的皮肤</a>
       <a class="tab${tab === 'market' ? ' is-active' : ''}" href="#/appearance?tab=market">皮肤市场</a>
     </div></div>
-    ${tab === 'mine' ? `<div class="panel" style="padding:20px;"><div class="settings-grid" id="theme-grid">${mine}</div></div>${apPanel}` : `<div class="panel" style="padding:20px;"><div class="settings-grid">${market}</div></div>`}`
+    ${tab === 'mine' ? `<div class="panel" style="padding:20px;"><div class="settings-grid" id="theme-grid">${mine}</div></div>${apPanel}${cssPanel}` : `<div class="panel" style="padding:20px;"><div class="settings-grid">${market}</div></div><div class="panel" style="padding:20px;margin-top:16px;"><h3 style="margin-bottom:12px;">皮肤包</h3><div class="settings-grid">${skinCards}</div></div>`}`
   )
 
+  // 皮肤包应用（市场卡与粘贴导入共用）：外观参数与自定义 CSS 一起写，二次确认防误覆盖
+  const applySkinPack = async (appearance, css, label) => {
+    const ok = await confirmBox(`应用皮肤包「${label}」将覆盖当前的外观变量与自定义 CSS，确定继续？`)
+    if (!ok) return
+    try {
+      const d = await api('/admin/settings', { method: 'PUT', body: { appearance, customCss: css } })
+      state.settings = d.settings
+      toast(`皮肤包「${label}」已应用，全站即时生效`)
+      navigate()
+    } catch (e) {
+      handleApiErr(e)
+    }
+  }
+  if (tab === 'market') {
+    $app.querySelectorAll('.sk-apply').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        const s = (catalog?.skins || []).find((x) => (x.id || '') === btn.getAttribute('data-skin'))
+        const p = s && s.pack && typeof s.pack === 'object' ? s.pack : null
+        if (!p) return toast('皮肤包数据缺失', false)
+        const appearance =
+          p.appearance && typeof p.appearance === 'object' && !Array.isArray(p.appearance) ? JSON.stringify(p.appearance) : ''
+        if (!appearance) return toast('该皮肤包没有外观参数，无法应用', false)
+        applySkinPack(appearance, typeof p.css === 'string' ? p.css : '', (s.name || s.id || '未命名').toString())
+      })
+    )
+    return
+  }
   if (tab !== 'mine') return
   // 点击卡片立即启用：乐观高亮，保存失败回退并提示
   let applying = false
@@ -2531,6 +2624,38 @@ async function viewAppearance() {
   )
 
   if (!ap) return
+  // 实时预览：面板任一输入变化 → 重算覆盖变量投到假卡片（#ap-preview-style 由 apPreviewHtml 预置）
+  const apvStyle = document.getElementById('ap-preview-style')
+  if (apvStyle) {
+    const renderApPreview = () => {
+      const lines = []
+      const rootVars = []
+      document.querySelectorAll('#ap-panel .ap-color').forEach((inp) => {
+        const key = inp.getAttribute('data-role')
+        const role = ap.roles.find((x) => x.key === key)
+        const v = (inp.value || '').toLowerCase()
+        if (role && v && v !== role.default) rootVars.push(`${role.vars[0]}:${v}`)
+      })
+      const rad = parseFloat(document.getElementById('ap-radius').value)
+      if (ap.radius && Number.isFinite(rad)) {
+        const r = Math.round(Math.min(24, Math.max(0, rad)))
+        if (r !== ap.radius.default) rootVars.push(`${ap.radius.var}:${r}px`)
+      }
+      if (rootVars.length) lines.push(`#ap-preview{${rootVars.join(';')}}`)
+      const sel = document.getElementById('ap-font-select')
+      const custom = (document.getElementById('ap-font-custom').value || '').trim()
+      const preset = sel && sel.value ? ap.fontPresets.find((p) => p.id === sel.value) : null
+      const stack = sel && sel.value === 'custom' ? custom : preset ? preset.stack : ''
+      if (stack) lines.push(`#ap-preview{font-family:${stack}}`)
+      const size = parseFloat(document.getElementById('ap-size').value)
+      lines.push(`#ap-preview .apv-text{font-size:${Number.isFinite(size) && size ? size : ap.richSize}px}`)
+      apvStyle.textContent = lines.join('')
+    }
+    document.querySelectorAll('#ap-panel .ap-color, #ap-size, #ap-radius, #ap-font-custom').forEach((el) => el.addEventListener('input', renderApPreview))
+    const fontSel = document.getElementById('ap-font-select')
+    if (fontSel) fontSel.addEventListener('change', renderApPreview)
+    renderApPreview()
+  }
   const saveAppearance = async (payload, okMsg) => {
     const saveBtn = document.getElementById('btn-ap-save')
     const resetBtn = document.getElementById('btn-ap-reset')
@@ -2560,10 +2685,61 @@ async function viewAppearance() {
       obj.font = sel.value === 'custom' ? custom : sel.value
       const size = parseFloat(document.getElementById('ap-size').value)
       obj.fontSize = Number.isFinite(size) ? size : 0
+      // 圆角留空 = 省键清除（0 是合法的直角值，与 fontSize 的 0=清除语义不同）
+      const radRaw = (document.getElementById('ap-radius').value || '').trim()
+      if (radRaw !== '') {
+        const r = parseFloat(radRaw)
+        if (Number.isFinite(r)) obj.radius = Math.round(Math.min(24, Math.max(0, r)))
+      }
       saveAppearance(JSON.stringify(obj), '外观已保存，全站即时生效')
     })
   const btnReset = document.getElementById('btn-ap-reset')
   if (btnReset) btnReset.addEventListener('click', () => saveAppearance('', '已恢复主题默认外观'))
+
+  // 自定义 CSS 保存 / 清空（清空同步清掉输入框，所见即所存）
+  const saveCustomCss = async (css, okMsg) => {
+    const btn = document.getElementById('btn-sk-css')
+    const clearBtn = document.getElementById('btn-sk-clear')
+    if (btn) btn.disabled = true
+    if (clearBtn) clearBtn.disabled = true
+    try {
+      const d = await api('/admin/settings', { method: 'PUT', body: { customCss: css } })
+      state.settings = d.settings
+      toast(okMsg)
+    } catch (e) {
+      handleApiErr(e)
+    } finally {
+      if (btn) btn.disabled = false
+      if (clearBtn) clearBtn.disabled = false
+    }
+  }
+  const btnCss = document.getElementById('btn-sk-css')
+  if (btnCss)
+    btnCss.addEventListener('click', () => saveCustomCss(document.getElementById('sk-css').value, '自定义 CSS 已保存，全站即时生效'))
+  const btnClearCss = document.getElementById('btn-sk-clear')
+  if (btnClearCss)
+    btnClearCss.addEventListener('click', () => {
+      document.getElementById('sk-css').value = ''
+      saveCustomCss('', '自定义 CSS 已清空')
+    })
+  // 粘贴导入皮肤包：与市场应用同路（服务端逐键净化，非法 400）
+  const btnApply = document.getElementById('btn-sk-apply')
+  if (btnApply)
+    btnApply.addEventListener('click', () => {
+      let pack = null
+      try {
+        pack = JSON.parse(document.getElementById('sk-pack').value)
+      } catch {
+        return toast('皮肤包不是合法的 JSON', false)
+      }
+      if (!pack || typeof pack !== 'object' || Array.isArray(pack)) return toast('皮肤包格式不正确', false)
+      const appearance =
+        pack.appearance && typeof pack.appearance === 'object' && !Array.isArray(pack.appearance)
+          ? JSON.stringify(pack.appearance)
+          : ''
+      if (!appearance) return toast('皮肤包缺少外观参数（appearance）', false)
+      applySkinPack(appearance, typeof pack.css === 'string' ? pack.css : '', String(pack.name || '导入的皮肤包'))
+    })
 }
 
 /* ---------------- 插件 ---------------- */

@@ -5,6 +5,7 @@ import { outHref } from './outlink'
 import { cstDate, esc, excerpt, extractWeiboTopics, fmtDate, fmtDateCN, fmtDateTime, isoDate, NICKNAME_CHANGE_COOLDOWN_MS, nicknameCooldown } from './utils'
 import { replaceEmoji } from './emoji'
 import { appearanceHeadStyle } from './appearance'
+import { customCssHeadStyle } from './skinpack'
 import { seoHeadHtml } from './seo'
 import { enBetaBannerHtml, fmtDateEn, fmtDateEnShort, fmtDateTimeEn, isEn, plural, tr, weiboTimeEn } from './i18n'
 
@@ -109,6 +110,7 @@ ${base ? `<link rel="alternate" type="application/rss+xml" title="${esc(siteName
 ${base ? `<link rel="alternate" type="application/feed+json" title="${esc(siteName)}" href="${esc(base)}/feed.json">` : ''}
 <style>${o.css}</style>
 ${appearanceHeadStyle(o.settings)}
+${customCssHeadStyle(o.settings)}
 ${grayscaleStyle(o.settings)}
 ${seoHeadHtml(o.settings)}
 </head>

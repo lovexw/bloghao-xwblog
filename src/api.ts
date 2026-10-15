@@ -71,6 +71,7 @@ import {
 import { mdToHtml } from './markdown'
 import { purgeImageCache, purgePageCache } from './pagecache'
 import { appearanceMeta, cleanAppearanceSettings } from './appearance'
+import { cleanCustomCss } from './skinpack'
 import { EMOJI_BASE, WECHAT_EMOJI } from './emoji'
 import { awardCommentPoints, awardPoints, normalizeMinTier } from './points'
 import { collectRoutes } from './collect'
@@ -1877,6 +1878,16 @@ api.put('/admin/settings', async (c) => {
       if (!u) patch[key] = ''
       else if (u.startsWith('https://') && fetchableUrl(u)) patch[key] = u
       else return jsonError('广场同步端点无效（需公网 https 地址）')
+      continue
+    }
+    if (key === 'customCss') {
+      // 皮肤包自定义 CSS（B8）：样式安检门唯一写入口，非法整体 400（渲染端二次净化幂等兜底）
+      const cleaned = cleanCustomCss(v)
+      if (cleaned === null)
+        return jsonError(
+          '自定义 CSS 无效：不支持 @import / expression 等，url() 只接受 https、站内相对或 data:image|font 地址，花括号需配平，长度 ≤ 8000'
+        )
+      patch[key] = cleaned
       continue
     }
     if (key === 'footerHtmlCode') {
