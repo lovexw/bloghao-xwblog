@@ -267,6 +267,8 @@ export async function listPosts(db: D1Database, opts: ListPostsOptions = {}): Pr
   const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : ''
   const recency = 'COALESCE(published_at, created_at) DESC'
   // 随机排序用 (id+seed) 乘法散列：同一 seed 下全站顺序固定，翻页不重洗；换 seed 即换一组
+  // sort=comments 的相关子查询 INDEXED BY 是防读放大关键：规划器误选 idx_comments_status 时
+  // 逐篇全表扫评论，生产实测单次渲染 50 万行读取（tests/feed-index.test.ts 守卫）
   const orderSql =
     opts.status === 'draft'
       ? 'ORDER BY updated_at DESC'
@@ -275,7 +277,7 @@ export async function listPosts(db: D1Database, opts: ListPostsOptions = {}): Pr
         : opts.sort === 'likes'
           ? `ORDER BY likes DESC, ${recency}`
           : opts.sort === 'comments'
-            ? `ORDER BY (SELECT COUNT(*) FROM comments cm WHERE cm.post_id = posts.id AND cm.status = 'approved') DESC, ${recency}`
+            ? `ORDER BY (SELECT COUNT(*) FROM comments cm INDEXED BY idx_comments_post WHERE cm.post_id = posts.id AND cm.status = 'approved') DESC, ${recency}`
             : opts.sort === 'random'
               ? `ORDER BY ((posts.id + ${clampInt(opts.seed, 1, 999999999, 1)}) * 2654435761) % 4294967296 ASC, posts.id ASC`
               : `ORDER BY pinned DESC, ${recency}`
@@ -865,12 +867,14 @@ export async function getWeiboById(db: D1Database, id: number): Promise<WeiboRow
   return db.prepare('SELECT * FROM weibo WHERE id = ? AND deleted_at IS NULL').bind(id).first<WeiboRow>()
 }
 
-/** 批量取一组微博的已审核评论数：{weiboId: count} */
+/** 批量取一组微博的已审核评论数：{weiboId: count}。
+ *  INDEXED BY 是硬约束（生产实测 2026-10-15）：不带它时规划器误选 idx_comments_status，
+ *  每次全表扫全部已审评论；强制走 weibo_id 索引后十次精准 seek。索引由 ensureSchema 兜底建 */
 export async function weiboCommentCountMap(db: D1Database, weiboIds: number[]): Promise<Map<number, number>> {
   if (!weiboIds.length) return new Map()
   const ph = weiboIds.map(() => '?').join(',')
   const { results } = await db
-    .prepare(`SELECT weibo_id, COUNT(*) AS n FROM comments WHERE weibo_id IN (${ph}) AND status = 'approved' GROUP BY weibo_id`)
+    .prepare(`SELECT weibo_id, COUNT(*) AS n FROM comments INDEXED BY idx_comments_weibo WHERE weibo_id IN (${ph}) AND status = 'approved' GROUP BY weibo_id`)
     .bind(...weiboIds)
     .all<{ weibo_id: number; n: number }>()
   const m = new Map<number, number>()
@@ -878,12 +882,13 @@ export async function weiboCommentCountMap(db: D1Database, weiboIds: number[]): 
   return m
 }
 
-/** 批量取一组文章的已审核评论数：{postId: count}（列表页一次带全，替代逐篇 COUNT 的 N+1） */
+/** 批量取一组文章的已审核评论数：{postId: count}（列表页一次带全，替代逐篇 COUNT 的 N+1）。
+ *  INDEXED BY 同 weiboCommentCountMap：防规划器误选 idx_comments_status 全表扫 */
 export async function postCommentCountMap(db: D1Database, postIds: number[]): Promise<Map<number, number>> {
   if (!postIds.length) return new Map()
   const ph = postIds.map(() => '?').join(',')
   const { results } = await db
-    .prepare(`SELECT post_id, COUNT(*) AS n FROM comments WHERE post_id IN (${ph}) AND status = 'approved' GROUP BY post_id`)
+    .prepare(`SELECT post_id, COUNT(*) AS n FROM comments INDEXED BY idx_comments_post WHERE post_id IN (${ph}) AND status = 'approved' GROUP BY post_id`)
     .bind(...postIds)
     .all<{ post_id: number; n: number }>()
   const m = new Map<number, number>()
@@ -1088,6 +1093,9 @@ const SCHEMA_TRIGGERS = [
 // 导出供 tests/feed-index.test.ts 做双份登记镜像守卫
 export const SCHEMA_INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_comments_weibo ON comments (weibo_id, created_at)',
+  // idx_comments_post 的 schema.sql 副本自 MoBlog v1.0 就有，但 INDEXED BY 是硬约束（索引不在场语句直接
+  // 报错）：这里兜底所有冷启动形态，老库若曾手工删过索引也能自愈（与 schema.sql 双份登记，tests/feed-index.test.ts 守卫）
+  'CREATE INDEX IF NOT EXISTS idx_comments_post ON comments (post_id, created_at)',
   // comments.member_id 与 posts.min_tier 是老库运行时补齐的列，索引只能在这里建（schema.sql 不能建，见该文件内说明）
   'CREATE INDEX IF NOT EXISTS idx_comments_member ON comments (member_id, created_at)',
   'CREATE INDEX IF NOT EXISTS idx_members_points ON members (points DESC)',

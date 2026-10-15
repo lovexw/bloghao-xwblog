@@ -151,7 +151,10 @@ async function navTags(c: C): Promise<{ name: string; count: number }[]> {
 }
 
 async function commentCount(c: C, postId: number): Promise<number> {
-  const r = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM comments WHERE post_id = ? AND status = 'approved'")
+  // INDEXED BY 防规划器误选 idx_comments_status 全表扫（同 db.ts postCommentCountMap，生产实测 2400+ 行 → 2 行）
+  const r = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM comments INDEXED BY idx_comments_post WHERE post_id = ? AND status = 'approved'"
+  )
     .bind(postId)
     .first<{ n: number }>()
   return r?.n ?? 0
