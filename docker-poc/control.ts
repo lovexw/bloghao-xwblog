@@ -105,6 +105,31 @@ interface ControlDeps {
 // ── 会话 ─────────────────────────────────────────────────────────────────
 const sessions = new Map<string, number>() // token → 过期时刻
 
+/** 一次性操作提示（PRG）：POST 处理完 303 回仪表盘，flash 短命 Cookie 送达后即清——
+ *  刷新页面永远是干净的 GET，浏览器不再弹「确认重新提交表单」 */
+const FLASH_COOKIE = 'xw_control_flash'
+
+function flashRedirect(res: import('node:http').ServerResponse, flash: string): void {
+  res.writeHead(303, {
+    'Set-Cookie': `${FLASH_COOKIE}=${encodeURIComponent(flash)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=120`,
+    Location: '/',
+  })
+  res.end()
+}
+
+/** 读走 flash cookie（返回清障 Set-Cookie，调用方必须带在响应上才算消费掉） */
+function takeFlash(req: import('node:http').IncomingMessage): { flash: string; clear: string } | null {
+  const m = (req.headers.cookie || '').match(new RegExp(`(?:^|;\\s*)${FLASH_COOKIE}=([^;]*)`))
+  if (!m) return null
+  let flash = m[1]
+  try {
+    flash = decodeURIComponent(m[1])
+  } catch {
+    /* 编码残缺按原文展示，清掉即可 */
+  }
+  return { flash, clear: `${FLASH_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` }
+}
+
 function sessionOk(req: import('node:http').IncomingMessage): boolean {
   const cookie = req.headers.cookie || ''
   const m = cookie.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([A-Za-z0-9]+)`))
@@ -864,6 +889,15 @@ async function dashboard(deps: ControlDeps, flash = ''): Promise<string> {
   return page('控制台', dashboardBody(deps, plazaStats, scheme, statsMap), flash, true)
 }
 
+/** 仪表盘入口（GET /）：flash 从一次性 Cookie 取（PRG），取到必须带清障头回给浏览器 */
+async function dashboardRoute(deps: ControlDeps, inlineFlash = ''): Promise<void> {
+  const taken = takeFlash(deps.req)
+  const flash = taken?.flash || inlineFlash
+  const body = await dashboard(deps, flash)
+  const headers: Record<string, string> = taken ? { 'Set-Cookie': taken.clear } : {}
+  sendHtml(deps.res, body, 200, headers)
+}
+
 function dashboardBody(
   deps: ControlDeps,
   plazaStats: PlazaStats | null,
@@ -1159,7 +1193,8 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
   }
 
   if (method === 'GET' && path === '/') {
-    return sendHtml(res, sessionOk(req) ? await dashboard(deps) : loginPage())
+    if (!sessionOk(req)) return sendHtml(res, loginPage())
+    return dashboardRoute(deps)
   }
 
   if (method === 'POST' && !originOk(req, url)) {
@@ -1191,15 +1226,15 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
       fs.writeFileSync(file, JSON.stringify(list, null, 2))
       opsLog('投稿删除', gone.url)
     }
-    return sendHtml(res, await dashboard(deps, '✓ 已处理'))
+    return flashRedirect(res, '✓ 已处理')
   }
 
   if (method === 'POST' && path === '/create') {
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) {
-      return sendHtml(res, await dashboard(deps, '✗ 域名形态不合法（小写字母数字与连字符，至少两段）'))
+      return flashRedirect(res, '✗ 域名形态不合法（小写字母数字与连字符，至少两段）')
     }
     const cfgAll = deps.readTenantsConfig()
-    if (cfgAll.tenants[host]) return sendHtml(res, await dashboard(deps, `✗ ${host} 已存在`))
+    if (cfgAll.tenants[host]) return flashRedirect(res, `✗ ${host} 已存在`)
     const demo = form?.get('demo') === '1'
     try {
       cfgAll.tenants[host] = demo ? { demo: true } : {}
@@ -1211,7 +1246,7 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
       const cfgAll2 = deps.readTenantsConfig()
       delete cfgAll2.tenants[host]
       deps.writeTenantsConfig(cfgAll2)
-      return sendHtml(res, await dashboard(deps, `✗ 开通失败：${String(e)}`))
+      return flashRedirect(res, `✗ 开通失败：${String(e)}`)
     }
     const s = schemeOf(deps)
     let flash = `✓!✓ <b>${esc(host)}</b> 开通成功！两个地址请发给博主：<br>
@@ -1227,7 +1262,7 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
       flash += '；请手动添加 DNS：A 记录指向本机（Cloudflare 橙云）'
     }
     opsLog('开通', host + (demo ? '（演示种子）' : ''))
-    return sendHtml(res, await dashboard(deps, flash))
+    return flashRedirect(res, flash)
   }
 
   // 分站详情：完整数据 + 最近内容 + 前台/后台入口（host 白名单校验防路径穿越）
@@ -1250,7 +1285,7 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
       deps.tenants.delete(host) // 路由摘除；库与目录原样保留
       opsLog('停用', host)
     }
-    return sendHtml(res, await dashboard(deps, `✓ ${host} 已停用（数据保留，可随时启用）`))
+    return flashRedirect(res, `✓ ${host} 已停用（数据保留，可随时启用）`)
   }
 
   if (method === 'POST' && path === '/enable' && host) {
@@ -1262,12 +1297,12 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
       deps.tenants.set(host, await deps.createTenantFor(host, cfg, cfgAll.r2))
       opsLog('启用', host)
     }
-    return sendHtml(res, await dashboard(deps, `✓ ${host} 已启用`))
+    return flashRedirect(res, `✓ ${host} 已启用`)
   }
 
   if (method === 'POST' && path === '/delete' && host) {
     if (form?.get('confirm') !== host) {
-      return sendHtml(res, await dashboard(deps, '✗ 确认域名不匹配，未删除'))
+      return flashRedirect(res, '✗ 确认域名不匹配，未删除')
     }
     const cfgAll = deps.readTenantsConfig()
     if (cfgAll.tenants[host]) {
@@ -1279,7 +1314,7 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
       opsLog('删除', host)
       if (cfEnabled()) await dnsDelete(host)
     }
-    return sendHtml(res, await dashboard(deps, `✓ ${host} 已彻底删除（配置 + 数据目录${cfEnabled() ? ' + DNS 记录' : ''}）`))
+    return flashRedirect(res, `✓ ${host} 已彻底删除（配置 + 数据目录${cfEnabled() ? ' + DNS 记录' : ''}）`)
   }
 
   // 域名形态守卫（与 /create 同一正则，常量 HOST_SHAPE_RE 在模块顶层）：host 直接拼进
@@ -1287,20 +1322,20 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
 
   if (method === 'POST' && path === '/reset' && host) {
     if (!HOST_SHAPE_RE.test(host)) {
-      return sendHtml(res, await dashboard(deps, '✗ 域名形态不合法'))
+      return flashRedirect(res, '✗ 域名形态不合法')
     }
     const flash = await resetAdminPassword(host)
-    return sendHtml(res, await dashboard(deps, flash))
+    return flashRedirect(res, flash)
   }
 
   // 官网同步：拉 GitHub 最新 tarball 替换 SITE_DIR；SITE_DIR 未配置时端点不存在
   if (method === 'POST' && path === '/website-sync') {
     if (!SITE_DIR) return sendHtml(res, page('404', '<div class="card">没有这个页面。</div>', '', true), 404)
-    if (syncBusy) return sendHtml(res, await dashboard(deps, '✗ 已有同步在进行中，请稍候'))
+    if (syncBusy) return flashRedirect(res, '✗ 已有同步在进行中，请稍候')
     syncBusy = true
     try {
       const flash = await websiteSync()
-      return sendHtml(res, await dashboard(deps, flash))
+      return flashRedirect(res, flash)
     } finally {
       syncBusy = false
     }

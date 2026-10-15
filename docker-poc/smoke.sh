@@ -129,15 +129,22 @@ check "未配置 SITE_DIR 时仪表盘无官网卡片" 1 "$(cctrl -b "$CJAR" htt
 check "未配置 SITE_DIR 时官网同步端点 404" 404 "$(curl -s -o /dev/null -w '%{http_code}' --resolve "ops.localhost:${PORT}:127.0.0.1" -b "$CJAR" -X POST http://ops.localhost:${PORT}/website-sync)"
 check "跨站 Origin 提交被拒 403" 403 "$(curl -s -o /dev/null -w '%{http_code}' --resolve "ops.localhost:${PORT}:127.0.0.1" -b "$CJAR" -H 'Origin: https://evil.example' -d 'host=new.localhost' http://ops.localhost:${PORT}/create)"
 
-# 开站 → 热加载立即生效（免重启）
-cctrl -b "$CJAR" -d 'host=smoke-new.localhost' http://ops.localhost:${PORT}/create > /dev/null
+# 开站 → 热加载立即生效（免重启）；POST 走 PRG（303 回 GET），刷新不再弹「重新提交表单」
+CREATE_LOC=$(curl -s -o /dev/null -w '%{redirect_url}' --resolve "ops.localhost:${PORT}:127.0.0.1" -b "$CJAR" -d 'host=smoke-new.localhost' http://ops.localhost:${PORT}/create)
+check "开站 POST 走 PRG 303 回仪表盘" 1 "$([ "$CREATE_LOC" = "http://ops.localhost:${PORT}/" ] && echo 1 || echo 0)"
 check "面板开站后新租户立即可访问（热加载）" 200 "$(code smoke-new.localhost /api/health)"
 grep -q '"smoke-new.localhost"' "$SMOKE_CFG" && check "tenants.json 已落盘" 1 1 || check "tenants.json 已落盘" 1 0
 
-# 开站 flash 必须带上前台/后台两个完整地址（发给博主的引导话术）
-CREATE_FLASH=$(cctrl -b "$CJAR" -d "host=flash-check.localhost" http://ops.localhost:${PORT}/create)
-check "开站 flash 含前台地址" 1 "$(printf '%s' "$CREATE_FLASH" | grep -c 'http://flash-check.localhost/' | awk '{print ($1>0)?1:0}')"
+# 开站 flash 必须带上前台/后台两个完整地址（发给博主的引导话术）——经 PRG 从跳转目标 GET 回来
+FJAR=$(mktemp)
+curl -s -o /dev/null --resolve "ops.localhost:${PORT}:127.0.0.1" -b "$CJAR" -c "$FJAR" -d "host=flash-check.localhost" http://ops.localhost:${PORT}/create
+CREATE_FLASH=$(curl -s --resolve "ops.localhost:${PORT}:127.0.0.1" -b "$FJAR" http://ops.localhost:${PORT}/)
+check "开站 flash 经 PRG 送达含前台地址" 1 "$(printf '%s' "$CREATE_FLASH" | grep -c 'http://flash-check.localhost/' | awk '{print ($1>0)?1:0}')"
 check "开站 flash 含后台地址" 1 "$(printf '%s' "$CREATE_FLASH" | grep -c 'http://flash-check.localhost/admin/' | awk '{print ($1>0)?1:0}')"
+# flash 是一次性的：第二次 GET（无 flash cookie）不该再出现「开通成功」横幅
+# （租户行本身会一直带 flash-check 域名，只认 flash 文案）
+SECOND=$(curl -s --resolve "ops.localhost:${PORT}:127.0.0.1" -b "$CJAR" http://ops.localhost:${PORT}/)
+check "flash 一次性（第二次 GET 无开通横幅）" 1 "$(printf '%s' "$SECOND" | grep -c 'class="flash' | awk '{print ($1==0)?1:0}')"
 cctrl -b "$CJAR" -d 'host=flash-check.localhost&confirm=flash-check.localhost' http://ops.localhost:${PORT}/delete > /dev/null
 
 # 分站数据统计与详情页：仪表盘出数据列；详情页出完整统计与前台/后台入口
@@ -158,7 +165,10 @@ check "未登录访问详情页 303" 303 "$(curl -s -o /dev/null -w '%{http_code
 # （setup 带 JSON 的 POST 走同源校验，curl 默认不发 Origin，天然同源；无 Origin 即放行）
 curl -s -o /dev/null --resolve "smoke-new.localhost:${PORT}:127.0.0.1" -H 'Content-Type: application/json' \
   -d '{"username":"owner","password":"old-pass-123"}' http://smoke-new.localhost:${PORT}/api/auth/setup
-cctrl -b "$CJAR" -d 'host=smoke-new.localhost' http://ops.localhost:${PORT}/reset > /tmp/ctrl-reset.html
+# 重置同样走 PRG：跟随 303 从跳转目标取 flash（一次性 cookie 单独 jar）
+RJAR=$(mktemp)
+curl -s -o /dev/null --resolve "ops.localhost:${PORT}:127.0.0.1" -b "$CJAR" -c "$RJAR" -d 'host=smoke-new.localhost' http://ops.localhost:${PORT}/reset
+curl -s --resolve "ops.localhost:${PORT}:127.0.0.1" -b "$RJAR" http://ops.localhost:${PORT}/ > /tmp/ctrl-reset.html
 # grep 无匹配 exit 1 会触发 set -e 静默退出（曾在此断言后无声死掉）——必须 || true
 NEWPASS=$(grep -o '<code style="font-size:18px">[^<]*' /tmp/ctrl-reset.html | head -1 | sed 's/.*>//' || true)
 check "重置密码输出一次性新密码" 1 "$([ -n "$NEWPASS" ] && echo 1 || echo 0)"
