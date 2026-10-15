@@ -77,6 +77,134 @@ async function fetchPlazaStats(): Promise<PlazaStats | null> {
   }
 }
 
+/* ---------------- 分站广场自动收录（可选：PLAZA_HUB_URL + PLAZA_ADMIN_TOKEN 都配置后生效） ----------------
+ * 开站/启用即把分站注册进广场 hub（走 hub 管理端点，与人工审核同一入口，只是由面板代劳——
+ * 没有 token 配置就整体不生效，第三方自托管站想进官方广场仍走 docs/PLAZA.md 的人工流程）。
+ * 注册返回的站点 token 写进租户库 settings.plazaToken：plaza-sync 服务端插件默认开启，
+ * 有 token 即自动 push（发布实时进广场、删除/锁文自动下架），hub 的 6 小时 pull 仍是兜底路。
+ * 演示租户（种子假数据）与停用租户一律不收录——广场只收真实公开内容，宁缺毋假。
+ * 全部失败都只进 flash 提示，绝不阻塞开站/停用/删除主流程。 */
+
+type PlazaEnsureResult = { ok: 'added' | 'known' | 'skip'; note?: string } | { ok: 'error'; note: string }
+
+/** hub 管理 API：8s 超时，data 解析失败为 null；网络异常 status=0（调用方按不可达处理） */
+async function plazaApi(method: string, apiPath: string, body?: unknown): Promise<{ status: number; data: Record<string, unknown> | null }> {
+  try {
+    const res = await fetch(`${PLAZA_HUB_URL}${apiPath}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${PLAZA_ADMIN_TOKEN}`,
+        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(8_000),
+    })
+    let data: Record<string, unknown> | null = null
+    try {
+      data = (await res.json()) as Record<string, unknown>
+    } catch {
+      /* 非 JSON 响应按 null */
+    }
+    return { status: res.status, data }
+  } catch {
+    return { status: 0, data: null }
+  }
+}
+
+/** 租户站点标题（广场展示名）：只读开库取 siteTitle，拿不到回落域名 */
+async function plazaSiteName(host: string): Promise<string> {
+  const file = path.join(tenantDir(host), 'blog.db')
+  if (!fs.existsSync(file)) return host
+  try {
+    const { DatabaseSync } = await import('node:sqlite')
+    const db = new DatabaseSync(file, { readOnly: true })
+    try {
+      const row = db.prepare("SELECT value FROM settings WHERE key = 'siteTitle'").get() as { value?: unknown } | undefined
+      return String(row?.value || '').trim() || host
+    } finally {
+      db.close()
+    }
+  } catch {
+    return host
+  }
+}
+
+/** 站点 token 写进租户库（仅在尚未配置时写，不覆盖站长自己填的）。经租户活连接写，
+ *  业务侧下一读即见；写不进只损失 push 路（实时性/下架同步），pull 路不受影响 */
+async function plazaSaveToken(deps: ControlDeps, host: string, token: string): Promise<boolean> {
+  const db = deps.tenants.get(host)?.env?.DB as
+    | { prepare(sql: string): { bind(...args: unknown[]): { run(): Promise<unknown> } } }
+    | undefined
+  if (!db) return false
+  try {
+    await db
+      .prepare(
+        // 条件写：key 已在且值非空则不动（ON CONFLICT … WHERE），按钮连点也安全
+        "INSERT INTO settings (key, value) VALUES ('plazaToken', ?) " +
+          "ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value = ''",
+      )
+      .bind(token)
+      .run()
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** 确保单个租户已收录进广场：注册（409 = 已在广场）+ token 落库 */
+async function plazaEnsureSite(deps: ControlDeps, host: string, cfg: TenantConfig): Promise<PlazaEnsureResult> {
+  if (!PLAZA_HUB_URL || !PLAZA_ADMIN_TOKEN) return { ok: 'skip' }
+  if (cfg.demo || cfg.disabled) return { ok: 'skip' }
+  const { status, data } = await plazaApi('POST', '/api/admin/sites', {
+    url: `https://${host}`,
+    name: (await plazaSiteName(host)).slice(0, 100),
+  })
+  if (status === 409) return { ok: 'known' }
+  if (status === 0) return { ok: 'error', note: '广场 hub 暂不可达，稍后可在仪表盘点「分站收录进广场」重试' }
+  if (status !== 200) {
+    const msg = data && typeof data.error === 'string' ? data.error : `HTTP ${status}`
+    return { ok: 'error', note: `广场收录失败：${msg}` }
+  }
+  const token = typeof data?.token === 'string' ? data.token : ''
+  if (token && (await plazaSaveToken(deps, host, token))) {
+    opsLog('广场收录', `${host}（已注册，token 已写入站点设置）`)
+    return { ok: 'added', note: '已自动收录进广场：新内容实时推送，删除/锁文自动下架' }
+  }
+  opsLog('广场收录', `${host}（已注册，token 未落库——hub 补漏路仍生效）`)
+  return { ok: 'added', note: '已收录进广场（hub 定时补漏生效；站点 token 未能写入，push 路未启用）' }
+}
+
+/** 按站点地址找 hub 站点 id（停用/删除同步用）：hub 没有按 url 查的端点，走列表（≤500 站）比对 */
+async function plazaFindSiteId(url: string): Promise<number | null> {
+  const { status, data } = await plazaApi('GET', '/api/admin/sites')
+  if (status !== 200 || !Array.isArray(data?.sites)) return null
+  for (const s of data.sites as Array<Record<string, unknown>>) {
+    if (String(s.url || '').replace(/\/+$/, '') === url) return Number(s.id) || null
+  }
+  return null
+}
+
+/** 广场收录同步（仪表盘按钮）：非演示、非停用租户逐个对齐进 hub，最后触发一次立即补漏，
+ *  让新收录站点的近 30 天内容马上进广场（不等 6 小时 cron）。返回 flash 一句话 */
+async function plazaSyncAll(deps: ControlDeps): Promise<string> {
+  if (!PLAZA_HUB_URL || !PLAZA_ADMIN_TOKEN) return '✗ 未配置 PLAZA_HUB_URL / PLAZA_ADMIN_TOKEN，广场收录不可用'
+  let added = 0
+  let known = 0
+  const errors: string[] = []
+  for (const [host, cfg] of Object.entries(deps.readTenantsConfig().tenants)) {
+    const r = await plazaEnsureSite(deps, host, cfg)
+    if (r.ok === 'added') added++
+    else if (r.ok === 'known') known++
+    else if (r.ok === 'error') errors.push(`${host}：${r.note}`)
+  }
+  opsLog('广场收录', `全量对齐：新收 ${added}、已在 ${known}、失败 ${errors.length}`)
+  const head = added === 0 && known > 0 ? '全部分站均已在广场' : `新收录 ${added} 站`
+  if (errors.length) return `✗ 广场收录同步（新收 ${added}、已在 ${known}）有失败项：${errors.join('；')}`
+  const pull = await plazaApi('POST', '/api/admin/pull')
+  const pulled = pull.status === 200 ? Number(pull.data?.pulled) || 0 : -1
+  return pulled >= 0 ? `✓ ${head}，补漏已触发（本轮拉取 ${pulled} 条进广场）` : `✓ ${head}，但补漏触发失败（6 小时内 cron 会自动补）`
+}
+
 interface Tenant {
   host: string
   env: Record<string, unknown>
@@ -996,6 +1124,10 @@ ${
   <p class="muted">统计来自 hub /api/admin/stats（北京日口径）；24 小时新增内容 ${num(plazaStats.items?.last24h)} 条。</p>`
       : '<p class="tenant-meta">hub 暂时不可达，统计稍后自动恢复。</p>'
   }
+  <form method="post" action="/plaza-sync" style="margin-top:12px">
+    <button class="btn btn-primary" type="submit">分站收录进广场</button>
+    <span class="muted" style="margin-left:8px">全部真实分站对齐进 hub（演示/停用站除外）并触发一次补漏；开通/启用已自动收录，此按钮用于存量站补录与失败重试。</span>
+  </form>
 </div>`
     : ''
 }
@@ -1261,6 +1393,10 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
     } else {
       flash += '；请手动添加 DNS：A 记录指向本机（Cloudflare 橙云）'
     }
+    // 广场自动收录（演示租户不收录）：best-effort，失败只提示不回滚开站
+    const plaza = await plazaEnsureSite(deps, host, cfgAll.tenants[host] || {})
+    if (plaza.ok === 'added' && plaza.note) flash += `；<br>✓ ${esc(plaza.note)}`
+    else if (plaza.ok === 'error') flash += `；<br><span style="color:#b45309">✗ ${esc(plaza.note)}</span>`
     opsLog('开通', host + (demo ? '（演示种子）' : ''))
     return flashRedirect(res, flash)
   }
@@ -1278,26 +1414,38 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
 
   if (method === 'POST' && path === '/disable' && host) {
     const cfgAll = deps.readTenantsConfig()
+    let plazaNote = ''
     if (cfgAll.tenants[host]) {
       cfgAll.tenants[host].disabled = true
       deps.writeTenantsConfig(cfgAll)
       closeTenantDb(deps.tenants.get(host)?.env)
       deps.tenants.delete(host) // 路由摘除；库与目录原样保留
       opsLog('停用', host)
+      // 广场同步隐藏（best-effort）：站点下线了，广场名录与内容不该继续挂着
+      if (PLAZA_HUB_URL && PLAZA_ADMIN_TOKEN) {
+        const id = await plazaFindSiteId(`https://${host}`)
+        const hid = id ? (await plazaApi('PATCH', `/api/admin/sites/${id}`, { disabled: true })).status === 200 : false
+        plazaNote = hid ? '；广场条目已同步隐藏' : '；广场隐藏未完成（hub 不可达或未收录）'
+      }
     }
-    return flashRedirect(res, `✓ ${host} 已停用（数据保留，可随时启用）`)
+    return flashRedirect(res, `✓ ${host} 已停用（数据保留，可随时启用）${plazaNote}`)
   }
 
   if (method === 'POST' && path === '/enable' && host) {
     const cfgAll = deps.readTenantsConfig()
     const cfg = cfgAll.tenants[host]
+    let flash = `✓ ${host} 已启用`
     if (cfg) {
       delete cfg.disabled
       deps.writeTenantsConfig(cfgAll)
       deps.tenants.set(host, await deps.createTenantFor(host, cfg, cfgAll.r2))
       opsLog('启用', host)
+      // 启用即补收录（覆盖「收录功能上线前建的老站」与此前被停用过的站）
+      const plaza = await plazaEnsureSite(deps, host, cfg)
+      if (plaza.ok === 'added' && plaza.note) flash += `；✓ ${esc(plaza.note)}`
+      else if (plaza.ok === 'error') flash += `；✗ ${esc(plaza.note)}`
     }
-    return flashRedirect(res, `✓ ${host} 已启用`)
+    return flashRedirect(res, flash)
   }
 
   if (method === 'POST' && path === '/delete' && host) {
@@ -1313,6 +1461,14 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
       fs.rmSync(tenantDir(host), { recursive: true, force: true })
       opsLog('删除', host)
       if (cfEnabled()) await dnsDelete(host)
+      // 广场同步移除（best-effort）：hub 删站自带级联清内容；未收录过 = 无需清
+      let plazaNote = ''
+      if (PLAZA_HUB_URL && PLAZA_ADMIN_TOKEN) {
+        const id = await plazaFindSiteId(`https://${host}`)
+        const gone = id ? (await plazaApi('DELETE', `/api/admin/sites/${id}`)).status === 200 : true
+        plazaNote = gone ? '；广场条目已同步清除' : '；广场清除未完成（hub 不可达，可稍后在 hub 管理端手工删）'
+      }
+      return flashRedirect(res, `✓ ${host} 已彻底删除（配置 + 数据目录${cfEnabled() ? ' + DNS 记录' : ''}）${plazaNote}`)
     }
     return flashRedirect(res, `✓ ${host} 已彻底删除（配置 + 数据目录${cfEnabled() ? ' + DNS 记录' : ''}）`)
   }
@@ -1326,6 +1482,12 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
     }
     const flash = await resetAdminPassword(host)
     return flashRedirect(res, flash)
+  }
+
+  // 广场收录同步（按钮）：全部真实分站对齐进 hub（演示/停用站除外）+ 触发一次立即补漏。
+  // 日常无需手动点——开通/启用已自动收录，这里是补收录功能上线前的存量站与失败重试
+  if (method === 'POST' && path === '/plaza-sync') {
+    return flashRedirect(res, await plazaSyncAll(deps))
   }
 
   // 官网同步：拉 GitHub 最新 tarball 替换 SITE_DIR；SITE_DIR 未配置时端点不存在

@@ -115,6 +115,21 @@ X-Plaza-Signature: <hex(HMAC-SHA256(token, timestamp + "." + rawBody))>
 
 hub cron（每 6 小时）会抓各站 `/rss.xml` 给没接插件的老站兜底：只灌 **30 天内**的文章（RSS 没有微博）、单站单次 20 条、`source='pull'` 标记且**绝不覆盖** push 数据；站点注册时默认开启，管理端点可按站关闭。180 天无 push 心跳的站点 cron 自动休眠（不删站，重新启用即恢复）。pull 只收 https 链接、跳过带锁标志的条目（与 push 路同口径）；内网后缀 / IP 字面量的站点地址注册时不收、pull 时跳过。
 
+## docker-poc 自托管分站的自动收录（2026-10-16）
+
+docker-poc 控制面配置了 `PLAZA_HUB_URL` + `PLAZA_ADMIN_TOKEN`（指向自己的 hub）后，
+分站与广场自动保持同步，零人工步骤：
+
+- **开通即收录**：控制面开站（非演示租户）自动调 hub `POST /api/admin/sites` 注册，
+  返回的站点 token 直接写进该站 `settings.plazaToken`——「广场同步」服务端插件默认开启，
+  有 token 即自动 push（发布实时进广场、删除/锁文自动下架），hub 的 6 小时 pull 继续兜底
+- **生命周期联动**：停用分站 → hub 站点同步隐藏；启用 → 自动补注册；彻底删除 → hub 删站并级联清内容
+- **存量站对齐**：控制面仪表盘「广场 hub」卡片有「分站收录进广场」按钮——把全部真实分站
+  （演示/停用站除外）对齐进 hub 并触发一次 `POST /api/admin/pull` 立即补漏；日常无需手动点
+- 演示租户（种子假数据）一律不收录：广场只收真实公开内容，宁缺毋假
+- 未配置这两个 env 的自托管环境行为不变：进官方广场仍走「三步接入」的人工审核流程
+  （站点 token 只有 hub 管理员能发，自动收录的前提是持有 PLAZA_ADMIN_TOKEN）
+
 ## 与认证（ROADMAP B18）的关系
 
 `sites.verified` 徽标位与 feed / 名录出参的 `siteVerified` 已就位（官网展示「✔︎ 认证」），v1 由 hub 管理员在站点所有权验证通过后手工打开；签名凭据自动化签发（token 化验证文件 / DNS 校验）是 B18 的启动范围，届时只扩 hub 管理端点，协议与出参形状不变。
