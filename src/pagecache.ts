@@ -288,3 +288,22 @@ export function imageCachePut(req: Request, res: Response, ctx: WaitUntil): void
     /* 回填失败不影响本次响应 */
   }
 }
+
+/** 图床边缘缓存定向清理（2026-10-15 审计 F2）：删除媒体 / 更新可覆盖键（favicon）后调用，
+ *  不然边缘副本（immutable 1y）会继续把已删/旧内容发给持旧 URL 的访客。缓存键带 host——
+ *  这里按当前请求的 origin 清理（最佳努力口径：站长平时用的域名立即生效，其它 host 的
+ *  副本等边缘逐出或 TTL 到期）。Node / docker-poc 无 caches.default 直接空操作 */
+export async function purgeImageCache(origin: string, keys: string[]): Promise<void> {
+  const cache = sharedCache()
+  if (!cache || !keys.length) return
+  await Promise.all(
+    keys.map(async (key) => {
+      try {
+        const cacheKey = imageCacheKeyFor(`${origin.replace(/\/+$/, '')}/images/${key}`)
+        if (cacheKey) await cache.delete(cacheKey)
+      } catch {
+        /* 清不掉就等边缘逐出，不影响删除主流程 */
+      }
+    })
+  )
+}

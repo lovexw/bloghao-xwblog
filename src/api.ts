@@ -68,7 +68,7 @@ import {
   type WeiboVideoView,
 } from './db'
 import { mdToHtml } from './markdown'
-import { purgePageCache } from './pagecache'
+import { purgeImageCache, purgePageCache } from './pagecache'
 import { appearanceMeta, cleanAppearanceSettings } from './appearance'
 import { EMOJI_BASE, WECHAT_EMOJI } from './emoji'
 import { awardCommentPoints, awardPoints, normalizeMinTier } from './points'
@@ -1046,7 +1046,9 @@ async function storeLinkIcon(env: Env, iconUrl: string, host: string): Promise<s
     const mime = ext === 'ico' ? 'image/x-icon' : `image/${ext === 'jpg' ? 'jpeg' : ext}`
     const key = `u/fav/${host.replace(/[^a-z0-9.-]/gi, '')}.${ext}`
     await env.IMAGES.put(key, buf, {
-      httpMetadata: { contentType: mime, cacheControl: 'public, max-age=604800' },
+      // 短 TTL（2026-10-15 审计 F2）：这个键会被 refresh-icon 原地覆盖（非内容寻址），
+      // 长 immutable 会让换图标后边缘与浏览器长期取旧图；1 天 + /images 尊重对象头
+      httpMetadata: { contentType: mime, cacheControl: 'public, max-age=86400' },
     })
     return `/images/${key}`
   } catch {
@@ -1119,6 +1121,8 @@ api.post('/admin/links', async (c) => {
   )
     .bind(p.name, p.url, p.description, p.icon, p.status, p.sort, now, now)
     .run()
+  // 友链进公开 /links 页（审计 C3）→ 默认 approved 的新链接出现后页面边缘缓存作废
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true, link: await getFriendLinkById(c.env.DB, Number(res.meta.last_row_id)) })
 })
 
@@ -1142,12 +1146,19 @@ api.post('/admin/links/:id/approve', async (c) => {
   await c.env.DB.prepare("UPDATE friend_links SET status = 'approved', updated_at = ? WHERE id = ?")
     .bind(Date.now(), id)
     .run()
+  // 收录改变公开 /links 页（审计 C3）→ 页面边缘缓存作废
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   // 演示站照常可走收录流程，只是不出网抓图标（demo 体验者凭据公示，出网点一律短路）
   if (!existing.icon && !isDemo(c.env)) {
+    const origin = new URL(c.req.url).origin
     c.executionCtx.waitUntil(
       fetchLinkIcon(c.env, existing.url).then((icon) =>
         icon
-          ? c.env.DB.prepare('UPDATE friend_links SET icon = ?, updated_at = ? WHERE id = ?').bind(icon, Date.now(), id).run()
+          ? c.env.DB
+              .prepare('UPDATE friend_links SET icon = ?, updated_at = ? WHERE id = ?')
+              .bind(icon, Date.now(), id)
+              .run()
+              .then(() => purgeImageCache(origin, [icon.slice('/images/'.length)]))
           : undefined
       )
     )
@@ -1165,6 +1176,9 @@ api.post('/admin/links/:id/refresh-icon', async (c) => {
   const icon = await fetchLinkIcon(c.env, existing.url)
   if (!icon) return jsonError('没能取到该站的图标，可在编辑里手动填图标地址')
   await c.env.DB.prepare('UPDATE friend_links SET icon = ?, updated_at = ? WHERE id = ?').bind(icon, Date.now(), id).run()
+  // 图标键（u/fav/<host>.<ext>）会被原地覆盖（审计 F2）→ 清页面与图床边缘缓存，刷新立即生效
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
+  c.executionCtx.waitUntil(purgeImageCache(new URL(c.req.url).origin, [icon.slice('/images/'.length)]))
   return c.json({ ok: true, icon })
 })
 
@@ -1182,6 +1196,8 @@ api.post('/admin/links/reorder', async (c) => {
   await c.env.DB.batch(
     items.map((l, i) => c.env.DB.prepare('UPDATE friend_links SET sort = ? WHERE id = ?').bind(i, l.id))
   )
+  // 排序改变公开 /links 页展示顺序（审计 C3）→ 页面边缘缓存作废
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true })
 })
 
@@ -1198,6 +1214,8 @@ api.put('/admin/links/:id', async (c) => {
   )
     .bind(p.name, p.url, p.description, p.icon, p.status, p.sort, Date.now(), id)
     .run()
+  // 编辑（含改状态隐藏/恢复、换图标）影响公开 /links 页（审计 C3）→ 页面边缘缓存作废
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true, link: await getFriendLinkById(c.env.DB, id) })
 })
 
@@ -1205,6 +1223,8 @@ api.delete('/admin/links/:id', async (c) => {
   const id = parseId(c.req.param('id'))
   if (!id) return jsonError('友链不存在', 404)
   await c.env.DB.prepare('DELETE FROM friend_links WHERE id = ?').bind(id).run()
+  // 删除改变公开 /links 页（审计 C3）→ 页面边缘缓存作废
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true })
 })
 
@@ -1234,6 +1254,8 @@ api.post('/admin/categories', async (c) => {
   // 分类描述（B23）：纯文本一行说明，兼作归档页 meta description
   const description = cleanCategoryDescription(body?.description)
   const cat = await createCategory(c.env.DB, name, slug, sort, description)
+  // 分类进公开面（导航 / 分类页，审计 C4）→ 页面边缘缓存作废
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true, category: cat })
 })
 
@@ -1256,6 +1278,8 @@ api.put('/admin/categories/:id', async (c) => {
   // 分类描述（B23）：缺键即保留（与 slug / sort 同口径）
   const description = body?.description === undefined ? existing.description || '' : cleanCategoryDescription(body.description)
   await c.env.DB.prepare('UPDATE categories SET name = ?, slug = ?, sort = ?, description = ? WHERE id = ?').bind(name, slug, sort, description, id).run()
+  // 分类改名/改描述（页头 + meta description）影响公开分类页（审计 C4）→ 页面边缘缓存作废
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true, category: await getCategoryById(c.env.DB, id) })
 })
 
@@ -1267,6 +1291,8 @@ api.delete('/admin/categories/:id', async (c) => {
     c.env.DB.prepare('DELETE FROM post_categories WHERE category_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM categories WHERE id = ?').bind(id),
   ])
+  // 分类从导航/公开面消失（审计 C4）→ 页面边缘缓存作废
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true })
 })
 
@@ -1512,6 +1538,8 @@ api.delete('/admin/tags/:name', async (c) => {
     })
   stmts.push(c.env.DB.prepare('DELETE FROM tags WHERE name = ?').bind(name))
   await c.env.DB.batch(stmts)
+  // 标签从文章摘除影响 /tag/:x 聚合页（审计 C5）→ 页面边缘缓存作废
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true })
 })
 
@@ -1563,6 +1591,9 @@ api.delete('/admin/uploads', async (c) => {
     c.env.IMAGES.delete(key),
     c.env.DB.prepare('DELETE FROM uploads WHERE key = ?').bind(key).run(),
   ])
+  // 删掉的媒体从图床边缘缓存摘掉（2026-10-15 审计 F2）：边缘副本 immutable 1y，
+  // 不清理的话已删内容对持旧 URL 的访客继续可见
+  c.executionCtx.waitUntil(purgeImageCache(new URL(c.req.url).origin, [key]))
   return c.json({ ok: true })
 })
 
@@ -1586,8 +1617,10 @@ api.post('/admin/uploads/merge', async (c) => {
   if (!b || typeof b.keep !== 'string' || !Array.isArray(b.remove)) return jsonError('参数不完整')
   try {
     const r = await mergeDuplicate(c.env, b.keep, b.remove)
-    // 合并把正文/微博里的重复图地址改写为保留键 → 页面边缘缓存作废（旧副本里的 URL 已失效）
+    // 合并把正文/微博里的重复图地址改写为保留键 → 页面边缘缓存作废（旧副本里的 URL 已失效）；
+    // 被合并删除的文件同时从图床边缘缓存摘掉（审计 F2）
     c.executionCtx.waitUntil(purgePageCache(c.env.DB))
+    c.executionCtx.waitUntil(purgeImageCache(new URL(c.req.url).origin, r.removed ?? []))
     return c.json({ ok: true, ...r })
   } catch (e) {
     return jsonError(e instanceof Error ? e.message : '合并失败')
@@ -1599,7 +1632,10 @@ api.post('/admin/uploads/cleanup', async (c) => {
   const b = await c.req.json<{ keys?: unknown }>().catch(() => null)
   if (!b || !Array.isArray(b.keys)) return jsonError('参数不完整')
   try {
-    return c.json({ ok: true, ...(await cleanupUnreferenced(c.env, b.keys)) })
+    const r = await cleanupUnreferenced(c.env, b.keys)
+    // 真正删掉的文件从图床边缘缓存摘掉（审计 F2：边缘副本 immutable 1y 不清就继续可达）
+    if (r.deletedKeys?.length) c.executionCtx.waitUntil(purgeImageCache(new URL(c.req.url).origin, r.deletedKeys))
+    return c.json({ ok: true, ...r })
   } catch (e) {
     return jsonError(e instanceof Error ? e.message : '清理失败')
   }
@@ -1686,6 +1722,8 @@ api.post('/admin/comments/:id/replies', async (c) => {
       Date.now()
     )
     .run()
+  // 作者回复直接上公开页面（审计 C2：作者回复刻意不触发 onCommentCreated，缓存清理要单挂）
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   return c.json({ ok: true })
 })
 
@@ -2134,7 +2172,8 @@ api.get('/public/emoji', (c) => {
 })
 
 api.get('/public/posts', async (c) => {
-  const tag = c.req.query('tag') || undefined
+  // tag 与缓存键侧同口径 trim（审计 C1：服务端不 trim 会让带空白的请求把空结果投毒到干净键上）
+  const tag = c.req.query('tag')?.trim() || undefined
   const r = await listPosts(c.env.DB, {
     status: 'published',
     tag,
@@ -2249,6 +2288,8 @@ async function publicComment(
         now
       )
       .run()
+    // 作者发言直接上公开页面（审计 C2：作者回复不触发 onCommentCreated，缓存清理要单挂）
+    c.executionCtx.waitUntil(purgePageCache(c.env.DB))
     return c.json({ ok: true })
   }
 

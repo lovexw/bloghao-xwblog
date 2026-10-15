@@ -282,18 +282,21 @@ app.get('/images/*', async (c) => {
   if (hit) return hit
   const obj = await c.env.IMAGES.get(key)
   if (!obj) return c.text('Not found', 404)
+  // 缓存指令尊重 R2 对象自带的 httpMetadata.cacheControl（favicon 等「同键可覆盖」目录
+  // 写的是短 TTL，刷新才能收敛）；没写才兜底内容寻址媒体的 1y immutable
+  const cacheControl = obj.httpMetadata?.cacheControl || 'public, max-age=31536000, immutable'
   if (obj.httpEtag && c.req.header('If-None-Match') === obj.httpEtag) {
     return new Response(null, {
       status: 304,
       // 304 也要带缓存指令：浏览器拿 304 续用本地副本时需要知道 TTL
-      headers: { ETag: obj.httpEtag, 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' },
+      headers: { ETag: obj.httpEtag, 'Cache-Control': cacheControl, 'X-Content-Type-Options': 'nosniff' },
     })
   }
   const headers = new Headers()
   obj.writeHttpMetadata(headers)
   if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/octet-stream')
   headers.set('ETag', obj.httpEtag)
-  headers.set('Cache-Control', 'public, max-age=31536000, immutable')
+  if (!headers.has('Cache-Control')) headers.set('Cache-Control', cacheControl)
   // 禁止浏览器嗅探内容类型：图床里只允许真正的图片被当图片渲染
   headers.set('X-Content-Type-Options', 'nosniff')
   const res = new Response(obj.body, { headers })

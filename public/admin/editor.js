@@ -634,7 +634,7 @@ export async function mountEditor(root, postId, opts = {}) {
       <select class="input" id="ed-category">
         <option value="">未分类</option>
       </select>
-      <div style="font-size:12px;color:var(--sub);margin-top:6px;">在后台「分类」里维护</div>
+      <div style="font-size:12px;color:var(--sub);margin-top:6px;">在后台「文章 → 分类标签」里维护</div>
 
       <div class="drawer-title">谁能看</div>
       <select class="input" id="ed-min-tier">

@@ -59,7 +59,7 @@ test('sort：白名单四值进键；未知值按没传（服务端回落 latest
   assert.equal(q('?sort=random'), null, '随机排序 seed 现生成，同 URL 两次结果不同')
 })
 
-test('tag：缓存侧 trim、≤64 进键、超长整体回源（服务端不 trim 的镜像缺口见 C1 审计）', () => {
+test('tag：两侧同 trim（服务端 pages.ts / api.ts 消费点已对齐，审计 C1 修复）、≤64 进键、超长整体回源', () => {
   assert.equal(q('?tag=' + encodeURIComponent(' 生活 ')), 'tag=' + encodeURIComponent('生活'))
   assert.equal(q('?tag=' + encodeURIComponent('生活')), 'tag=' + encodeURIComponent('生活'))
   assert.equal(q('?tag=' + 'x'.repeat(65)), null)

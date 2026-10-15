@@ -231,7 +231,8 @@ async function renderList(
   baseHeaders(c, settings)
   const theme = getTheme(settings.theme)
   const url = new URL(c.req.url)
-  const tag = c.req.param('tag') || url.searchParams.get('tag') || undefined
+  // tag 与缓存键侧同口径 trim（2026-10-15 审计 C1：?tag= 带空白会把空结果投毒到干净键上）
+  const tag = c.req.param('tag') || url.searchParams.get('tag')?.trim() || undefined
   const mode = siteMode(settings)
   // 纯微博：打开首页就是微博时间线（文章数据不动，/post/ 直链仍可访问）；/tag/:tag 属博客概念照旧渲染
   if (opts.mode === 'home' && mode === 'weibo' && !tag) return renderWeibo(c, true)

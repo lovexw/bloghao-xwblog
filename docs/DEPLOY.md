@@ -92,9 +92,11 @@ npm run deploy
 成功后 wrangler 会输出你的访问地址，例如：
 
 ```
-Published xwblog v1.0.0
+Published xwblog v2.5.1
 https://xwblog.<你的子域>.workers.dev
 ```
+
+> 若你的 `wrangler.jsonc` 里设了 `"workers_dev": false`（关闭 workers.dev 平行入口），部署后不会生成 workers.dev 地址——删除该行重新部署，或直接按第 6 节绑自定义域。
 
 ## 4. 初始化管理员
 
@@ -119,7 +121,7 @@ https://你的域名/admin/
 - **站点名称 / 描述 / 页脚**：出现在首页刊头、浏览器标题、RSS
 - **站点链接**：填写最终访问域名（本站即 `https://blog.xiaowuleyi.com`），用于 RSS 和 sitemap 里的绝对链接。绑定了自定义域名就**务必填上**
 - **站点头像 / 网站图标**：都从后台上传、存进 R2 图床，改即时生效
-- **外观**：六套主题即点即换
+- **外观**：七套主题即点即换
 - **评论**：可开关留言、可开启「先审后展」
 
 ## 6. 绑定自定义域名
@@ -156,7 +158,7 @@ git push -u origin main
 2. GitHub 仓库 → Settings → Secrets and variables → Actions，添加两个 secret：
    - `CLOUDFLARE_API_TOKEN`：上一步的令牌
    - `CLOUDFLARE_ACCOUNT_ID`：面板首页右侧可以看到
-3. 之后每次 push 到 `main`，GitHub Actions 会自动：类型检查 → 安装依赖 → 执行 schema.sql（幂等）→ `wrangler deploy`。另有内置的 `ci.yml` 与部署并行，跑类型检查 + 回归测试（`tests/` 30+ 用例），防止已修复的 bug 悄悄复发
+3. 之后每次 push 到 `main`，GitHub Actions 会自动：类型检查 → 安装依赖 → 执行 schema.sql（幂等）→ `wrangler deploy`。另有内置的 `ci.yml` 与部署并行，跑类型检查 + 回归测试（`tests/` 300+ 用例），防止已修复的 bug 悄悄复发
 
 > 更省事的替代：不配任何密钥，在 Cloudflare 面板 → 你的 Worker → Settings → Git 支持（Builds）连接 GitHub 仓库，push 即自动部署（一键部署的副本默认就是这条路）。
 
@@ -197,7 +199,7 @@ docker compose up --build -d     # 镜像约 70MB（node:26-alpine），数据�
 npm run db:init:local   # 初始化 .wrangler/state 下的本地 D1
 npm run dev             # http://127.0.0.1:8787（本地 D1/R2 全模拟，不花钱）
 npm run typecheck       # TypeScript 类型检查，提交前必须通过
-npm test                # 回归测试（tests/，30+ 用例），提交前必须通过
+npm test                # 回归测试（tests/，300+ 用例），提交前必须通过
 npm run smoke           # 本地冒烟：起 wrangler dev 逐路由断言 200，改 SQL 拼接/渲染后必跑
 ```
 

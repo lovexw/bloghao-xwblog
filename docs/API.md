@@ -65,7 +65,7 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 
 - 服务端清洗：`p` 必须以 `/` 开头（剥控制字符，截 300），`r` 只留域名，`v` 只放行 `[A-Za-z0-9_-]`，`t` 截 200；路径不合法直接静默丢弃
 - 设备 / 浏览器族由服务端按 User-Agent 解析，国家取 `CF-IPCountry`；不存 IP 与原始 UA
-- 同 IP 10 分钟限 120 次；设置 `statsEnabled=0` 时接口返回 `{ok:true}` 但不入库
+- 同 IP 10 分钟限 30 次；设置 `statsEnabled=0` 时接口返回 `{ok:true}` 但不入库
 - 始终返回 `{"ok":true}`（失败静默，不打扰页面）
 
 ### POST /api/member/register
@@ -127,7 +127,7 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 ## 管理接口（需登录）
 
 ### GET /api/admin/stats
-概览统计：`{posts, views, likes, drafts, pendingComments, pendingLinks, uploads:{count,bytes}, recent:[…]}`
+概览统计：`{version, posts, views, likes, drafts, pendingComments, pendingLinks, uploads:{count,bytes}, db:{weibo,pages,comments,members}, backup:{enabled,at,bytes}, recent:[…]}`（`version` 是系统版本，仅此管理面出口）
 
 ### GET /api/admin/visits?days=30
 访客统计聚合（后台「统计」页），`days` 1-365 默认 30（含今天共 N 天，北京时间）。响应：
@@ -308,7 +308,7 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 ### 设置 / 账号 / 工具
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET / PUT | `/api/admin/settings` | 可写键：`siteName, siteDescription, siteUrl, footerText, avatarUrl, faviconUrl, ogImageDefault, theme, allowComments, moderateComments, notifyNewComment, rssFullText, backupEnabled, postsPerPage, about（legacy，已由「页面」承载）, pluginsDisabled, siteGrayscale, siteClosed, siteClosedMessage, membersEnabled（会员体系总开关）, rankTopN（/rank 展示条数 1-50）, externalToken, telegramBotToken, telegramAllowFrom, telegramWebhookSecret, verifyMetas（站点验证 meta：一行一个 meta 标签，name 走白名单、取值形态受限，非法整体 400）, analyticsScript（统计脚本：https 脚本地址或 script 片段，内联脚本体与白名单外属性拒绝）, robotsExtra（robots.txt 追加段，剥控制字符、限 2000 字符）`；`theme` 必须是已注册主题 id；`avatarUrl`/`faviconUrl`/`ogImageDefault` 只接受站内 `/images/` 与 `http(s)` 外链；`pluginsDisabled` 为逗号分隔的插件 manifest id（仅字母/数字/`_`/`-`）；`siteGrayscale`/`siteClosed` 为 `1`/`0` 开关（闭站时公开页面与公开 API 一律 503，白名单见 src/closed.ts，已登录管理员不受影响）；`siteClosedMessage` ≤1000 字；`externalToken`/`telegramBotToken`/`telegramWebhookSecret` 为敏感项，GET 与 PUT 的响应一律打码（`••••••••`），明文只在生成时返回一次，PUT 收到打码占位符视为保持原值；`verifyMetas` / `analyticsScript` 存库为结构化 JSON，GET 与 PUT 响应回显成「可粘贴形态」（与提交格式同形，可原样改回再存），渲染时按结构化值重放——统计脚本域自动进 CSP（`script-src` + `connect-src`），验证 meta 与预取声明（Speculation Rules）注入 head；`robotsExtra` 附在内置 robots 段之后（`GET /robots.txt`，演示站固定整站 Disallow） |
+| GET / PUT | `/api/admin/settings` | 可写键：`siteName, siteDescription, siteUrl, siteMode（blog-weibo/weibo-blog/blog/weibo 四选一，脏值回退默认）, footerText, avatarUrl, faviconUrl, ogImageDefault, theme, allowComments, moderateComments, notifyNewComment, rssFullText, backupEnabled, postsPerPage, about（legacy，已由「页面」承载）, pluginsDisabled, serverPluginsDisabled（服务端插件停用名单）, appearance（主题外观变量 JSON，非法整体 400）, siteGrayscale, siteClosed, siteClosedMessage, siteNoindex（全站 noindex 开关）, membersEnabled（会员体系总开关）, rankTopN（/rank 展示条数 1-50）, turnstileSiteKey/turnstileSecret（注册人机验证，两键成对启用否则整体 400）, edition（zh/en，重新开启 en 即重置回退状态）, tgChannelChatId, commentWebhookUrl（公网 http(s) 校验）, footerHtmlCode（≤5000 字，管理员信任级 HTML）, bufferAccessToken/bufferChannelId（微博同步 Buffer）, plazaEndpoint（公网 https 校验）/plazaToken（广场同步）, externalToken, telegramBotToken, telegramAllowFrom, telegramWebhookSecret, verifyMetas（站点验证 meta：一行一个 meta 标签，name 走白名单、取值形态受限，非法整体 400）, analyticsScript（统计脚本：https 脚本地址或 script 片段，内联脚本体与白名单外属性拒绝）, robotsExtra（robots.txt 追加段，剥控制字符、限 2000 字符）`；`theme` 必须是已注册主题 id；`avatarUrl`/`faviconUrl`/`ogImageDefault` 只接受站内 `/images/` 与 `http(s)` 外链；`pluginsDisabled`/`serverPluginsDisabled` 为逗号分隔的插件 id（仅字母/数字/`_`/`-`）；`siteGrayscale`/`siteClosed`/`siteNoindex`/布尔开关为 `1`/`0`（闭站时公开页面与公开 API 一律 503，白名单见 src/closed.ts，已登录管理员不受影响）；`siteClosedMessage` ≤1000 字；`externalToken`/`telegramBotToken`/`telegramWebhookSecret`/`commentWebhookUrl`/`bufferAccessToken`/`plazaToken`/`turnstileSecret` 为敏感项，GET 与 PUT 的响应一律打码（`••••••••`），明文只在生成时返回一次，PUT 收到打码占位符视为保持原值；`verifyMetas` / `analyticsScript` 存库为结构化 JSON，GET 与 PUT 响应回显成「可粘贴形态」（与提交格式同形，可原样改回再存），渲染时按结构化值重放——统计脚本域自动进 CSP（`script-src` + `connect-src`），验证 meta 与预取声明（Speculation Rules）注入 head；`robotsExtra` 附在内置 robots 段之后（`GET /robots.txt`，演示站与全站 noindex 固定整站 Disallow） |
 | PUT | `/api/admin/password` | Body `{oldPassword, newPassword}`（8-64 位） |
 | POST | `/api/admin/tools/md` | Body `{md}` → `{html}`，Markdown 渲染 |
 | POST | `/api/admin/tools/linkmeta` | Body `{url}` → `{meta:{title, description, image, siteName}}`，编辑器「网址卡片」抓取目标页 og 元数据；只抓 http(s) 公网地址（私有网段/非常规端口拒绝，限长限时），抓不到时字段为空（前端用域名占位组卡）。限频 10 次/分钟/IP |
@@ -335,10 +335,10 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 | GET | `/api/admin/export/wxr` | 下载 WordPress WXR 1.2 单文件：文章（HTML 正文、publish/draft 状态、分类与标签），供 WordPress / emlog 导入器使用；微博不进 WXR |
 
 ### GET /api/meta/themes
-已注册主题列表 `{themes:[{id,name,description,colors}]}`，`colors` 为后台皮肤卡预览色板（`[背景, 强调条, 卡面, 卡面2, 卡面3]`，未设置时为 `null`）。
+已注册主题列表 `{themes:[{id,name,description,colors,appearance}]}`，`colors` 为后台皮肤卡预览色板（`[背景, 强调条, 卡面, 卡面2, 卡面3]`，未设置时为 `null`）；`appearance` 是该主题支持的外观变量元信息（角色/默认值/字号基线/字体预设，B9）。
 
 ### GET /api/admin/members?page=1&q=
-会员列表（后台「会员」页数据源）：`{items:[{id, username, email, tier, points, status, created_at, last_login_at}], total, page, totalPages}`；`q` 模糊匹配用户名 / 邮箱，20 条/页。
+会员列表（后台「会员」页数据源）：`{items:[{id, username, email, display_name, avatar, tier, points, status, created_at, updated_at, last_login_at}], total, page, totalPages}`（不含 password_hash/salt）；`q` 模糊匹配用户名 / 邮箱，20 条/页。
 
 ### PUT /api/admin/members/:id
 改档位 / 封禁，**缺键即保留**（只传要改的键）：`{ "tier": "normal|coffee|top" }` 或 `{ "status": "active|banned" }` → `{ok:true}`；`status:"banned"` 同时清空该会员全部会话（即刻踢下线），历史评论保留。会员不存在 404。
