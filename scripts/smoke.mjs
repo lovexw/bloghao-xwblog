@@ -86,7 +86,7 @@ function bypassUrl(url) {
 }
 
 async function check(method, url, expectStatus, expectBody, opts = {}) {
-  const label = `${method} ${url}${expectBody ? '（含内容断言）' : ''}${opts.notContains ? '（不含断言）' : ''}`
+  const label = `${method} ${url}${expectBody ? '（含内容断言）' : ''}${opts.notContains ? '（不含断言）' : ''}${opts.expectHeaders ? '（响应头断言）' : ''}`
   try {
     const res = await fetch(`http://127.0.0.1:${PORT}${bypassUrl(url)}`, {
       method,
@@ -103,6 +103,17 @@ async function check(method, url, expectStatus, expectBody, opts = {}) {
     if (bodyOk && opts.notContains) {
       bodyOk = !text.includes(opts.notContains)
       if (!bodyOk) console.error(`  ✗ ${label}：响应中不应出现「${opts.notContains}」`)
+    }
+    if (bodyOk && opts.expectHeaders) {
+      // 响应头包含断言（public/_headers 的后台防嵌套头等）：值取 includes 口径，
+      // 防 CSP 这类多指令头因追加指令而整体比对失败
+      for (const [name, want] of Object.entries(opts.expectHeaders)) {
+        const got = res.headers.get(name) || ''
+        if (!got.toLowerCase().includes(String(want).toLowerCase())) {
+          console.error(`  ✗ ${label}：响应头 ${name} 期望含「${want}」，实际「${got || '(缺失)'}」`)
+          bodyOk = false
+        }
+      }
     }
     if (res.status !== expectStatus) {
       console.error(`  ✗ ${label}：期望 ${expectStatus}，实际 ${res.status}`)
@@ -211,7 +222,12 @@ try {
   await check('GET', '/og-default.png', 200)
   await check('GET', '/', 200, 'twitter:card')
   await check('GET', '/', 200, 'og:image')
-  await check('GET', '/admin/', 200)
+  // 后台防嵌套响应头（public/_headers）：XFO 与 CSP frame-ancestors 双写——meta CSP 装不下
+  // frame-ancestors，只能在响应头层；冒烟同时守「_headers 在 wrangler dev 下确实生效」
+  await check('GET', '/admin/', 200, undefined, {
+    expectHeaders: { 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "frame-ancestors 'none'" },
+  })
+  await check('GET', '/_headers', 404) // 配置文件本身不对外服务（与 Cloudflare 行为一致）
   // 皮肤/插件市场：编辑器插件清单与市场目录是后台「插件 / 皮肤」页的数据源，必须可访问且是合法 JSON
   await check('GET', '/plugins/manifest.json', 200, 'hello-sign')
   await check('GET', '/market/catalog.json', 200, 'themes')

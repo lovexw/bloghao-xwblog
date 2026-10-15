@@ -109,6 +109,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 **会话 token（src/auth.ts）**
 
 - sessions / member_sessions 落库的是 **SHA-256(token)**（`tokenHash`），Cookie 里才是原文：库泄露 ≠ 会话可重放。会话相关查询/删除一律先过 tokenHash，别拿 Cookie 里的明文 token 直查直删（2026-10 切换，上线时全部旧登录态失效一次属预期）
+- 改密码后「踢其他设备、保留当前会话」统一走 auth.ts 的 `destroyOtherSessions`（管理员，api.ts PUT /admin/password）/ `destroyOtherMemberSessions`（会员）——keepToken 是 Cookie 里的**明文** token，函数内部先 `tokenHash` 再比对；**别在端点里手写 `DELETE ... token != ?` 拿明文直比**（库里是哈希，恒不相等 = 删光全部会话、把自己也踢下线——2026-10-16 修复，tests/auth.test.ts 真库用例守着）
 
 **MCP 服务器（tests/mcp.test.ts、冒烟「MCP 链路」，机制在 src/mcp.ts，B10）**
 
@@ -141,7 +142,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 
 - 后台所有请求走 `api()`：401 会话过期已统一拦截回登录页（勿在别处重复处理，也别动 `state.user` 的判断顺序——登录表单的密码错误提示依赖它）；每个写操作按钮必须 try/catch + toast，请求期间 disabled 防连击
 - 设置页「保存全部」的 body **不带 theme 键**（主题只在皮肤页管理；服务端 PUT 对 body 里存在的 key 一律写入——历史上带了就曾把皮肤静默重置成 wechat）；分类/媒体页等操作后的列表刷新统一 `navigate()`，别直调 `viewX()` 绕过防串页守卫
-- 后台 SPA 经 wrangler assets 直出不经过 Worker，CSP 靠 admin/index.html 的 **meta 兜底**（前台在 pages.ts baseHeaders）：后台模板/弹窗里**禁止新增内联事件属性（onclick 等）与内联 `<script>`**，交互一律 addEventListener
+- 后台 SPA 经 wrangler assets 直出不经过 Worker，CSP 靠 admin/index.html 的 **meta 兜底**（前台在 pages.ts baseHeaders；form-action 在 meta 里有效，**frame-ancestors 是 meta 无效项**）；meta 兜不住的响应头（XFO / `frame-ancestors` / nosniff / Referrer-Policy / COOP / 静态资源缓存）走 **public/_headers**（Workers assets 原生支持、wrangler dev 同样生效，docker-poc/server.ts 的 serveStatic 有同语义镜像——**改口径两侧同改**，`_headers` 自身不对外服务，冒烟「后台防嵌套响应头」守着）：后台模板/弹窗里**禁止新增内联事件属性（onclick 等）与内联 `<script>`**，交互一律 addEventListener
 - 操作回调里刷新列表统一 `navigate()`（自带 pendingRoute/navSeq 防串页守卫），别直接 `viewX()`——慢响应会把用户从新页面拽回旧页面
 - editor.js 的 `plugins` 数组是模块级：`mountEditor` 开头清空 + `renderPluginButtons` 按停用名单过滤（ES module import 有缓存，只靠「不 import」卸不掉已加载插件）；路由离开编辑器调 `disposeEditor()` 摘除全局监听与挂起定时器
 - settings 的三个密钥（externalToken/telegramBotToken/telegramWebhookSecret）**GET 与 PUT 响应都打码**，明文只在生成时返回一次；新增敏感键记得进 `SECRET_SETTINGS`

@@ -578,9 +578,10 @@ function safeIso(ts: number): string {
 }
 
 /** 友链卡片：有图标用图标，没有用站名首字。url/icon 渲染前过 scheme 白名单——
- *  写侧已拦 javascript: 等协议，这里兜底防备份恢复/导入路径的脏数据流进 href/src */
+ *  写侧已拦 javascript: 等协议，这里兜底防备份恢复/导入路径的脏数据流进 href/src。
+ *  协议相对地址 //host 是外链不是站内路径，同样不放行（`/[^/]` 要求斜杠后还有字符） */
 export function friendLinkCards(items: FriendLinkView[], en = false): string {
-  const safeUrl = (u: string): string => (/^(https?:\/\/|\/)/i.test(u) ? u : '')
+  const safeUrl = (u: string): string => (/^(https?:\/\/|\/[^/])/i.test(u) ? u : '')
   return items
     .map((l) => {
       const url = safeUrl(l.url)

@@ -1849,7 +1849,7 @@
         saveBtn.disabled = true
         cancelBtn.disabled = true
         // 全量更新：images 必须回传，video 显式回传（null = 清除），不然配图 / 视频会被清空
-        fetch('/api/admin/weibo/' + id, {
+        fetch('/api/admin/weibo/' + encodeURIComponent(id), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ content: content, images: images, video: video, status: 'published' }),
@@ -1914,7 +1914,7 @@
       saveBtn.disabled = true
       ta.disabled = true
       renderTiles()
-      getJSON('/api/admin/weibo/' + id)
+      getJSON('/api/admin/weibo/' + encodeURIComponent(id))
         .then(function (d) {
           ta.value = (d.weibo && d.weibo.content) || ''
           images = ((d.weibo && d.weibo.imageList) || []).slice(0, WB_MAX_IMAGES)
@@ -1945,7 +1945,7 @@
       } else if (act === 'pin') {
         var pinned = !card.classList.contains('is-pinned')
         btn.disabled = true
-        postJSON('/api/admin/weibo/' + id + '/pin', { pinned: pinned })
+        postJSON('/api/admin/weibo/' + encodeURIComponent(id) + '/pin', { pinned: pinned })
           .then(function () {
             setPinned(card, pinned)
             // 置顶后挪到列表最前（服务端 pinnedFirst 排序，与刷新后的顺序一致）
@@ -1961,7 +1961,7 @@
         if (!confirm(EN ? 'Delete this note? It moves to the admin trash and can be restored within 30 days.' : '确定删除这条微博？将移入后台回收站，30 天内可恢复。')) return
         btn.textContent = T('删除中…')
         btn.disabled = true
-        fetch('/api/admin/weibo/' + id, { method: 'DELETE' })
+        fetch('/api/admin/weibo/' + encodeURIComponent(id), { method: 'DELETE' })
           .then(function (r) {
             return r.json().then(function (d) {
               if (!r.ok) throw new Error((d && d.error) || T('删除失败'))

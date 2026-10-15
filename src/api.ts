@@ -10,6 +10,7 @@ import {
   destroyMemberSession,
   destroyMemberSessionsByMember,
   destroyOtherMemberSessions,
+  destroyOtherSessions,
   destroySession,
   getCookie,
   getMemberUser,
@@ -1836,6 +1837,15 @@ api.put('/admin/settings', async (c) => {
       patch[key] = u.startsWith('/images/') || /^https?:\/\//i.test(u) ? u : ''
       continue
     }
+    if (key === 'siteUrl') {
+      // 站点地址拼进 RSS / sitemap / canonical / JSON Feed 的绝对 URL（留空 = 回退请求
+      // origin）：scheme 白名单 http(s)，脏值整体 400 让站长当场改——静默清空会让
+      // 「填错了但没报错」的站点地址悄悄带偏全部 feed 链接
+      const u = v.trim().slice(0, 500)
+      if (u && !/^https?:\/\//i.test(u)) return jsonError('站点地址无效：需以 http:// 或 https:// 开头的完整地址（留空则自动使用当前访问域名）')
+      patch[key] = u
+      continue
+    }
     if (key === 'pluginsDisabled') {
       const cleaned = cleanDisabledPlugins(v)
       if (cleaned === null) return jsonError('插件 ID 只能包含字母、数字、_ 或 -')
@@ -1972,10 +1982,10 @@ api.put('/admin/password', async (c) => {
   await c.env.DB.prepare('UPDATE users SET password_hash = ?, salt = ?, updated_at = ? WHERE id = ?')
     .bind(newHash, newSalt, Date.now(), user.id)
     .run()
-  // 改密后其余会话全部失效（保留当前会话，不把自己踢下线），被盗的旧 token 立即作废
-  await c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?')
-    .bind(user.id, getCookie(c.req.raw, SESSION_COOKIE) ?? '')
-    .run()
+  // 改密后其余会话全部失效（保留当前会话，不把自己踢下线），被盗的旧 token 立即作废。
+  // 库里存的是 SHA-256(token)，keepToken 必须走 destroyOtherSessions 哈希后再比（拿 Cookie
+  // 明文直比恒不相等 = 删光全部会话，曾把「保留当前会话」写成「把自己也踢下线」）
+  await destroyOtherSessions(c.env.DB, user.id, getCookie(c.req.raw, SESSION_COOKIE) ?? '')
   return c.json({ ok: true })
 })
 

@@ -7,7 +7,7 @@ import type { ThemeModule } from '../src/themes/registry.ts'
 import type { AboutData, ArchivesData, GuestbookData, HomeData, LinksData, MemberData, PageData, RankData, WeiboData } from '../src/themes/registry.ts'
 import type { HomePostView, MemberView, RankEntryView, WeiboItemView, ArchiveYearGroup, FriendLinkView, CategoryLink, TagCount } from '../src/render.ts'
 import type { CommentRow } from '../src/types.ts'
-import { commentsHtml, footCardHtml, headingAnchors, heatmapHtml, memberCardHtml, newSiteGuideHtml, postNeighborsHtml, rankListHtml } from '../src/render.ts'
+import { commentsHtml, footCardHtml, friendLinkCards, headingAnchors, heatmapHtml, memberCardHtml, newSiteGuideHtml, postNeighborsHtml, rankListHtml } from '../src/render.ts'
 import { esc } from '../src/utils.ts'
 import { packMatrix, qrMatrix } from '../src/qrcode.ts'
 
@@ -625,4 +625,26 @@ test('postNeighborsHtml：两侧齐全/缺一侧/全空三种形态', () => {
   assert.ok(!onlyPrev.includes('href="/post/b"'))
   assert.equal(postNeighborsHtml(null, undefined), '', '两侧全空返回空串')
   assert.equal(postNeighborsHtml(null, next).includes('上一篇'), false, '只传 next 时无上一篇链接')
+})
+
+// ── 友链卡片 URL 兜底（render.ts friendLinkCards）：写侧 normalizeLinkUrl 已拦脏协议，
+// 这里守渲染侧——防备份恢复 / 导入路径的脏数据流进 href/src；协议相对地址 //host 是
+// 外链不是站内路径，同样不放行（2026-10-15 外部审计项） ──
+
+test('friendLinkCards：url/icon 兜底白名单——javascript: 与协议相对地址退化为无链接卡片', () => {
+  const items: FriendLinkView[] = [
+    { name: '正常站', url: 'https://ok.example.com', description: '', icon: 'https://ok.example.com/favicon.ico' },
+    { name: '脚本注入', url: 'javascript:alert(1)', description: '', icon: '' },
+    { name: '协议相对', url: '//evil.example.com', description: '', icon: '//evil.example.com/x.png' },
+    { name: '站内路径', url: '/about', description: '', icon: '/favicon.svg' },
+    { name: '空地址', url: '', description: '', icon: '' },
+  ]
+  const html = friendLinkCards(items)
+  assert.ok(html.includes('href="https://ok.example.com"'), '合法外链照常渲染')
+  assert.ok(html.includes('src="https://ok.example.com/favicon.ico"'), '合法图标照常渲染')
+  assert.ok(!html.includes('javascript:'), '脏协议不进 href')
+  assert.ok(!html.includes('evil.example.com'), '//host 整体退化为无链接卡片（icon 同样不出 src）')
+  assert.ok(html.includes('href="/about"'), '站内路径放行')
+  assert.ok(html.includes('src="/favicon.svg"'), '站内图标放行')
+  assert.ok(html.includes('<span class="fl-card"'), '非法 url 退化为无链接 span 卡片，站名照常展示')
 })
