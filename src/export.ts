@@ -27,7 +27,8 @@ const MAX_ROWS = 100_000 // 与备份的 TABLE_ROW_LIMIT 同口径（D1 单查�
  *  与 /images 路由同一白名单口径（u/ / og/ 前缀）：.. 与目录外 key 拒收——
  *  真实 R2 无所谓，docker-poc 的 r2disk 落盘时会把 .. 拼进文件路径，自己的文章
  *  不能让导出功能炸掉或写出租户目录 */
-function keyOf(url: string): string | null {
+/** 导出仅为测试导入面（tests/export-guard.test.ts）：纯函数零行为变更 */
+export function keyOf(url: string): string | null {
   if (!url.startsWith('/images/')) return null
   const raw = url.slice('/images/'.length)
   let key: string
@@ -48,7 +49,7 @@ function relativeOf(url: string): string {
 
 /** zip 条目名只认「跑不出目录」的 slug:写库侧 cleanSlug 已保证,这里防的是备份恢复/
  *  手工改库旁路写进来的脏 slug(slug 带 / \ .. 会让解包端路径穿越);脏值退回 id 命名 */
-function zipEntrySlug(slug: string, id: number): string {
+export function zipEntrySlug(slug: string, id: number): string {
   if (!slug || /[\\/]/.test(slug) || slug.includes('..') || slug.includes('\0')) return `post-${id}`
   return slug
 }
