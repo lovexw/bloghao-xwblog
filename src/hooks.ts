@@ -9,6 +9,7 @@
  * 页脚注入是同步渲染路径，插件 HTML 原样拼接不做转义（内容来自站长自己，与主题 CSS 同信任级）。
  */
 import { getSettings } from './db'
+import { fetchableUrl } from './fetchsafe'
 import { purgePageCache } from './pagecache'
 import type { Env, SettingsMap } from './types'
 import { excerpt, isDemo } from './utils'
@@ -57,6 +58,46 @@ export interface WeiboPublishedPayload {
   via: 'admin' | 'external' | 'telegram' | 'draft'
 }
 
+/** 编辑已发布文章（编辑后仍处于发布态才触发；状态跃迁分别走发布 / 下架广播，不在此列） */
+export interface PostUpdatedPayload {
+  slug: string
+  title: string
+  via: 'admin'
+}
+
+/** 文章软删进回收站（彻底删除不触发——回收站恢复是唯一生路，删了就该安静） */
+export interface PostDeletedPayload {
+  slug: string
+  title: string
+  via: 'admin'
+}
+
+/** 微博软删进回收站 */
+export interface WeiboDeletedPayload {
+  id: number
+  via: 'admin'
+}
+
+/** 备份成功写盘（每晚 cron 与手动备份都触发；skipped / 失败不触发）。
+ *  插件凭 ctx.env.IMAGES.get(key) 取回备份内容做异地推送（路线图 B6 的插件化路子） */
+export interface BackupCompletedPayload {
+  key: string
+  bytes: number
+  tables: number
+  /** 备份完成时刻（毫秒） */
+  at: number
+}
+
+/** 插件配置表单字段（后台「插件」页「配置」弹窗按此渲染，值存 settings.serverPluginConfig） */
+export interface PluginConfigField {
+  key: string
+  label: string
+  type: 'text' | 'textarea'
+  placeholder?: string
+  /** 输入框下的帮助文案 */
+  help?: string
+}
+
 export interface ServerPlugin {
   id: string
   title: string
@@ -65,12 +106,24 @@ export interface ServerPlugin {
   author: string
   /** 文章发布（草稿/定时 → 已发布的跃迁，重复保存已发布文章不触发） */
   onPostPublished?: (p: PostPublishedPayload, ctx: HookContext) => Promise<void> | void
+  /** 编辑已发布文章（编辑后仍处于发布态；状态跃迁不触发） */
+  onPostUpdated?: (p: PostUpdatedPayload, ctx: HookContext) => Promise<void> | void
+  /** 文章软删进回收站 */
+  onPostDeleted?: (p: PostDeletedPayload, ctx: HookContext) => Promise<void> | void
   /** 微博发布（新建即发 / 草稿转发布，编辑已发布微博不触发） */
   onWeiboPublished?: (p: WeiboPublishedPayload, ctx: HookContext) => Promise<void> | void
+  /** 微博软删进回收站 */
+  onWeiboDeleted?: (p: WeiboDeletedPayload, ctx: HookContext) => Promise<void> | void
   /** 访客发表评论 / 留言（作者自己的回复不触发，避免同步场景里自我刷屏） */
   onCommentCreated?: (p: CommentCreatedPayload, ctx: HookContext) => Promise<void> | void
+  /** 备份成功写盘（定时 + 手动） */
+  onBackupCompleted?: (p: BackupCompletedPayload, ctx: HookContext) => Promise<void> | void
   /** 页脚注入：返回的 HTML 拼在每页 </body> 前（同步，不能访问 env） */
   footerHtml?: (ctx: HookContext) => string
+  /** 插件配置表单（后台「插件」页渲染）；不定义 = 该插件无配置界面 */
+  configFields?: PluginConfigField[]
+  /** 配置保存时的语义校验（返回错误文案 = 整体拒绝保存） */
+  configValidate?: (cfg: Record<string, string>) => string | null
 }
 
 /* ---------------- 官方示例插件 ---------------- */
@@ -352,12 +405,138 @@ async function plazaIngest(endpoint: string, token: string, body: Record<string,
   if (!res.ok) console.error(`[plaza-sync] ingest ${res.status}`)
 }
 
-/** 注册表：第三方服务端插件在此登记（顺序即后台展示顺序） */
-export const SERVER_PLUGINS: ServerPlugin[] = [tgChannel, commentWebhook, bufferSync, plazaSync, footerHtmlPlugin]
+/* ---------------- 通用出站 Webhook ----------------
+ * 把「事件 → POST 外部地址」做成一个官方插件：站长自选事件清单与目标 URL，
+ * n8n / IFTTT / 自建系统等自动化集成一个地址全接走，不再为每个平台单写同步插件。
+ * body: { event, site, at, data }；配置了签名密钥时带 X-Bloghao-Timestamp /
+ * X-Bloghao-Signature（HMAC-SHA256(密钥, ts + '.' + rawBody)，与广场同步 plazaSign 同口径）。
+ * URL 落配置即过公网校验（fetchableUrl，与 commentWebhookUrl 同标准），触发时再复核一遍；
+ * 演示站由 fireHook 总线整层短路，体验者配的地址打不出去。 */
 
-/** 后台「插件」页列表用：只出元数据，不带处理函数 */
-export function listServerPlugins(): { id: string; title: string; description: string; version: string; author: string }[] {
-  return SERVER_PLUGINS.map(({ id, title, description, version, author }) => ({ id, title, description, version, author }))
+const OUTBOUND_EVENTS = [
+  'post_published',
+  'post_updated',
+  'post_deleted',
+  'weibo_published',
+  'weibo_deleted',
+  'comment_created',
+  'backup_completed',
+] as const
+
+/** 事件清单解析：逗号分隔、白名单校验；留空返回 null（= 全部放行），非空但含坏项也返回 null
+ *  （发送路把 null 当「不过滤」；校验路必须先判空再调本函数，见 configValidate） */
+function outboundEventList(raw: string): string[] | null {
+  const list = String(raw ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  if (!list.length) return null
+  const out: string[] = []
+  for (const e of list) {
+    if (!(OUTBOUND_EVENTS as readonly string[]).includes(e)) return null
+    if (!out.includes(e)) out.push(e)
+  }
+  return out
+}
+
+/** 出站发送：读插件配置 → 事件过滤 →（可选）签名 → POST。配置失效（被旁路写脏）时静默放弃 */
+async function outboundSend(ctx: HookContext, event: string, data: unknown): Promise<void> {
+  const cfg = pluginConfig(ctx.settings, 'outbound-webhook')
+  const url = (cfg.url || '').trim()
+  if (!/^https:\/\//i.test(url) || !fetchableUrl(url)) return
+  const allowed = outboundEventList(cfg.events || '')
+  if (allowed && !allowed.includes(event)) return
+  const raw = JSON.stringify({ event, site: ctx.settings.siteName, at: Date.now(), data })
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  const secret = (cfg.secret || '').trim()
+  if (secret) {
+    const ts = String(Date.now())
+    headers['x-bloghao-timestamp'] = ts
+    headers['x-bloghao-signature'] = await plazaSign(secret, ts, raw)
+  }
+  await fetch(url, { method: 'POST', headers, body: raw, signal: AbortSignal.timeout(10_000) })
+}
+
+const outboundWebhook: ServerPlugin = {
+  id: 'outbound-webhook',
+  title: '通用出站 Webhook',
+  description:
+    '站点事件（文章发布/更新/删除、微博发布/删除、新评论、备份完成）以 JSON POST 推送到你指定的地址——n8n、飞书、企业微信、自建系统，一个地址全接走。事件清单与地址在本页「配置」里维护。',
+  version: '1.0.0',
+  author: '官方',
+  configFields: [
+    {
+      key: 'url',
+      label: 'Webhook 地址',
+      type: 'text',
+      placeholder: 'https://example.com/hook',
+      help: '只接受公网 https 地址；每个事件一条 POST，超时 10 秒，失败只记日志不影响主流程',
+    },
+    {
+      key: 'secret',
+      label: '签名密钥（可选）',
+      type: 'text',
+      help: '填写后请求带 X-Bloghao-Timestamp 与 X-Bloghao-Signature = HMAC-SHA256(密钥, 时间戳 + "." + 请求体)，接收端可验伪造',
+    },
+    {
+      key: 'events',
+      label: '推送事件（逗号分隔，留空 = 全部）',
+      type: 'text',
+      placeholder: 'post_published,comment_created',
+      help: `可选：${OUTBOUND_EVENTS.join(' / ')}`,
+    },
+  ],
+  configValidate(cfg) {
+    const url = (cfg.url || '').trim()
+    if (!url || !/^https:\/\//i.test(url) || !fetchableUrl(url)) return 'Webhook 地址无效（需公网 https 地址）'
+    const events = (cfg.events || '').trim()
+    if (events && !outboundEventList(events)) return `事件列表不正确（可选：${OUTBOUND_EVENTS.join(' / ')}）`
+    if ((cfg.secret || '').length > 200) return '签名密钥过长（≤ 200 字符）'
+    return null
+  },
+  async onPostPublished(p, ctx) {
+    await outboundSend(ctx, 'post_published', p)
+  },
+  async onPostUpdated(p, ctx) {
+    await outboundSend(ctx, 'post_updated', p)
+  },
+  async onPostDeleted(p, ctx) {
+    await outboundSend(ctx, 'post_deleted', p)
+  },
+  async onWeiboPublished(p, ctx) {
+    await outboundSend(ctx, 'weibo_published', p)
+  },
+  async onWeiboDeleted(p, ctx) {
+    await outboundSend(ctx, 'weibo_deleted', p)
+  },
+  async onCommentCreated(p, ctx) {
+    await outboundSend(ctx, 'comment_created', p)
+  },
+  async onBackupCompleted(p, ctx) {
+    await outboundSend(ctx, 'backup_completed', { key: p.key, bytes: p.bytes, tables: p.tables, at: p.at })
+  },
+}
+
+/** 注册表：第三方服务端插件在此登记（顺序即后台展示顺序） */
+export const SERVER_PLUGINS: ServerPlugin[] = [tgChannel, commentWebhook, bufferSync, plazaSync, outboundWebhook, footerHtmlPlugin]
+
+/** 后台「插件」页列表用：只出元数据与配置表单描述，不带处理函数 */
+export function listServerPlugins(): {
+  id: string
+  title: string
+  description: string
+  version: string
+  author: string
+  configFields: PluginConfigField[]
+}[] {
+  return SERVER_PLUGINS.map(({ id, title, description, version, author, configFields }) => ({
+    id,
+    title,
+    description,
+    version,
+    author,
+    configFields: configFields || [],
+  }))
 }
 
 /* ---------------- 总线 ---------------- */
@@ -447,4 +626,92 @@ export async function firePlazaRetract(env: Env, entries: { kind: 'post' | 'weib
   } catch {
     /* 读不到设置 / 上报失败都放弃（与 fireHook 同口径吞错） */
   }
+}
+
+/** 编辑已发布文章广播（编辑后仍处于发布态才触发；状态跃迁分别走 firePostPublished /
+ *  firePlazaRetract，不在此列）。页面边缘缓存由 PUT 端点自己清（编辑必变公开面），
+ *  这里只广播——IndexNow 类「编辑也让搜索引擎重抓」的需求接这个槽 */
+export async function firePostUpdated(env: Env, p: PostUpdatedPayload): Promise<void> {
+  return fireHook(env, (plugin) => plugin.onPostUpdated, p)
+}
+
+/** 文章软删广播：与 firePlazaRetract 同点触发（软删端点两条都会挂）。
+ *  这里也清一次页面边缘缓存——幂等兜底，防未来某个删除入口只挂事件漏挂下架 */
+export async function firePostDeleted(env: Env, p: PostDeletedPayload): Promise<void> {
+  if (!isDemo(env)) await purgePageCache(env.DB).catch(() => {})
+  return fireHook(env, (plugin) => plugin.onPostDeleted, p)
+}
+
+/** 微博软删广播（同 firePostDeleted 口径） */
+export async function fireWeiboDeleted(env: Env, p: WeiboDeletedPayload): Promise<void> {
+  if (!isDemo(env)) await purgePageCache(env.DB).catch(() => {})
+  return fireHook(env, (plugin) => plugin.onWeiboDeleted, p)
+}
+
+/** 备份完成广播：只报「写盘成功」（skipped / 失败不触发）。备份不改变公开面，无需清缓存；
+ *  异地备份类插件凭 ctx.env.IMAGES.get(p.key) 取件推送 */
+export async function fireBackupCompleted(env: Env, p: BackupCompletedPayload): Promise<void> {
+  return fireHook(env, (plugin) => plugin.onBackupCompleted, p)
+}
+
+/* ---------------- 插件配置通道 ----------------
+ * settings.serverPluginConfig 是一个 JSON：{ 插件id: { 字段键: 值 } }——服务端插件要配置
+ * 不必再往 DEFAULT_SETTINGS 塞专属键。插件侧用 pluginConfig(settings, 自身id) 读，
+ * 后台「插件」页按 configFields 渲染表单，保存走 cleanServerPluginConfig 净化 + 校验。 */
+
+/** 插件读取自己的配置：脏 JSON / 非对象 / 值非字符串一律当没配，绝不让配置形态打进处理器 */
+export function pluginConfig(settings: SettingsMap, id: string): Record<string, string> {
+  let all: unknown
+  try {
+    all = JSON.parse(settings.serverPluginConfig || '{}')
+  } catch {
+    return {}
+  }
+  if (!all || typeof all !== 'object' || Array.isArray(all)) return {}
+  const mine = (all as Record<string, unknown>)[id]
+  if (!mine || typeof mine !== 'object' || Array.isArray(mine)) return {}
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(mine as Record<string, unknown>)) {
+    if (typeof v === 'string') out[k] = v
+  }
+  return out
+}
+
+/** settings.serverPluginConfig 净化（api.ts PUT 调用）：顶层键必须是注册插件 id
+ *  （防任意命名空间），字段键必须在该插件 configFields 里登记，值是非空字符串 ≤ 500；
+ *  涉及的插件再过 configValidate 语义校验。空配置返回 ''，非法返回 { ok: false, error } */
+export function cleanServerPluginConfig(raw: string): { ok: true; value: string } | { ok: false; error: string } {
+  const s = String(raw ?? '').trim()
+  if (!s) return { ok: true, value: '' }
+  if (s.length > 20_000) return { ok: false, error: '插件配置过长（≤ 20000 字符）' }
+  let obj: unknown
+  try {
+    obj = JSON.parse(s)
+  } catch {
+    return { ok: false, error: '插件配置不是合法的 JSON' }
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return { ok: false, error: '插件配置必须是 JSON 对象' }
+  const out: Record<string, Record<string, string>> = {}
+  for (const [id, cfg] of Object.entries(obj as Record<string, unknown>)) {
+    const plugin = SERVER_PLUGINS.find((p) => p.id === id)
+    if (!plugin) return { ok: false, error: `未注册的服务端插件：${id}` }
+    // 空对象 = 清除该插件配置
+    if (cfg == null || (typeof cfg === 'object' && !Array.isArray(cfg) && !Object.keys(cfg as object).length)) continue
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return { ok: false, error: `插件 ${id} 的配置必须是键值对象` }
+    const fields: Record<string, string> = {}
+    for (const [k, v] of Object.entries(cfg as Record<string, unknown>)) {
+      if (plugin.configFields && !plugin.configFields.some((f) => f.key === k)) {
+        return { ok: false, error: `插件 ${id} 不认识配置字段：${k}` }
+      }
+      if (typeof v !== 'string') return { ok: false, error: `插件 ${id} 的配置值必须是字符串` }
+      if (v.length > 500) return { ok: false, error: `插件 ${id} 的配置值过长（≤ 500 字符）` }
+      if (v !== '') fields[k] = v
+    }
+    if (plugin.configValidate) {
+      const err = plugin.configValidate(fields)
+      if (err) return { ok: false, error: `${plugin.title}：${err}` }
+    }
+    out[id] = fields
+  }
+  return { ok: true, value: Object.keys(out).length ? JSON.stringify(out) : '' }
 }

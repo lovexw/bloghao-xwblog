@@ -73,6 +73,9 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   pluginsDisabled: 'douban-media',
   // 服务端插件停用名单（后台「插件」页；逗号分隔的插件 id，空 = 全部启用，见 src/hooks.ts）
   serverPluginsDisabled: '',
+  // 服务端插件配置（统一通道）：JSON { 插件id: { 字段键: 值 } }，按 hooks.ts 各插件
+  // configFields 渲染表单，PUT 过 cleanServerPluginConfig 净化校验——插件要配置不必塞专属键
+  serverPluginConfig: '',
   // 服务端插件配置：发布同步 TG 频道的频道 ID / 评论 Webhook 地址 / 页脚自定义 HTML（src/hooks.ts）
   tgChannelChatId: '',
   commentWebhookUrl: '',

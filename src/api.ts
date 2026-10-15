@@ -78,7 +78,19 @@ import { collectRoutes } from './collect'
 import { exportRoutes } from './export'
 import { adminExternalRoutes, externalRoutes, notifyAdminComment, telegramRoutes } from './external'
 import { fetchPublicResource } from './fetchsafe'
-import { fireCommentCreated, firePlazaRetract, firePostPublished, fireWeiboPublished, listBufferChannels, listServerPlugins } from './hooks'
+import {
+  cleanServerPluginConfig,
+  fireBackupCompleted,
+  fireCommentCreated,
+  firePlazaRetract,
+  firePostDeleted,
+  firePostPublished,
+  firePostUpdated,
+  fireWeiboDeleted,
+  fireWeiboPublished,
+  listBufferChannels,
+  listServerPlugins,
+} from './hooks'
 import { SITE_MODE_VALUES, siteBase, toHomePost, type SiteMode } from './render'
 import { sanitizeHtml } from './sanitize'
 import { cleanupUnreferenced, backfillHashes, mergeDuplicate, runAudit } from './audit'
@@ -774,6 +786,11 @@ api.put('/admin/posts/:id', async (c) => {
     await setPostCategory(c.env.DB, id, null)
   }
   const categoryId = await getPostCategoryId(c.env.DB, id)
+  // 编辑已发布且仍是发布态 → 广播更新事件（IndexNow 类「编辑也让搜索引擎重抓」接这个槽；
+  // 转草稿/定时与锁文跃迁在下面的下架广播里，不重复报）
+  if (status === 'published' && existing.status === 'published' && row) {
+    c.executionCtx.waitUntil(firePostUpdated(c.env, { slug: row.slug, title: row.title, via: 'admin' }))
+  }
   // 广播发布事件：只在草稿/定时 → 已发布的跃迁时触发，重复编辑已发布文章不重推
   if (status === 'published' && existing.status !== 'published' && row) {
     c.executionCtx.waitUntil(
@@ -823,10 +840,16 @@ api.delete('/admin/posts/:id', async (c) => {
   const id = parseId(c.req.param('id'))
   if (!id) return jsonError('文章不存在', 404)
   // 软删进回收站（src/trash.ts）：评论与分类关联保留，恢复时一并跟回；彻底删除才级联清掉
-  const row = await c.env.DB.prepare('SELECT slug FROM posts WHERE id = ? AND deleted_at IS NULL').bind(id).first<{ slug: string }>()
+  const row = await c.env.DB.prepare('SELECT slug, title FROM posts WHERE id = ? AND deleted_at IS NULL')
+    .bind(id)
+    .first<{ slug: string; title: string }>()
   await c.env.DB.prepare('UPDATE posts SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').bind(Date.now(), id).run()
   // 广场下架广播：软删后 RSS 里不再有这条，hub 若曾收录会永久滞留——deleted 同步摘除
-  if (row?.slug) c.executionCtx.waitUntil(firePlazaRetract(c.env, [{ kind: 'post', ref: row.slug }]))
+  if (row?.slug) {
+    c.executionCtx.waitUntil(firePlazaRetract(c.env, [{ kind: 'post', ref: row.slug }]))
+    // 删除事件广播（通用出站 Webhook 等同步类插件消费；内置 purge 幂等兜底）
+    c.executionCtx.waitUntil(firePostDeleted(c.env, { slug: row.slug, title: row.title, via: 'admin' }))
+  }
   return c.json({ ok: true })
 })
 
@@ -987,6 +1010,8 @@ api.delete('/admin/weibo/:id', async (c) => {
   await c.env.DB.prepare('UPDATE weibo SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').bind(Date.now(), id).run()
   // 广场下架广播：微博若曾同步 hub（ref = 微博 id），软删后摘除（未收录时 hub 空删幂等）
   c.executionCtx.waitUntil(firePlazaRetract(c.env, [{ kind: 'weibo', ref: String(id) }]))
+  // 删除事件广播（通用出站 Webhook 等同步类插件消费）
+  c.executionCtx.waitUntil(fireWeiboDeleted(c.env, { id, via: 'admin' }))
   return c.json({ ok: true })
 })
 
@@ -1890,6 +1915,14 @@ api.put('/admin/settings', async (c) => {
       patch[key] = cleaned
       continue
     }
+    if (key === 'serverPluginConfig') {
+      // 服务端插件配置（按插件 id 命名空间的 JSON）：结构净化 + 各插件 configValidate 语义校验，
+      // 非法整体 400——插件配置的统一通道，插件要配置不必再往 DEFAULT_SETTINGS 塞专属键
+      const r = cleanServerPluginConfig(v)
+      if (!r.ok) return jsonError(r.error)
+      patch[key] = r.value
+      continue
+    }
     if (key === 'footerHtmlCode') {
       // 站长自定义页脚 HTML（挂件/徽章），与主题 CSS 同信任级：仅管理员可写，渲染时不转义
       patch[key] = v.slice(0, 5000)
@@ -1969,6 +2002,10 @@ api.post('/admin/backup', async (c) => {
   // 全表导出整包进内存，连点可在同一 isolate 堆叠多个全量导出（128MB 上限）——全局窗口内只放一次
   if (!rateLimit('backup:global', 1, 10 * 60_000)) return jsonError('备份刚刚执行过，请 10 分钟后再试', 429)
   const r = await runBackup(c.env)
+  if (!r.skipped && r.ok) {
+    // 备份完成广播（异地备份类插件取件推送）：waitUntil 不拖慢管理端响应
+    c.executionCtx.waitUntil(fireBackupCompleted(c.env, { key: r.key!, bytes: r.bytes!, tables: r.tables!, at: Date.now() }))
+  }
   if (!r.skipped && !r.ok) return jsonError('备份失败：' + (r.error || '未知错误'), 500)
   return c.json({ ok: r.ok, skipped: !!r.skipped, key: r.key, bytes: r.bytes, error: r.error })
 })

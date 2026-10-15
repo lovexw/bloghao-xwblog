@@ -2803,17 +2803,29 @@ async function viewPlugins() {
     })
     .join('') || '<div class="empty-box">市场目录暂时空着，更多插件敬请期待</div>'
 
+  // 插件配置现值（settings.serverPluginConfig = { 插件id: { 字段键: 值 } }，脏 JSON 当没配）
+  const parseSrvCfg = () => {
+    try {
+      const v = JSON.parse(state.settings.serverPluginConfig || '{}')
+      return v && typeof v === 'object' && !Array.isArray(v) ? v : {}
+    } catch {
+      return {}
+    }
+  }
   const serverRows = serverPlugins
-    .map(
-      (p) => `<div class="pl-row">
+    .map((p) => {
+      const fields = Array.isArray(p.configFields) ? p.configFields : []
+      const cfgBtn = fields.length ? `<button class="btn btn-sm" type="button" data-srv-cfg="${esc(p.id)}">配置</button>` : ''
+      return `<div class="pl-row">
       <span class="pl-ico">${esc((p.title || p.id).charAt(0).toUpperCase())}</span>
       <div class="pl-main">
         <div class="pl-name">${esc(p.title || p.id)}${p.version ? `<span class="pl-ver">v${esc(p.version)}</span>` : ''}</div>
         <div class="pl-desc">${esc(p.description || '暂无介绍')}${p.author ? ` · ${esc(p.author)}` : ''}</div>
       </div>
+      ${cfgBtn}
       <label class="switch"><input type="checkbox" data-srv-id="${esc(p.id)}" ${srvOff.has(p.id) ? '' : 'checked'}><span class="track"></span></label>
     </div>`
-    )
+    })
     .join('')
 
   await shellView(
@@ -2830,7 +2842,7 @@ async function viewPlugins() {
       <div class="panel-body" id="pl-list">${rows}</div>
     </div>
     <div class="panel">
-      <div class="panel-head">服务端插件<span class="panel-head-sub">随内核运行 · 配置在「设置 → 服务端插件」· 开发见 docs/PLUGINS.md</span></div>
+      <div class="panel-head">服务端插件<span class="panel-head-sub">随内核运行 · 带「配置」按钮的插件点开即填 · 开发见 docs/PLUGINS.md</span></div>
       <div class="panel-body" id="srv-pl-list">${serverRows}</div>
     </div>`
         : `<div class="panel">
@@ -2881,6 +2893,53 @@ async function viewPlugins() {
       } finally {
         cb.disabled = false
       }
+    })
+  )
+
+  // 服务端插件配置弹窗：按 configFields 渲染表单，保存合并进 serverPluginConfig（服务端
+  // cleanServerPluginConfig 净化 + configValidate 语义校验，非法 400 直接展示）
+  $app.querySelectorAll('[data-srv-cfg]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      const p = serverPlugins.find((x) => x.id === btn.getAttribute('data-srv-cfg'))
+      if (!p || !Array.isArray(p.configFields) || !p.configFields.length) return
+      const cur = parseSrvCfg()[p.id] || {}
+      const fieldsHtml = p.configFields
+        .map((f) => {
+          const val = typeof cur[f.key] === 'string' ? cur[f.key] : ''
+          const input =
+            f.type === 'textarea'
+              ? `<textarea class="input" rows="4" data-cfg-key="${esc(f.key)}" placeholder="${esc(f.placeholder || '')}">${esc(val)}</textarea>`
+              : `<input class="input" type="text" data-cfg-key="${esc(f.key)}" value="${esc(val)}" placeholder="${esc(f.placeholder || '')}">`
+          return `<div class="form-item" style="margin-bottom:12px;"><label>${esc(f.label)}</label>${input}${
+            f.help ? `<div class="switch-sub" style="margin-top:4px;">${esc(f.help)}</div>` : ''
+          }</div>`
+        })
+        .join('')
+      const m = modal(
+        `<div class="modal-head"><span>配置 — ${esc(p.title)}</span><button class="modal-close" data-close>×</button></div>
+        <div class="modal-body" style="padding:16px 20px;max-height:60vh;overflow-y:auto;">${fieldsHtml}</div>
+        <div class="modal-foot"><button class="btn" data-act="cancel">取消</button><button class="btn btn-primary" data-act="save">保存配置</button></div>`
+      )
+      m.mask.querySelector('[data-act=cancel]').addEventListener('click', m.close)
+      m.mask.querySelector('[data-act=save]').addEventListener('click', async (ev) => {
+        const saveBtn = ev.currentTarget
+        saveBtn.disabled = true
+        const cfg = {}
+        m.mask.querySelectorAll('[data-cfg-key]').forEach((el) => {
+          cfg[el.getAttribute('data-cfg-key')] = el.value
+        })
+        const all = parseSrvCfg()
+        all[p.id] = cfg
+        try {
+          const d = await api('/admin/settings', { method: 'PUT', body: { serverPluginConfig: JSON.stringify(all) } })
+          state.settings = d.settings
+          m.close()
+          toast('插件配置已保存，立即生效')
+        } catch (e) {
+          saveBtn.disabled = false
+          handleApiErr(e)
+        }
+      })
     })
   )
 }
