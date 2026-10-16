@@ -32,6 +32,24 @@ test('clean：expression / -moz-binding / behavior 历史脚本面剥除', () =>
   assert.ok(!cleanCustomCss('.a { behavior: url(x.htc); }')!.toLowerCase().includes('behavior'))
 })
 
+test('clean：CSS 转义面全剥——转义写法不再能藏关键字（反斜杠是转义唯一生效条件）', () => {
+  // @\69 mport：剥反斜杠后失形（@69 mport 不是可解析 at-rule，浏览器整条忽略）
+  const a = cleanCustomCss('@\\69 mport "https://evil.example/x.css"; .a { color: red; }')!
+  assert.ok(a.includes('.a { color: red; }'), '其余规则保留')
+  assert.ok(!a.includes('\\'), '输出不含反斜杠（浏览器无从还原转义）')
+  assert.ok(!/@import\b/i.test(a), '没有活的 @import at-rule')
+  // @im\port 剥反斜杠后 == @import，仍被关键字规则收掉
+  const b = cleanCustomCss('@im\\port "x.css"; .b { color: blue; }')!
+  assert.ok(!/@import/i.test(b))
+  assert.ok(b.includes('.b { color: blue; }'))
+  // url 里的转义同样失形（\68 ttps://… 不再是 https 绝对地址）
+  const c = cleanCustomCss('.a { background: url(\\68 ttps://evil.example/x.png); }')!
+  assert.ok(!c.includes('\\') && !/https:\/\//i.test(c), '转义 scheme 不再存活')
+  // 幂等：转义净化输出再过一遍不变
+  const once = cleanCustomCss('@\\69 mport "x.css"; .a{b:c}')!
+  assert.equal(cleanCustomCss(once), once)
+})
+
 test('clean：url() 白名单——https / 站内相对 / data:image|font 放行，javascript / http / 其他 data 拒绝', () => {
   assert.ok(cleanCustomCss('.a { background: url(https://cdn.example/x.png); }'))
   assert.ok(cleanCustomCss('.a { background: url(/images/u/a.png); }'))
@@ -84,4 +102,10 @@ test('fontSrc：有自定义 CSS 才放宽，无 CSS 的站点 CSP 字节级不�
   assert.equal(needsFontSrc({ customCss: '' }), false)
   assert.equal(needsFontSrc({ customCss: '  \n ' }), false)
   assert.equal(needsFontSrc({ customCss: '.a { color: red }' }), true)
+})
+
+test('fontSrc：脏值（净化不过 = 不出 <style>）不放宽 CSP——判据走 cleanCustomCss', () => {
+  assert.equal(needsFontSrc({ customCss: '.a { color: red;' }), false, '花括号不配平')
+  assert.equal(needsFontSrc({ customCss: '.a { background: url(javascript:alert(1)); }' }), false, 'url 白名单不过')
+  assert.equal(needsFontSrc({ customCss: '.a { color: red; }' }), true)
 })

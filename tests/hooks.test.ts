@@ -423,6 +423,24 @@ test('出站 Webhook：events 白名单过滤 + 签名头（HMAC 与广场同步
   }
 })
 
+test('出站 Webhook：事件清单写脏（含坏项）整份拒发，不放大成全事件外推（失败关闭）', async () => {
+  const cap = captureFetch()
+  try {
+    // 合法清单里混一个错拼 → 整份配置按失效处理：一个事件都不发（历史上会被当成「不过滤」全发）
+    const env = fakeEnv(outboundRows({ events: 'post_published,nope_event' }))
+    await firePostPublished(env, { slug: 'a', title: 'b', summary: '', via: 'admin' })
+    await firePostUpdated(env, { slug: 'a', title: 'b', via: 'admin' })
+    await fireBackupCompleted(env, { key: 'k', bytes: 1, tables: 1, at: 1 })
+    assert.equal(cap.calls.length, 0, '坏清单拒发，别退化成「全部放行」')
+    // 留空仍是「全部放行」（三态里的 'all' 不受影响）
+    const all = fakeEnv(outboundRows())
+    await firePostUpdated(all, { slug: 'a', title: 'b', via: 'admin' })
+    assert.equal(cap.calls.length, 1)
+  } finally {
+    cap.restore()
+  }
+})
+
 // ── 插件配置通道：pluginConfig 读取 + cleanServerPluginConfig 净化校验 ──
 
 test('pluginConfig：脏 JSON / 非对象 / 值非字符串一律当没配；正常读出字符串键值', () => {

@@ -400,6 +400,13 @@ export function cleanVid(v: unknown): string {
   return typeof v === 'string' && /^[0-9a-f]{32}$/.test(v) ? v : ''
 }
 
+/** 站点 token 打码（管理列表/详情回显用）：**只露后 4 位**。token 是长期 Bearer，回显前 8 位
+ *  等于白送 48 bit（管理面看一眼就拿到一半熵）；丢了就 rotate，与内核 SECRET_SETTINGS 同口径
+ *  （明文只在生成时返回一次）。短 token 一律 '…' */
+export function maskPlazaToken(t: string): string {
+  return t.length > 12 ? `…${t.slice(-4)}` : '…'
+}
+
 /** sha256 → hex（日盐哈希用；Workers 与 Node 18+ 都有 WebCrypto） */
 export async function sha256Hex(s: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))

@@ -15,6 +15,7 @@ import {
   cleanVid,
   daySaltedHash,
   generatePlazaToken,
+  maskPlazaToken,
   normalizePulledWeibo,
   parseRssItems,
   parseRssSiteTitle,
@@ -95,14 +96,19 @@ async function bumpStats(db: Env['DB'], field: StatsField, n = 1): Promise<void>
   }
 }
 
-/** 站点级互动日聚合 +n（P2）：views/clicks/likes 三个字段白名单收口，失败静默同 bumpStats */
+/** 站点级互动日聚合 +n（P2）：views/clicks/likes 三个字段白名单收口，失败静默同 bumpStats。
+ *  单站单字段单日增量封顶（BEACON_DAY_CAP）：/api/beacon 匿名无凭据、也无天级去重（「重放
+ *  价值低」属既定口径），只能靠「限流 + 封顶」把「无限灌」压成有界值——防有人把任意真实站的
+ *  数据卡刷成天文数字（真实小站远达不到此量级；该数据只站长自己看得到，不进公开 feed 排序）。
+ *  UPDATE 路写 `MAX(旧值, MIN(旧值+n, 封顶))` 保**单调**——存量已超封顶的日子不会被下调 */
 type SiteStatsField = 'views' | 'clicks' | 'likes'
+const BEACON_DAY_CAP = 50_000
 async function bumpSiteStats(db: Env['DB'], siteId: number, field: SiteStatsField, n: number): Promise<void> {
   try {
     await db
       .prepare(
-        `INSERT INTO site_stats (day, site_id, ${field}) VALUES (?, ?, ?)
-         ON CONFLICT(day, site_id) DO UPDATE SET ${field} = ${field} + ?`
+        `INSERT INTO site_stats (day, site_id, ${field}) VALUES (?, ?, MIN(?, ${BEACON_DAY_CAP}))
+         ON CONFLICT(day, site_id) DO UPDATE SET ${field} = MAX(${field}, MIN(${field} + ?, ${BEACON_DAY_CAP}))`
       )
       .bind(statsDay(), siteId, n, n)
       .run()
@@ -170,11 +176,6 @@ function ingestRateLimit(key: string, limit: number, windowMs: number): boolean 
   if (e.n >= limit) return false
   e.n++
   return true
-}
-
-/** 站点 token 打码：管理列表/详情一律不出明文（丢了就 rotate，与内核 SECRET_SETTINGS 同口径） */
-function maskToken(t: string): string {
-  return t.length > 12 ? `${t.slice(0, 8)}…${t.slice(-4)}` : '…'
 }
 
 /** JSON 解析兜底：坏 JSON 返回 null（ingest/管理端点回 400），不让异常打 500 */
@@ -399,11 +400,13 @@ app.post('/api/like', async (c) => {
 })
 
 /** 曝光/点击批量回传（P2.2）：官网页攒批（10 条 / 30 秒 / 离页 sendBeacon）合并上报，
- *  无 IP 无指纹（vid 只进天级哈希限不了重放但重放只多计 ≤20/条，价值低）；写前校验站点存在 */
+ *  无 IP 无指纹（vid 只进天级哈希限不了重放但重放只多计 ≤20/条，价值低）；写前校验站点存在。
+ *  匿名无凭据面：防刷靠「限流（10/分/IP）+ 单站单日封顶（bumpSiteStats 的 BEACON_DAY_CAP）」，
+ *  不引额外表/凭据（重放只把数字灌到封顶值，不无限膨胀） */
 app.post('/api/beacon', async (c) => {
   await ensureSchemaExtras(c.env.DB)
   const ip = ipOf(c)
-  if (!ingestRateLimit(`beacon:${ip}`, 20, 60_000)) return c.json({ error: 'too many requests' }, 429)
+  if (!ingestRateLimit(`beacon:${ip}`, 10, 60_000)) return c.json({ error: 'too many requests' }, 429)
   const raw = await readTextLimited(c.req.raw, MAX_BODY_BYTES)
   if (raw === null) return c.json({ error: 'payload too large' }, 413)
   const body = safeJsonParse(raw) as { events?: unknown } | null
@@ -426,10 +429,11 @@ app.post('/api/beacon', async (c) => {
 })
 
 /** 站长数据卡（P2.3）：「广场同步」插件设置卡的数据面。token 即身份（与 ingest 同一枚，
- *  header 优先、?token= 兜底方便站长浏览器直开）；出参只含本站聚合，Cache-Control no-store */
+ *  **只认 X-Plaza-Token 头**——长期令牌不进 URL（?token= 会落进代理/访问日志与 Referer）
+ *  与 ingest 同口径）；出参只含本站聚合，Cache-Control no-store */
 app.get('/api/site-stats', async (c) => {
   await ensureSchemaExtras(c.env.DB)
-  const token = (c.req.header('x-plaza-token') || c.req.query('token') || '').trim()
+  const token = (c.req.header('x-plaza-token') || '').trim()
   if (!/^[0-9a-f]{32}$/.test(token)) return c.json({ error: 'bad token' }, 401)
   if (!ingestRateLimit(`sstats:${ipOf(c)}`, 30, 60_000)) return c.json({ error: 'too many requests' }, 429)
   const site = await c.env.DB.prepare(
@@ -466,7 +470,7 @@ app.get('/api/site-stats', async (c) => {
       totals: { views: totals?.views ?? 0, clicks: totals?.clicks ?? 0, likes: totals?.likes ?? 0 },
       days: days.results ?? [],
     },
-    // token 在 query 兜底形态下可能进代理日志：响应明确不可缓存
+    // token 只走请求头（不进 URL/日志）；响应仍明确不可缓存
     { headers: { 'Cache-Control': 'no-store' } }
   )
 })
@@ -651,7 +655,7 @@ app.get('/api/admin/sites', async (c) => {
      FROM sites ORDER BY created_at DESC LIMIT 500`
   ).all<{ token: string }>()
   // token 明文只在创建/rotate 返回这一次，列表一律打码
-  const sites = (results ?? []).map((r) => ({ ...r, token: maskToken(r.token) }))
+  const sites = (results ?? []).map((r) => ({ ...r, token: maskPlazaToken(r.token) }))
   return c.json({ sites })
 })
 
@@ -709,7 +713,7 @@ app.patch('/api/admin/sites/:id', async (c) => {
   const rotated = 'rotateToken' in body && body.rotateToken
   return c.json({
     ok: true,
-    site: row ? { ...row, token: maskToken(row.token) } : null,
+    site: row ? { ...row, token: maskPlazaToken(row.token) } : null,
     ...(rotated && row ? { token: row.token } : {}),
   })
 })

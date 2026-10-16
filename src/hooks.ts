@@ -9,7 +9,7 @@
  * 页脚注入是同步渲染路径，插件 HTML 原样拼接不做转义（内容来自站长自己，与主题 CSS 同信任级）。
  */
 import { getSettings } from './db'
-import { fetchableUrl } from './fetchsafe'
+import { fetchableUrl, fetchPublicResource } from './fetchsafe'
 import { purgePageCache } from './pagecache'
 import type { Env, SettingsMap } from './types'
 import { excerpt, isDemo } from './utils'
@@ -164,11 +164,14 @@ const commentWebhook: ServerPlugin = {
   async onCommentCreated(p, ctx) {
     const url = (ctx.settings.commentWebhookUrl || '').trim()
     if (!/^https?:\/\//i.test(url)) return
-    await fetch(url, {
+    // 统一出网入口：起点 + 每一跳都过 fetchableUrl（配置时已校验，这里防「公网地址 302 到内网」）
+    await fetchPublicResource(url, {
+      maxBytes: 64 * 1024,
+      timeoutMs: 10_000,
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ event: 'comment.created', site: ctx.settings.siteName, ...p }),
-      signal: AbortSignal.timeout(10_000),
+      expectBody: false,
     })
   },
 }
@@ -392,7 +395,10 @@ function plazaHttpsImage(u: string, base?: string): string {
 async function plazaIngest(endpoint: string, token: string, body: Record<string, unknown>): Promise<void> {
   const ts = String(Date.now())
   const raw = JSON.stringify(body)
-  const res = await fetch(`${endpoint}/api/ingest`, {
+  // 统一出网入口：公网地址起点 + 每一跳复查（防「302 到内网」）；失败一律 null（不透状态码）
+  const r = await fetchPublicResource(`${endpoint}/api/ingest`, {
+    maxBytes: 64 * 1024,
+    timeoutMs: 15_000,
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -401,9 +407,9 @@ async function plazaIngest(endpoint: string, token: string, body: Record<string,
       'x-plaza-signature': await plazaSign(token, ts, raw),
     },
     body: raw,
-    signal: AbortSignal.timeout(15_000),
+    expectBody: false,
   })
-  if (!res.ok) console.error(`[plaza-sync] ingest ${res.status}`)
+  if (!r) console.error('[plaza-sync] ingest 上报失败')
 }
 
 /* ---------------- 通用出站 Webhook ----------------
@@ -424,17 +430,19 @@ const OUTBOUND_EVENTS = [
   'backup_completed',
 ] as const
 
-/** 事件清单解析：逗号分隔、白名单校验；留空返回 null（= 全部放行），非空但含坏项也返回 null
- *  （发送路把 null 当「不过滤」；校验路必须先判空再调本函数，见 configValidate） */
-function outboundEventList(raw: string): string[] | null {
+/** 事件清单解析（三态）：留空 → 'all'（全部放行）；合法清单 → 白名单数组；
+ *  非空但含坏项 → 'invalid'（**拒发**）。三态必须区分——历史上坏清单与留空都返回 null，
+ *  发送路把 null 当「不过滤」，一次配置写脏就把「只推某事件」放大成「全事件外推」（失败开放）。
+ *  校验路（configValidate）只在非空时判 'invalid' */
+function outboundEventList(raw: string): 'all' | 'invalid' | string[] {
   const list = String(raw ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
-  if (!list.length) return null
+  if (!list.length) return 'all'
   const out: string[] = []
   for (const e of list) {
-    if (!(OUTBOUND_EVENTS as readonly string[]).includes(e)) return null
+    if (!(OUTBOUND_EVENTS as readonly string[]).includes(e)) return 'invalid'
     if (!out.includes(e)) out.push(e)
   }
   return out
@@ -446,7 +454,8 @@ async function outboundSend(ctx: HookContext, event: string, data: unknown): Pro
   const url = (cfg.url || '').trim()
   if (!/^https:\/\//i.test(url) || !fetchableUrl(url)) return
   const allowed = outboundEventList(cfg.events || '')
-  if (allowed && !allowed.includes(event)) return
+  if (allowed === 'invalid') return // 坏清单拒发（失败关闭，别放大成全事件外推）
+  if (allowed !== 'all' && !allowed.includes(event)) return
   const raw = JSON.stringify({ event, site: ctx.settings.siteName, at: Date.now(), data })
   const headers: Record<string, string> = { 'content-type': 'application/json' }
   const secret = (cfg.secret || '').trim()
@@ -455,7 +464,15 @@ async function outboundSend(ctx: HookContext, event: string, data: unknown): Pro
     headers['x-bloghao-timestamp'] = ts
     headers['x-bloghao-signature'] = await plazaSign(secret, ts, raw)
   }
-  await fetch(url, { method: 'POST', headers, body: raw, signal: AbortSignal.timeout(10_000) })
+  // 统一出网入口：公网 https 起点 + 每一跳复查（防「302 到内网」）；失败一律 null（不透状态码）
+  await fetchPublicResource(url, {
+    maxBytes: 64 * 1024,
+    timeoutMs: 10_000,
+    method: 'POST',
+    headers,
+    body: raw,
+    expectBody: false,
+  })
 }
 
 const outboundWebhook: ServerPlugin = {
@@ -491,7 +508,7 @@ const outboundWebhook: ServerPlugin = {
     const url = (cfg.url || '').trim()
     if (!url || !/^https:\/\//i.test(url) || !fetchableUrl(url)) return 'Webhook 地址无效（需公网 https 地址）'
     const events = (cfg.events || '').trim()
-    if (events && !outboundEventList(events)) return `事件列表不正确（可选：${OUTBOUND_EVENTS.join(' / ')}）`
+    if (events && outboundEventList(events) === 'invalid') return `事件列表不正确（可选：${OUTBOUND_EVENTS.join(' / ')}）`
     if ((cfg.secret || '').length > 200) return '签名密钥过长（≤ 200 字符）'
     return null
   },

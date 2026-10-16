@@ -54,8 +54,8 @@ npx wrangler deploy -c plaza/wrangler.jsonc
 - `GET /api/sites`——站点名录（认证标、总条数、`recentItems` 近 7 日条数——侧栏活跃榜 / 最新入驻 / 新站「新」标的数据面）
 - `POST /api/ingest`——博客端上报（协议见下）
 - `POST /api/like`——匿名点赞（B25 P2.1）：`{"itemId": <feed 条目 id>, "vid": "<32hex>"}`；防重 = localStorage 记已赞 + hub 端天级去重（每 IP 每条 1 次/天、每会话 60 次/天、每 IP 全场 200 次/天）；返回 `{ok, likes}` / `{ok, duplicate:true}`；限流 429。hub 不存原始 IP / vid，只存「北京日 + 服务端私盐」的哈希（`PLAZA_HASH_SECRET` 非空时走 HMAC-SHA256，库泄露也无法枚举还原 IP/vid；未配则退化为 sha256(day:value) 兼容兜底）；跨日不可串联，去重日志 7 天前由 cron 清掉
-- `POST /api/beacon`——曝光/点击批量回传（B25 P2.2）：`{"events":[{"s":<siteId>,"k":"v"|"c","n":<次数>}]}`，≤50 条、单条 n≤20；官网页攒批（10 条 / 30 秒 / 离页 sendBeacon）匿名计数，无 IP 无指纹；hub 校验站点存在性后按（北京日，站点）聚合进 site_stats
-- `GET /api/site-stats`——站长数据卡（B25 P2.3）：`X-Plaza-Token` 头携带站点 token（`?token=` 兜底方便浏览器直开，响应 no-store）；出参只含本站：`{site:{id,name,url}, items, totals:{views,clicks,likes}, days:[{day,views,clicks,likes}](近 7 日)}`。曝光/点击自 P2.2 上线起计数，点赞累计以 items.likes 为权威
+- `POST /api/beacon`——曝光/点击批量回传（B25 P2.2）：`{"events":[{"s":<siteId>,"k":"v"|"c","n":<次数>}]}`，≤50 条、单条 n≤20；官网页攒批（10 条 / 30 秒 / 离页 sendBeacon）匿名计数，无 IP 无指纹；hub 校验站点存在性后按（北京日，站点）聚合进 site_stats。**防刷口径**：限流 10 次/分/IP + 单站单字段**单日增量封顶 50000**（匿名无凭据，只能把「无限灌」压成有界值；该数据只站长自己看得到，不进公开 feed 排序）
+- `GET /api/site-stats`——站长数据卡（B25 P2.3）：**只认 `X-Plaza-Token` 头**（长期令牌不进 URL / 代理日志 / Referer，与 ingest 同口径；无 query 兜底），响应 no-store；出参只含本站：`{site:{id,name,url}, items, totals:{views,clicks,likes}, days:[{day,views,clicks,likes}](近 7 日)}`。曝光/点击自 P2.2 上线起计数，点赞累计以 items.likes 为权威
 
 > **入站体积预检**（与博客内核 `api.ts` 同款闸）：所有非 GET/HEAD/OPTIONS 请求先看 `Content-Length`，超 512KB 直接 413；公开写入口（`/api/like`、`/api/beacon` 无需凭据）再用流式限长兜底无 `Content-Length` 的 chunked 超大体——防超大请求整读进内存打爆进程。
 
@@ -64,6 +64,8 @@ npx wrangler deploy -c plaza/wrangler.jsonc
 | 端点 | 说明 |
 | --- | --- |
 | `POST /api/admin/pull` | 手动触发全站补漏（RSS + 微博口），不等 6 小时 cron——新接入站点 / 新补漏口上线时立即对齐 |
+
+> 站点 token 是长期 Bearer，管理列表 / 详情回显一律打码（**只露后 4 位**，`maskPlazaToken`）——明文只在创建时返回一次；丢了就 rotate。
 
 ### 微博补漏（站点可选提供）
 

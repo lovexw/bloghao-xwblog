@@ -103,7 +103,7 @@ window.BlogHao &&
 
 ## 插件配置通道（不必再为配置改内核）
 
-服务端插件要配置项，在插件定义上声明 `configFields`（`{ key, label, type: 'text'|'textarea', placeholder?, help? }[]`），后台「插件」页该插件行会出现「配置」按钮，弹窗按声明渲染表单，值存进 settings 的 `serverPluginConfig`（JSON：`{ 插件id: { 字段键: 值 } }`，单值 ≤ 500 字符）。处理器里用 `pluginConfig(ctx.settings, 自身id)` 读；保存时自动过两道校验——顶层键必须是注册插件 id、字段键必须在 `configFields` 里，插件可再实现 `configValidate(cfg)` 做语义校验（返回错误文案 = 拒绝保存，如公网地址校验）。**通用出站 Webhook** 就是第一个吃这套通道的官方插件：自选事件清单（`post_published / post_updated / post_deleted / weibo_published / weibo_deleted / comment_created / backup_completed`）+ 目标 URL（落配置即过公网 https 校验）+ 可选 HMAC 签名（`X-Bloghao-Timestamp` + `X-Bloghao-Signature` = HMAC-SHA256(密钥, `时间戳.请求体`)，与广场同步同口径可复用校验代码），n8n / 飞书 / 自建系统一个地址全接走。
+服务端插件要配置项，在插件定义上声明 `configFields`（`{ key, label, type: 'text'|'textarea', placeholder?, help? }[]`），后台「插件」页该插件行会出现「配置」按钮，弹窗按声明渲染表单，值存进 settings 的 `serverPluginConfig`（JSON：`{ 插件id: { 字段键: 值 } }`，单值 ≤ 500 字符）。处理器里用 `pluginConfig(ctx.settings, 自身id)` 读；保存时自动过两道校验——顶层键必须是注册插件 id、字段键必须在 `configFields` 里，插件可再实现 `configValidate(cfg)` 做语义校验（返回错误文案 = 拒绝保存，如公网地址校验）。**通用出站 Webhook** 就是第一个吃这套通道的官方插件：自选事件清单（`post_published / post_updated / post_deleted / weibo_published / weibo_deleted / comment_created / backup_completed`）+ 目标 URL（落配置即过公网 https 校验）+ 可选 HMAC 签名（`X-Bloghao-Timestamp` + `X-Bloghao-Signature` = HMAC-SHA256(密钥, `时间戳.请求体`)，与广场同步同口径可复用校验代码），n8n / 飞书 / 自建系统一个地址全接走。事件清单是**三态**：留空 = 全部放行；合法清单 = 只发这些；**非空但含坏项 = 拒发**（失败关闭，别让一次配置写脏把「只发某事件」放大成「全事件外推」）。发送走内核统一出网入口 `fetchPublicResource`（起点 + 每一跳重过 `fetchableUrl`，`expectBody:false` 只发不收）。
 
 **铁律**：插件抛错绝不影响主流程——fire 函数统一吞错，发文 / 评论 / 渲染照常。
 

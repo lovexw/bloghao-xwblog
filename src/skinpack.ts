@@ -7,6 +7,10 @@
  * 唯一注入口——
  *  - `<` 全剥：CSS 语法不需要 <（媒体查询区间语法请用 max-width 形式），剥净后
  *    </style> / <!-- / <script> 等一切标签逃逸花招都不可能成立
+ *  - 反斜杠全剥：CSS 转义序列（@\69 mport、@im\port、url(\68 ttps://…)）能绕过明文
+ *    关键字剥离，而反斜杠是转义生效的唯一条件——剥净后「转义写法」退化成普通文本
+ *    （不再是合法的 @import / expression），且输出不含 `\`（浏览器无从还原）。
+ *    代价：内容里真用 \XXXX 转义的字符按字面输出（如 content:"\201C" 显示 201C，极少见）
  *  - 剥 @import：外部样式表既是额外请求面，也能整表重排级联
  *  - 剥 expression() / -moz-binding / behavior:（历史脚本面，剥除代价一行）
  *  - url() 白名单：无 scheme = 站内相对放行；有 scheme 只认 https 与 data:image|font
@@ -48,6 +52,10 @@ export function cleanCustomCss(raw: string): string | null {
   // <style> 逃逸面：< 全剥。CSS 语法不需要 <（媒体查询区间语法请用 max-width 形式），
   // 剥净后 </style>、<!--、<script> 等一切标签花招都不可能成立
   s = s.replace(/</g, '')
+  // CSS 转义序列面：反斜杠是转义生效的唯一条件，全剥（先剥反斜杠、再剥关键字——顺序
+  // 不可颠倒：@im\port 剥完变 @import，仍要被下面的关键字规则收掉；且 url(\68 ttps://evil)
+  // 剥完不再含转义，浏览器只能按字面解析）
+  s = s.replace(/\\/g, '')
   // 外部样式表 / 历史脚本面：剥关键字（残骸是解析器跳过的无效语句，无害）
   s = s.replace(/@import\b/gi, '')
   s = s.replace(/expression\s*\(/gi, '(')
@@ -76,7 +84,9 @@ export function customCssHeadStyle(settings: SettingsMap): string {
   return `<style data-custom-css>${css}</style>`
 }
 
-/** CSP 是否需要放宽 font-src（有自定义 CSS 才放行外链字体，无 CSS 的站点 CSP 字节级不变） */
+/** CSP 是否需要放宽 font-src（有自定义 CSS 才放行外链字体，无 CSS 的站点 CSP 字节级不变）。
+ *  判据走 cleanCustomCss——净化不过（脏值 / 超长 / 花括号不配平）时 customCssHeadStyle 会
+ *  当没配处理、根本不出 <style>，就不该为它放宽 CSP（读未净化原值曾让脏值白放宽一档） */
 export function needsFontSrc(settings: SettingsMap | null | undefined): boolean {
-  return !!String(settings?.customCss ?? '').trim()
+  return !!cleanCustomCss(String(settings?.customCss ?? ''))
 }

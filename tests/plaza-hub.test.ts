@@ -5,6 +5,7 @@ import {
   daySaltedHash,
   generatePlazaToken,
   hmacHex,
+  maskPlazaToken,
   parseRssItems,
   parseRssSiteTitle,
   pullHostOk,
@@ -57,6 +58,15 @@ test('generatePlazaToken：32 hex 字符', () => {
   const t = generatePlazaToken()
   assert.match(t, /^[0-9a-f]{32}$/)
   assert.notEqual(t, generatePlazaToken())
+})
+
+test('maskPlazaToken：只露后 4 位（不回显前 8 位），短 token 一律打码', () => {
+  assert.equal(maskPlazaToken('a'.repeat(28) + 'beef'), '…beef')
+  assert.equal(maskPlazaToken('a'.repeat(32)), '…aaaa')
+  assert.equal(maskPlazaToken('short'), '…')
+  // 不回显前 8 位：打码串不能包含 token 前缀（曾 `slice(0,8)…slice(-4)` 白送 48 bit）
+  const t = '0123456789abcdef0123456789abcdef'
+  assert.ok(!maskPlazaToken(t).includes(t.slice(0, 8)))
 })
 
 test('validateIngest：形状不对按没传处理，上限截断，url 只收 https', () => {
