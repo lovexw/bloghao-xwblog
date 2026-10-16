@@ -310,6 +310,81 @@ export function parseRssSiteTitle(xml: string): string {
   return ((m?.[1] ?? m?.[2] ?? '')).trim().slice(0, 100)
 }
 
+/* ---------------- pull 出网防线（SSRF） ----------------
+ * 补漏要抓注册站点的 /rss.xml 与 /api/public/weibo，站点地址是第三方可控的——出网前必须
+ * 判「公网主机」，且重定向要逐跳复查（公网地址 302 到 169.254.169.254 是经典绕过），
+ * 见 index.ts 的 fetchPullTarget。判定与内核 fetchsafe.isPrivateHost 同口径，本模块保持
+ * 自包含（plaza 可独立部署，不引主仓库模块）：内网/保留后缀、含 ':' 的主机（IPv6 字面量）
+ * 一律拒；纯数字主机名（含 0x 十六进制、0 前缀八进制写法）解析成 4 字节按私有段判，
+ * 解析不动的可疑形态按私有拒（宁拒勿漏）。已知局限：DNS rebinding 防不了——Workers 形态
+ * 出口公网私网不可达；自托管（Node）形态不要把 hub 端口暴露给不可信调用方。 */
+
+/** WHATWG IPv4 number 解析：0x 前缀十六进制、0 前缀八进制、其余十进制；非法返回 null */
+function parseIpv4Number(s: string): number | null {
+  if (/^0[xX]/.test(s)) {
+    if (s.length <= 2) return null
+    const n = parseInt(s.slice(2), 16)
+    return Number.isFinite(n) ? n : null
+  }
+  if (s.length > 1 && s[0] === '0') {
+    const n = parseInt(s.slice(1), 8)
+    return Number.isFinite(n) ? n : null
+  }
+  const n = Number(s)
+  return Number.isFinite(n) ? n : null
+}
+
+/** 数字形态主机名 → 4 字节（WHATWG 规则：末段是聚数段，吃掉剩余全部字节）；非法返回 null */
+function ipv4BytesFromHost(h: string): number[] | null {
+  const parts = h.split('.')
+  if (parts.length > 4 || parts[parts.length - 1] === '') return null
+  const nums: number[] = []
+  for (const p of parts) {
+    if (p === '') return null
+    const n = parseIpv4Number(p)
+    if (n === null || n < 0) return null
+    nums.push(n)
+  }
+  for (let i = 0; i < nums.length - 1; i++) if (nums[i] > 255) return null
+  if (nums[nums.length - 1] >= Math.pow(256, 5 - nums.length)) return null
+  const bytes: number[] = []
+  for (let i = 0; i < nums.length - 1; i++) bytes.push(nums[i])
+  const rest = 4 - bytes.length
+  for (let i = rest - 1; i >= 0; i--) bytes.push(Math.floor(nums[nums.length - 1] / Math.pow(256, i)) % 256)
+  return bytes
+}
+
+function isPrivateIpv4Bytes(b: number[]): boolean {
+  const [a, c] = b
+  if (a === 0 || a === 10 || a === 127) return true
+  if (a === 100 && c >= 64 && c <= 127) return true // 100.64/10 CGNAT
+  if (a === 169 && c === 254) return true // 含 169.254.169.254 云 metadata
+  if (a === 172 && c >= 16 && c <= 31) return true
+  if (a === 192 && c === 168) return true
+  if (a >= 224) return true // 组播 / 保留
+  return false
+}
+
+/** pull 可抓主机判定：公网主机 true，内网后缀 / IPv6 字面量 / 私有段 IPv4 一律 false。
+ *  接受绝对 URL（与站点注册校验、重定向目标复查两处共用） */
+export function pullHostOk(siteUrl: string): boolean {
+  let h: string
+  try {
+    h = new URL(siteUrl).hostname.toLowerCase().replace(/\.$/, '')
+  } catch {
+    return false
+  }
+  if (!h || h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return false
+  // URL.hostname 不会带端口；出现 ':' 即是 IPv6 字面量（含 IPv4-mapped / ULA / link-local）——一律拒
+  if (h.includes(':')) return false
+  // 全部段都是数字（含 0x / 0 前缀写法）才是 IPv4 数字形态，避免误杀 cafe.example.com 这类真域名
+  if (h.split('.').every((p) => /^(?:0[xX][0-9a-fA-F]+|0+[0-7]*|[1-9][0-9]*)$/.test(p))) {
+    const bytes = ipv4BytesFromHost(h)
+    return bytes ? !isPrivateIpv4Bytes(bytes) : false
+  }
+  return true
+}
+
 /** 统计日 key：北京时间日期 YYYY-MM-DD（与内核时间纪律同口径：+8h 后取 UTC 分量；
  *  plaza 是独立模块不 import src/utils，这里按同一算法本地实现，tests 有镜像用例守着） */
 export function statsDay(now = Date.now()): string {
@@ -331,9 +406,17 @@ export async function sha256Hex(s: string): Promise<string> {
   return toHex(digest)
 }
 
-/** 当日盐哈希：sha256(day + ':' + 原值)——同一天内稳定可去重，跨天不可串联 */
-export async function daySaltedHash(day: string, value: string): Promise<string> {
-  return sha256Hex(`${day}:${value}`)
+/**
+ * 天级哈希：同一天内稳定可去重，跨天不可串联。
+ *  secret 非空时走 HMAC-SHA256(secret, day:value)——**这是生产口径**：私盐（服务端持有、
+ *  只进哈希不进库）让「库泄露 = 枚举还原 IP/vid」不成立（旧实现用公开日期当盐，IPv4
+ *  空间可枚举反推）。secret 为空时退化为 sha256(day:value)（自建 hub 未配密钥的兼容兜底，
+ *  功能一致、隐私弱一档）。改 secret 只会让「当天」去重失效（重投一天内可能重复计 1 次），
+ *  属可接受代价；天级键天然跨日轮换，无需额外轮换逻辑。
+ */
+export async function daySaltedHash(day: string, value: string, secret = ''): Promise<string> {
+  const msg = `${day}:${value}`
+  return secret ? hmacHex(secret, msg) : sha256Hex(msg)
 }
 
 /** 曝光/点击事件类型：v = 卡片曝光，c = 出站点击 */

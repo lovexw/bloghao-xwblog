@@ -7,6 +7,7 @@ import {
   hmacHex,
   parseRssItems,
   parseRssSiteTitle,
+  pullHostOk,
   rssDateToMs,
   scoreFeed,
   scorePlazaItem,
@@ -400,6 +401,46 @@ test('daySaltedHash：同日稳定可去重、跨日不可串联（天级盐）'
   assert.equal(h1, h1again)
   assert.notEqual(h1, h2)
   assert.match(h1, /^[0-9a-f]{64}$/)
+})
+
+test('daySaltedHash：私盐走 HMAC（库泄露不可枚举还原 IP/vid），同日稳定、跨日/跨密钥不同', async () => {
+  const secret = 'a'.repeat(64)
+  const h = await daySaltedHash('2026-10-16', '1.2.3.4', secret)
+  // 与 hmacHex(secret, day:value) 同口径（与应用端私盐实现绑死）
+  assert.equal(h, await hmacHex(secret, '2026-10-16:1.2.3.4'))
+  // 同日同盐稳定（去重可用）
+  assert.equal(h, await daySaltedHash('2026-10-16', '1.2.3.4', secret))
+  // 跨日不同、换密钥不同
+  assert.notEqual(h, await daySaltedHash('2026-10-17', '1.2.3.4', secret))
+  assert.notEqual(h, await daySaltedHash('2026-10-16', '1.2.3.4', 'b'.repeat(64)))
+  // 私盐口径与无盐口径必须不同（设了密钥即真正收敛隐私面）
+  assert.notEqual(h, await daySaltedHash('2026-10-16', '1.2.3.4'))
+})
+
+test('pullHostOk：pull 出网防线——只放行公网主机，内网后缀 / IPv6 / 私有段 IPv4（含整数十六进制写法）一律拒', () => {
+  // 公网域名与公网 IPv4 放行
+  assert.equal(pullHostOk('https://blog.example.com'), true)
+  assert.equal(pullHostOk('https://a.b.c.d.example.com/rss.xml'), true)
+  assert.equal(pullHostOk('https://8.8.8.8'), true)
+  // 内网 / 保留后缀拒
+  assert.equal(pullHostOk('https://foo.internal'), false)
+  assert.equal(pullHostOk('https://foo.local'), false)
+  assert.equal(pullHostOk('https://foo.localhost'), false)
+  assert.equal(pullHostOk('https://localhost'), false)
+  // 私有段 IPv4（点分、整数、十六进制、八进制、短写）全拒——URL 归一后再判
+  assert.equal(pullHostOk('https://127.0.0.1'), false)
+  assert.equal(pullHostOk('https://169.254.169.254'), false)
+  assert.equal(pullHostOk('https://10.0.0.5'), false)
+  assert.equal(pullHostOk('https://192.168.1.1'), false)
+  assert.equal(pullHostOk('https://2130706433'), false) // 整数写法 = 127.0.0.1
+  assert.equal(pullHostOk('https://0x7f000001'), false) // 十六进制写法
+  assert.equal(pullHostOk('https://127.1'), false) // 短写
+  assert.equal(pullHostOk('https://[::1]'), false) // IPv6 环回（含 ':' 一律拒）
+  assert.equal(pullHostOk('https://[::ffff:127.0.0.1]'), false)
+  // 解析不动 / 空 / 非绝对地址拒
+  assert.equal(pullHostOk('not a url'), false)
+  assert.equal(pullHostOk(''), false)
+  assert.equal(pullHostOk('example.com'), false) // 相对地址，非绝对 URL
 })
 
 test('scoreFeed：hub 条目 id 与点赞计数透传进 feed 出参（点赞动作的目标主键）', () => {

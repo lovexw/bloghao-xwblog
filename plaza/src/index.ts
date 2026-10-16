@@ -18,6 +18,7 @@ import {
   normalizePulledWeibo,
   parseRssItems,
   parseRssSiteTitle,
+  pullHostOk,
   rssDateToMs,
   scoreFeed,
   spotlightWeight,
@@ -32,6 +33,10 @@ import {
 interface Env {
   DB: D1Database
   PLAZA_ADMIN_TOKEN: string
+  /** 点赞/曝光的 IP/vid 天级哈希密钥（可选）：设了走 HMAC（私盐，库泄露不可枚举还原）；
+   *  没设退化为 sha256(day:value) 兼容兜底——Workers 用 `wrangler secret put` 注入，
+   *  Node 形态 demo/hub-node 会在未设时自动生成一枚并落盘。改它只影响当天去重（可接受） */
+  PLAZA_HASH_SECRET?: string
 }
 
 /** 站点行（sites 表） */
@@ -56,6 +61,21 @@ app.use('/api/sites', cors())
 // 轻互动（P2）是 POST 但同样无 Cookie 面匿名计数：官网同域直用，开 CORS 兼容自建 hub 跨域页面
 app.use('/api/like', cors())
 app.use('/api/beacon', cors())
+
+/* ---------------- 入站体积预检（对齐内核 api.ts 的同款闸） ----------------
+ * 公开写入口（/api/like、/api/beacon 无需凭据）此前直接 `c.req.text()` 全量读体：
+ * 超大 body（chunked 无 Content-Length 时平台闸也不看）会整读进内存放大 DoS——
+ * 非 GET/HEAD/OPTIONS 先看 Content-Length，超限 413 短路；缺 CL 的请求再由各端点
+ * 用 readTextLimited 流式限长兜底。合法上报远小于此（ingest 自身封顶 256KB）。 */
+const MAX_BODY_BYTES = 512 * 1024
+
+app.use('*', async (c, next) => {
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) {
+    const cl = Number(c.req.header('content-length') || 0)
+    if (Number.isFinite(cl) && cl > MAX_BODY_BYTES) return c.json({ error: 'payload too large' }, 413)
+  }
+  await next()
+})
 
 /* ---------------- 调用统计（每日一行，供 ops 控制面 /api/admin/stats 出全局数据） ---------------- */
 
@@ -92,9 +112,13 @@ async function bumpSiteStats(db: Env['DB'], siteId: number, field: SiteStatsFiel
 }
 
 /**
- * 访客 IP：Workers 用 cf-connecting-ip（平台侧可信）；Node 容器在 Caddy 反代后，
- * 取 X-Forwarded-For 最后一跳（Caddy 追加的真实来源，与 docker-poc TRUST_PROXY=proxy 同口径）。
- * 拿不到归并 0.0.0.0 共桶——限流宁紧勿松，真实部署两种形态都有可信头。
+ * 访客 IP：优先 cf-connecting-ip，否则 X-Forwarded-For 最后一跳。
+ * Workers 形态：cf-connecting-ip 由 Cloudflare 边缘强制写入、客户端伪造不了，直接可信。
+ * Node 形态：hub-node 的 applyTrustProxy 会按 TRUST_PROXY 档位**先剥掉客户端自带的
+ * cf-connecting-ip / x-real-ip**、再把可信来源（XFF 末跳 / socket 远端）写回 cf-connecting-ip
+ * ——所以这里读到的值一定是归一后的（与 docker-poc clientIp 同口径）；防的是「自带
+ * cf-connecting-ip 伪造 IP」绕过按 IP 的点赞去重与限流。
+ * 拿不到归并 0.0.0.0 共桶——限流宁紧勿松。
  */
 function ipOf(c: Context<{ Bindings: Env }>): string {
   const cf = (c.req.header('cf-connecting-ip') || '').trim()
@@ -162,9 +186,10 @@ function safeJsonParse(s: string): unknown {
   }
 }
 
-/** 响应体流式读入并限长，超限断流返回 null（plaza 目录保持自包含可独立部署，不引主仓库模块） */
-async function readBodyLimited(res: Response, maxBytes: number): Promise<ArrayBuffer | null> {
-  const reader = res.body?.getReader()
+/** 响应体流式读入并限长，超限断流返回 null（plaza 目录保持自包含可独立部署，不引主仓库模块）。
+ *  入参放宽到任意带 body 的对象（Response / Request 通用）。 */
+async function readBodyLimited(src: { body: ReadableStream<Uint8Array> | null }, maxBytes: number): Promise<ArrayBuffer | null> {
+  const reader = src.body?.getReader()
   if (!reader) return null
   const chunks: Uint8Array[] = []
   let total = 0
@@ -191,6 +216,17 @@ async function readBodyLimited(res: Response, maxBytes: number): Promise<ArrayBu
     off += c.byteLength
   }
   return out.buffer
+}
+
+/** 读请求体并限长（Content-Length 缺失 / chunked 时的兜底）：超限或异常返回 null（调用方回 413） */
+async function readTextLimited(req: Request, maxBytes: number): Promise<string | null> {
+  const buf = await readBodyLimited(req, maxBytes)
+  return buf ? new TextDecoder().decode(buf) : null
+}
+
+/** 天级哈希密钥（P2 隐私）：设了走 HMAC 私盐；没设退化为 sha256(day:value)，功能一致、隐私弱一档 */
+function hashSecret(env: Env): string {
+  return (env.PLAZA_HASH_SECRET || '').trim()
 }
 
 /* ---------------- 公开面 ---------------- */
@@ -324,7 +360,9 @@ const LIKE_IP_DAILY = 200
 
 app.post('/api/like', async (c) => {
   await ensureSchemaExtras(c.env.DB)
-  const body = safeJsonParse(await c.req.text()) as { itemId?: unknown; vid?: unknown } | null
+  const raw = await readTextLimited(c.req.raw, MAX_BODY_BYTES)
+  if (raw === null) return c.json({ error: 'payload too large' }, 413)
+  const body = safeJsonParse(raw) as { itemId?: unknown; vid?: unknown } | null
   const itemId = Math.round(Number(body?.itemId))
   const vid = cleanVid(body?.vid)
   if (!Number.isInteger(itemId) || itemId <= 0 || !vid) return c.json({ error: 'bad params' }, 400)
@@ -335,8 +373,9 @@ app.post('/api/like', async (c) => {
     .first<{ id: number; site_id: number }>()
   if (!item) return c.json({ error: 'item not found' }, 404)
   const day = statsDay()
-  const ipHash = await daySaltedHash(day, ip)
-  const vidHash = await daySaltedHash(day, vid)
+  const secret = hashSecret(c.env)
+  const ipHash = await daySaltedHash(day, ip, secret)
+  const vidHash = await daySaltedHash(day, vid, secret)
   // 会话/全场限额：计的是当日去重日志行数，超限 429（前台按「今天赞得够多了」提示）
   const vidCount = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM likes WHERE day = ? AND vid_hash = ?')
     .bind(day, vidHash)
@@ -365,7 +404,9 @@ app.post('/api/beacon', async (c) => {
   await ensureSchemaExtras(c.env.DB)
   const ip = ipOf(c)
   if (!ingestRateLimit(`beacon:${ip}`, 20, 60_000)) return c.json({ error: 'too many requests' }, 429)
-  const body = safeJsonParse(await c.req.text()) as { events?: unknown } | null
+  const raw = await readTextLimited(c.req.raw, MAX_BODY_BYTES)
+  if (raw === null) return c.json({ error: 'payload too large' }, 413)
+  const body = safeJsonParse(raw) as { events?: unknown } | null
   const events = validateBeaconEvents(body?.events)
   if (!events.length) return c.json({ ok: true, accepted: 0 })
   // 只认真实存在的站点：一次 IN 校验，伪造 site_id 的条目整批剔除（防任意行膨胀 site_stats）
@@ -444,7 +485,8 @@ app.post('/api/ingest', async (c) => {
     .first<{ id: number; disabled: number }>()
   // token 即身份：查无此站 / 已停用一律同一句 401，不区分原因不透露存在性
   if (!site || site.disabled) return c.json({ error: 'unauthorized' }, 401)
-  const rawBody = await c.req.text()
+  const rawBody = await readTextLimited(c.req.raw, MAX_BODY_BYTES)
+  if (rawBody === null) return c.json({ error: 'payload too large' }, 413)
   // 防爆库：超 256KB 的签名请求直接拒（合法上报 50 条封顶远用不满）
   if (rawBody.length > 256 * 1024) return c.json({ error: 'payload too large' }, 413)
   if (!(await verifyPlazaSignature(token, ts, sig, rawBody))) {
@@ -703,30 +745,52 @@ app.post('/api/admin/pull', async (c) => {
 
 /* ---------------- RSS pull 补漏（cron 每 6 小时） ---------------- */
 
-/** pull 源主机防线：内网后缀 / IP 字面量的站点不 pull（与注册校验同口径，防旧数据/旁路写库） */
-function pullHostOk(siteUrl: string): boolean {
+const PULL_UA = 'BlogHaoPlaza/1.0 (+https://bloghao.com/plaza/)'
+const PULL_MAX_REDIRECTS = 5
+const PULL_TIMEOUT_MS = 15_000
+
+/**
+ * pull 抓取（SSRF 防线）：起始地址与每一跳重定向目标都要过 pullHostOk 公网主机判定，
+ * 只跟 https 跳（不降级）。被 pull 站点是第三方可控的——`redirect:'follow'` 会让
+ * 「已注册站 302 到 http://169.254.169.254/」直通内网，故手动跟跳逐跳复查。
+ * Node(undici) 的 manual 重定向返回 opaqueredirect（拿不到目标）→ 直接放弃该次抓取
+ * （与内核 fetchsafe 同取舍：Workers 下是真实 3xx 正常跟跳，Node 下不跟跳）。
+ * 返回 null = 抓不到（调用方按缺失处理，不阻塞其余补漏）。 */
+async function fetchPullTarget(rawUrl: string): Promise<Response | null> {
+  let u: URL
   try {
-    const h = new URL(siteUrl).hostname.toLowerCase()
-    return !(
-      h.endsWith('.internal') ||
-      h.endsWith('.local') ||
-      h.endsWith('.localhost') ||
-      /^\d{1,3}(\.\d{1,3}){3}$/.test(h) ||
-      h.includes(':')
-    )
+    u = new URL(rawUrl)
   } catch {
-    return false
+    return null
   }
+  for (let hop = 0; hop <= PULL_MAX_REDIRECTS; hop++) {
+    if (u.protocol !== 'https:' || !pullHostOk(u.href)) return null
+    let res: Response
+    try {
+      res = await fetch(u.href, { headers: { 'user-agent': PULL_UA }, redirect: 'manual', signal: AbortSignal.timeout(PULL_TIMEOUT_MS) })
+    } catch {
+      return null
+    }
+    if ((res as { type?: string }).type === 'opaqueredirect') return null
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get('location')
+      if (!loc) return null
+      try {
+        u = new URL(loc, u)
+      } catch {
+        return null
+      }
+      continue
+    }
+    return res.ok ? res : null
+  }
+  return null
 }
 
 /** pull 只做存在性兜底：单站单次 20 条、只灌 30 天内旧文、绝不覆盖 push 数据（source 守卫） */
 async function pullSiteRss(env: Env, site: SiteRow): Promise<number> {
-  if (!pullHostOk(site.site_url)) return 0
-  const res = await fetch(`${site.site_url}/rss.xml`, {
-    headers: { 'user-agent': 'BlogHaoPlaza/1.0 (+https://bloghao.com/plaza/)' },
-    signal: AbortSignal.timeout(15_000),
-  })
-  if (!res.ok) return 0
+  const res = await fetchPullTarget(`${site.site_url}/rss.xml`)
+  if (!res) return 0
   // RSS 读体流式限长：被 pull 的站点是第三方，超大响应（gzip 炸弹等）不能整读进内存
   const buf = await readBodyLimited(res, 2 * 1024 * 1024)
   if (!buf) return 0
@@ -768,11 +832,8 @@ async function pullSiteRss(env: Env, site: SiteRow): Promise<number> {
  *  RSS 只覆盖文章，微博漏推（发布瞬间推送失败即永久丢失）没有别的自愈路；
  *  没有该接口的站点 404 / 非 JSON 静默跳过，不影响其余补漏。 */
 async function pullSiteWeibo(env: Env, site: SiteRow): Promise<number> {
-  const res = await fetch(`${site.site_url}/api/public/weibo?limit=20`, {
-    headers: { 'user-agent': 'BlogHaoPlaza/1.0 (+https://bloghao.com/plaza/)' },
-    signal: AbortSignal.timeout(15_000),
-  })
-  if (!res.ok) return 0
+  const res = await fetchPullTarget(`${site.site_url}/api/public/weibo?limit=20`)
+  if (!res) return 0
   const buf = await readBodyLimited(res, 2 * 1024 * 1024)
   if (!buf) return 0
   let list: Array<Record<string, unknown>>

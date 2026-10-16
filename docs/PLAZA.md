@@ -31,6 +31,7 @@ hub 是独立服务，源码在仓库 `plaza/` 目录（`src/core.ts` 纯函数 
 npx wrangler d1 create plaza-db          # database_id 填进 plaza/wrangler.jsonc
 npx wrangler d1 execute DB --remote --file plaza/schema.sql
 npx wrangler secret put PLAZA_ADMIN_TOKEN
+npx wrangler secret put PLAZA_HASH_SECRET   # 可选但建议：点赞/曝光天级哈希私盐（不配则退化弱隐私）
 npx wrangler deploy -c plaza/wrangler.jsonc
 ```
 
@@ -52,9 +53,11 @@ npx wrangler deploy -c plaza/wrangler.jsonc
 - `GET /api/feed?limit=30&kind=post|weibo&site=N`——混排 feed（CORS 全开，官网直接消费）。`site=N` 进站点视图（B25 P0.1）：出参多一个 `site` 块（`{id, name, url, avatar, verified, createdAt}`）供页头渲染；站点不存在 / 已停用 404。每条条目带 `id`（hub 侧主键，点赞目标）与 `likes`（点赞累计）
 - `GET /api/sites`——站点名录（认证标、总条数、`recentItems` 近 7 日条数——侧栏活跃榜 / 最新入驻 / 新站「新」标的数据面）
 - `POST /api/ingest`——博客端上报（协议见下）
-- `POST /api/like`——匿名点赞（B25 P2.1）：`{"itemId": <feed 条目 id>, "vid": "<32hex>"}`；防重 = localStorage 记已赞 + hub 端天级去重（每 IP 每条 1 次/天、每会话 60 次/天、每 IP 全场 200 次/天）；返回 `{ok, likes}` / `{ok, duplicate:true}`；限流 429。hub 不存原始 IP / vid，只存「北京日 + 当日盐」的 sha256（跨日不可串联），去重日志 7 天前由 cron 清掉
+- `POST /api/like`——匿名点赞（B25 P2.1）：`{"itemId": <feed 条目 id>, "vid": "<32hex>"}`；防重 = localStorage 记已赞 + hub 端天级去重（每 IP 每条 1 次/天、每会话 60 次/天、每 IP 全场 200 次/天）；返回 `{ok, likes}` / `{ok, duplicate:true}`；限流 429。hub 不存原始 IP / vid，只存「北京日 + 服务端私盐」的哈希（`PLAZA_HASH_SECRET` 非空时走 HMAC-SHA256，库泄露也无法枚举还原 IP/vid；未配则退化为 sha256(day:value) 兼容兜底）；跨日不可串联，去重日志 7 天前由 cron 清掉
 - `POST /api/beacon`——曝光/点击批量回传（B25 P2.2）：`{"events":[{"s":<siteId>,"k":"v"|"c","n":<次数>}]}`，≤50 条、单条 n≤20；官网页攒批（10 条 / 30 秒 / 离页 sendBeacon）匿名计数，无 IP 无指纹；hub 校验站点存在性后按（北京日，站点）聚合进 site_stats
 - `GET /api/site-stats`——站长数据卡（B25 P2.3）：`X-Plaza-Token` 头携带站点 token（`?token=` 兜底方便浏览器直开，响应 no-store）；出参只含本站：`{site:{id,name,url}, items, totals:{views,clicks,likes}, days:[{day,views,clicks,likes}](近 7 日)}`。曝光/点击自 P2.2 上线起计数，点赞累计以 items.likes 为权威
+
+> **入站体积预检**（与博客内核 `api.ts` 同款闸）：所有非 GET/HEAD/OPTIONS 请求先看 `Content-Length`，超 512KB 直接 413；公开写入口（`/api/like`、`/api/beacon` 无需凭据）再用流式限长兜底无 `Content-Length` 的 chunked 超大体——防超大请求整读进内存打爆进程。
 
 ### 管理端点（Bearer PLAZA_ADMIN_TOKEN）补充
 
@@ -112,17 +115,22 @@ X-Plaza-Signature: <hex(HMAC-SHA256(token, timestamp + "." + rawBody))>
 }
 ```
 
-- 单次最多 50 条 items / 50 条 deleted，body 超 256KB 拒收
+- 单次最多 50 条 items / 50 条 deleted，body 超 256KB 拒收（更严于全局 512KB 预检闸）
 - 形状不对的字段按没传处理，url 非 https 的条目丢弃
 - 签名算法与校验都在 `plaza/src/core.ts`（`hmacHex` / `verifyPlazaSignature`），Node 18+ 与 Workers 通用，`tests/plaza-hub.test.ts` 有双端镜像用例可对照
 
 ## pull 补漏路
 
-hub cron（每 6 小时）会抓各站 `/rss.xml` 给没接插件的老站兜底：只灌 **30 天内**的文章（RSS 没有微博）、单站单次 20 条、`source='pull'` 标记且**绝不覆盖** push 数据；站点注册时默认开启，管理端点可按站关闭。180 天无 push 心跳的站点 cron 自动休眠（不删站，重新启用即恢复）。pull 只收 https 链接、跳过带锁标志的条目（与 push 路同口径）；内网后缀 / IP 字面量的站点地址注册时不收、pull 时跳过。**站点名自动补全**（B25 P0.2）：站没起名（空或还是注册时的裸域名默认值）时，从 RSS channel `<title>` 回填 `site_name`——站长起过的名字绝不覆盖。
+hub cron（每 6 小时）会抓各站 `/rss.xml` 给没接插件的老站兜底：只灌 **30 天内**的文章（RSS 没有微博）、单站单次 20 条、`source='pull'` 标记且**绝不覆盖** push 数据；站点注册时默认开启，管理端点可按站关闭。180 天无 push 心跳的站点 cron 自动休眠（不删站，重新启用即恢复）。pull 只收 https 链接、跳过带锁标志的条目（与 push 路同口径）。**出网 SSRF 防线**：被 pull 站点是第三方可控的——起始地址与**每一跳重定向目标**都要过公网主机判定（内网后缀 / IPv6 字面量 / 私有段 IPv4 含整数·十六进制·八进制写法一律拒，判定与内核 `fetchsafe.isPrivateHost` 同口径），只跟 https 跳不降级；注册时的站点地址校验同口径。**站点名自动补全**（B25 P0.2）：站没起名（空或还是注册时的裸域名默认值）时，从 RSS channel `<title>` 回填 `site_name`——站长起过的名字绝不覆盖。
 
 ## schema 与部署
 
 hub 的表定义唯一来源 `plaza/schema.sql`（sites / items / likes / site_stats / stats），Workers D1 与 Node（demo/hub-node，启动即 `exec(schema.sql)`）双形态共用。**升级自动迁移**：hub 路由的 `ensureSchemaExtras` 对存量库惰性补列/补表（`sites.avatar`、`items.likes`、`likes`、`site_stats`，全部幂等），两种形态都不需要手工 `d1 execute`。`likes` 是点赞去重日志（7 天前的行 cron 清掉），`site_stats` 是站点级互动日聚合（几百站量级一年 ~11 万行），`stats` 仍是全局调用计数。
+
+**两个安全配置**（未配也能跑，但建议配齐）：
+
+- `PLAZA_HASH_SECRET`：点赞/曝光的 IP/vid 天级哈希私盐。设了走 `HMAC-SHA256`（库泄露也无法枚举还原）；Workers 用 `wrangler secret put` 注入，**Node 形态（demo/hub-node）未设时会自动生成一枚并落盘到数据目录**（`<DB 目录>/hash-secret`，重启不变），所以自托管形态默认即私盐。改它只影响「当天」去重（一天内可能重复计 1 次），属可接受代价。
+- `TRUST_PROXY`（Node 形态）：访客 IP 信任档位，与 docker-poc 同口径同默认——`proxy`（默认，Caddy/Nginx 反代后取 XFF 末跳，**剥掉客户端自带的 `cf-connecting-ip` / `x-real-ip`**）、`cf`（前有 Cloudflare）、`off`（Node 直接暴露）。**档位必须与真实部署一致**，否则客户端伪造转发头即可重置按 IP 的点赞去重与限流桶。
 
 ## docker-poc 自托管分站的自动收录（2026-10-16）
 
@@ -152,4 +160,4 @@ docker-poc 控制面配置了 `PLAZA_HUB_URL` + `PLAZA_ADMIN_TOKEN`（指向自�
 - 广场只收**公开内容**的标题 / 摘要 / 链接 / 封面，不收正文、不收评论、不收任何访客身份
 - hub 的 items 表是**派生数据**：源站删了推 `deleted` 即清，hub 被删也不影响任何博客站
 - 官网广场页所有动态字段走 `esc` / `textContent` 渲染，feed 内容属半可信（来自各站站长），hub 端另有 https-only 与长度截断两道闸
-- **轻互动是匿名聚合计数，不是行为档案**（B25 P2）：点赞与曝光/点击回传无账号无 Cookie 面，hub 不存原始 IP / vid，只存「北京日 + 当日盐」哈希（同 IP 跨日哈希不同，无法跨天串联）；曝光/点击在 hub 侧只落（北京日，站点）两维聚合，没有条目级、没有访客级记录；官网页的 vid 是纯随机串（localStorage），仅作客户端防重，不掺任何设备信息
+- **轻互动是匿名聚合计数，不是行为档案**（B25 P2）：点赞与曝光/点击回传无账号无 Cookie 面，hub 不存原始 IP / vid，只存「北京日 + 服务端私盐」的 HMAC-SHA256（配了 `PLAZA_HASH_SECRET` 时库泄露也无法枚举还原 IP/vid；同 IP 跨日哈希不同，无法跨天串联）；曝光/点击在 hub 侧只落（北京日，站点）两维聚合，没有条目级、没有访客级记录；官网页的 vid 是纯随机串（localStorage），仅作客户端防重，不掺任何设备信息
