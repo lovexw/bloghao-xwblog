@@ -58,6 +58,8 @@ npx wrangler deploy -c plaza/wrangler.jsonc
 - `GET /api/site-stats`——站长数据卡（B25 P2.3）：**只认 `X-Plaza-Token` 头**（长期令牌不进 URL / 代理日志 / Referer，与 ingest 同口径；无 query 兜底），响应 no-store；出参只含本站：`{site:{id,name,url}, items, totals:{views,clicks,likes}, days:[{day,views,clicks,likes}](近 7 日)}`。曝光/点击自 P2.2 上线起计数，点赞累计以 items.likes 为权威
 
 > **入站体积预检**（与博客内核 `api.ts` 同款闸）：所有非 GET/HEAD/OPTIONS 请求先看 `Content-Length`，超 512KB 直接 413；公开写入口（`/api/like`、`/api/beacon` 无需凭据）再用流式限长兜底无 `Content-Length` 的 chunked 超大体——防超大请求整读进内存打爆进程。
+>
+> **Node 形态的实际防线**：`demo/hub-node` 适配层把 `content-length` 当 hop-by-hop 头剥掉（body 走流），所以 CL 预检在 Node 形态**恒不触发**；此时三道公开写入口（`/api/like`、`/api/beacon`、`/api/ingest`）各自走 `readTextLimited` → `readBodyLimited`（**边读边限**，累计超 512KB 立即 `reader.cancel()` 返回 413，内存有界）——防护等价，只是从「预检短路」退化为「流式兜底」。Workers 形态两道都在。
 
 ### 管理端点（Bearer PLAZA_ADMIN_TOKEN）补充
 
