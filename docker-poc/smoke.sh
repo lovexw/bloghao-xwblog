@@ -63,6 +63,14 @@ check "登录"           200 "$(curl -s -o /dev/null -w '%{http_code}' --resolve
 check "带同源 Origin 的 POST 放行（模拟 CF 灵活 SSL 后的浏览器）" 200 "$(curl -s -o /dev/null -w '%{http_code}' --resolve "main.localhost:${PORT}:127.0.0.1" -b "$JAR" -H "Origin: http://main.localhost:${PORT}" -H 'Content-Type: application/json' -d '{"username":"owner","password":"password123"}' http://main.localhost:${PORT}/api/auth/login)"
 check "跨站 Origin 仍被拒绝（CSRF 防线未被适配层拆掉）" 403 "$(curl -s -o /dev/null -w '%{http_code}' --resolve "main.localhost:${PORT}:127.0.0.1" -b "$JAR" -H 'Origin: https://evil.example' -H 'Content-Type: application/json' -d '{"username":"owner","password":"password123"}' http://main.localhost:${PORT}/api/auth/login)"
 
+# 新手引导记账位（概览页清单卡）：setup 首装播种 onboarding='1'（api.ts）。断言只查键在场——
+# 首装播种的强断言由 CI 全新状态覆盖，本地重跑时上次的 '0' 也不误报；PUT 归一化两口都验
+ONBOARD=$(curl -s --resolve "main.localhost:${PORT}:127.0.0.1" -b "$JAR" http://main.localhost:${PORT}/api/admin/settings)
+check "settings 含 onboarding 引导记账位（首装播种）" 1 "$(printf '%s' "$ONBOARD" | grep -c '"onboarding":"')"
+check "onboarding PUT 可关闭（引导记账位归一化）" 200 "$(curl -s -o /dev/null -w '%{http_code}' --resolve "main.localhost:${PORT}:127.0.0.1" -b "$JAR" -X PUT -H 'Content-Type: application/json' -d '{"onboarding":"0"}' http://main.localhost:${PORT}/api/admin/settings)"
+check "onboarding 关闭后回读为 0" 1 "$(curl -s --resolve "main.localhost:${PORT}:127.0.0.1" -b "$JAR" http://main.localhost:${PORT}/api/admin/settings | grep -c '"onboarding":"0"')"
+curl -s -o /dev/null --resolve "main.localhost:${PORT}:127.0.0.1" -b "$JAR" -X PUT -H 'Content-Type: application/json' -d '{"onboarding":"1"}' http://main.localhost:${PORT}/api/admin/settings
+
 CREATE=$(curl -s --resolve "main.localhost:${PORT}:127.0.0.1" -b "$JAR" -H 'Content-Type: application/json' \
   -d '{"title":"POC 冒烟文章","content":"<p>来自 docker-poc 的文章，正文配图稍后上传。</p>","status":"published","tags":["poc"]}' \
   http://main.localhost:${PORT}/api/admin/posts)

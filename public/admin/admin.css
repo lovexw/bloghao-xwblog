@@ -173,6 +173,35 @@ input, textarea, select { font: inherit; color: inherit; }
 .recent-title:hover { color: var(--accent); }
 .recent-meta { color: var(--sub); font-size: 12px; flex: 0 0 auto; }
 
+/* ---------- 新手引导（概览页清单卡，仅首装显示，public/admin/app.js onboardCardHtml） ---------- */
+.onboard { border-color: #ecdfcf; background: #fdfbf7; }
+.onboard-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 14px 16px 4px; flex-wrap: wrap; }
+.onboard-hi { font-size: 15px; font-weight: 700; }
+.onboard-head .onboard-sub { margin-top: 3px; }
+.onboard-sub { font-size: 13px; color: var(--sub); }
+.onboard-rows { padding: 6px 16px 2px; }
+.onboard-row { display: flex; align-items: flex-start; gap: 12px; padding: 11px 0; border-bottom: 1px solid #f2f2f2; flex-wrap: wrap; }
+.onboard-row:last-child { border-bottom: none; }
+.onboard-mark { flex: 0 0 22px; width: 22px; height: 22px; border-radius: 50%; background: #ecedee; color: var(--sub); font-size: 12px; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+.onboard-row.is-done .onboard-mark { background: #e7f4ea; }
+.onboard-main { flex: 1; min-width: 0; }
+.onboard-title { font-weight: 500; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.onboard-row.is-done .onboard-title { color: var(--sub); font-weight: 400; }
+.onboard-row .onboard-sub { margin-top: 3px; }
+.onboard-row > .btn { flex: 0 0 auto; margin-top: 1px; }
+.onboard-inline { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.onboard-inline .input { flex: 1; min-width: 200px; }
+.onboard-thumb { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; background: #f6f2ec; border: 1px solid var(--line); }
+.onboard-foot { padding: 4px 16px 12px; text-align: right; }
+.onboard-skip { color: var(--sub); font-size: 12px; padding: 4px 6px; border-radius: 4px; }
+.onboard-skip:hover { color: var(--danger); background: #fdf0f0; }
+@media (max-width: 480px) {
+  /* 小屏（390px）：改名的输入框与按钮竖排满宽，右侧动作按钮跟随换行 */
+  .onboard-inline { flex-direction: column; align-items: stretch; }
+  .onboard-inline .input { min-width: 0; }
+  .onboard-row > .btn { margin-top: 0; }
+}
+
 /* ---------- 文章列表 ---------- */
 .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
 .tabs { display: flex; gap: 4px; background: #ecedee; border-radius: 8px; padding: 3px; }

@@ -111,6 +111,11 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   // 英文版最近一次异常的错误摘要与发生时间（后台横幅展示，仅记录，渲染层不读）
   editionEnError: '',
   editionEnAt: '',
+  // 新手引导记账位（后台概览页清单卡）：仅 /api/auth/setup 首装成功时播种 '1'（api.ts），
+  // 老站没有此键 = 永不显示引导卡；'0' = 已完成/已跳过，永久消失。onboardingManual 是
+  // 「打开使用手册」的点击记账。两键都进 BOOL_SETTINGS 归一化，后台设置页保存全部不含它们
+  onboarding: '',
+  onboardingManual: '',
 }
 
 // settings 读取的共享快照层（Cache API）：生产 Workers 上 caches.default 是 colo 级共享——

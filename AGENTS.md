@@ -144,6 +144,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - 设置页「保存全部」的 body **不带 theme 键**（主题只在皮肤页管理；服务端 PUT 对 body 里存在的 key 一律写入——历史上带了就曾把皮肤静默重置成 wechat）；分类/媒体页等操作后的列表刷新统一 `navigate()`，别直调 `viewX()` 绕过防串页守卫
 - 后台 SPA 经 wrangler assets 直出不经过 Worker，CSP 靠 admin/index.html 的 **meta 兜底**（前台在 pages.ts baseHeaders；form-action 在 meta 里有效，**frame-ancestors 是 meta 无效项**）；meta 兜不住的响应头（XFO / `frame-ancestors` / nosniff / Referrer-Policy / COOP / 静态资源缓存）走 **public/_headers**（Workers assets 原生支持、wrangler dev 同样生效，docker-poc/server.ts 的 serveStatic 有同语义镜像——**改口径两侧同改**，`_headers` 自身不对外服务，冒烟「后台防嵌套响应头」守着）：后台模板/弹窗里**禁止新增内联事件属性（onclick 等）与内联 `<script>`**，交互一律 addEventListener
 - 操作回调里刷新列表统一 `navigate()`（自带 pendingRoute/navSeq 防串页守卫），别直接 `viewX()`——慢响应会把用户从新页面拽回旧页面
+- 新手引导卡（概览页清单卡，`onboardCardHtml`）：**只在首装出现**——`/api/auth/setup` 播种 settings `onboarding='1'`（老站无此键永不显示，别改成「缺键即显示」）；完成状态每次进概览**实时计算不落库**（站名非默认「博客号 BlogHao」/「博客号」两个兜底值、头像非空、stats `db.weibo>0`、`onboardingManual` 手册点击记账），跳过与完成都是 PUT `{onboarding:'0'}` 永久消失；**设置页「保存全部」的 body 收集键清单里不要加 `onboarding`/`onboardingManual`**（整表提交会把引导态重置），smoke.sh 首装段守播种与 PUT 归一化两口
 - editor.js 的 `plugins` 数组是模块级：`mountEditor` 开头清空 + `renderPluginButtons` 按停用名单过滤（ES module import 有缓存，只靠「不 import」卸不掉已加载插件）；路由离开编辑器调 `disposeEditor()` 摘除全局监听与挂起定时器
 - settings 的三个密钥（externalToken/telegramBotToken/telegramWebhookSecret）**GET 与 PUT 响应都打码**，明文只在生成时返回一次；新增敏感键记得进 `SECRET_SETTINGS`
 - 侧边栏菜单由 app.js 顶部 `MENU` 配置数组渲染（分组标签 + 待审徽标），桌面侧栏、移动端底部栏与「更多」抽屉共用同一份数据——**新增后台页面要同时登记 `MENU`、`navigate()` 与 `MOBILE_TAB_IDS`（不放底栏的会自动进抽屉）**，别再往模板里手写 `<a>`

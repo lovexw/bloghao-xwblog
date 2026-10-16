@@ -321,6 +321,82 @@ async function shellView(active, contentHTML) {
 }
 
 /* ---------------- 概览 ---------------- */
+// 新手引导卡（概览页清单卡）：仅首装显示——/api/auth/setup 播种 settings.onboarding='1'，
+// 老站无此键永不出现。完成状态每次进概览实时计算不落库：站名非默认 / 头像非空 /
+// stats 微博计数 / 手册点击（onboardingManual 记账）；「跳过」与「完成引导」都是
+// PUT { onboarding:'0' }，永久消失。设置页「保存全部」body 不含这两个键，引导态不会被整表提交重置
+const ONBOARD_GUIDE_URL = 'https://bloghao.com/docs/guide.html'
+
+async function onboardSetDone(msg) {
+  try {
+    const d = await api('/admin/settings', { method: 'PUT', body: { onboarding: '0' } })
+    state.settings = d.settings
+    toast(msg)
+    navigate()
+  } catch (e) {
+    toast(e.message || '操作失败，请重试', true)
+  }
+}
+
+function onboardCardHtml(s) {
+  const st = state.settings || {}
+  if (st.onboarding !== '1') return ''
+  // 改名判定含设置页「保存全部」的兜底值「博客号」：两者都算没起名
+  const nameDone = !!st.siteName && st.siteName !== '博客号 BlogHao' && st.siteName !== '博客号'
+  const avatarDone = !!st.avatarUrl
+  const weiboDone = ((s.db && s.db.weibo) || 0) > 0
+  const manualDone = st.onboardingManual === '1'
+  const doneCount = [nameDone, avatarDone, weiboDone, manualDone].filter(Boolean).length
+  const allDone = doneCount === 4
+  const rows = [
+    `<div class="onboard-row${nameDone ? ' is-done' : ''}">
+      <span class="onboard-mark">${nameDone ? '✅' : '1'}</span>
+      <div class="onboard-main">
+        ${nameDone
+          ? `<div class="onboard-title">站点名字「${esc(st.siteName)}」已就绪</div>`
+          : `<div class="onboard-title">给站点起个名字</div>
+            <div class="onboard-sub">现在还是默认名，前台、订阅、广场都靠它认人。</div>
+            <div class="onboard-inline"><input class="input" id="onboard-name" maxlength="40" placeholder="给你的博客起个名字" value="${esc(st.siteName || '')}"><button class="btn btn-primary btn-sm" data-act="onboard-name">保存</button></div>`}
+      </div>
+    </div>`,
+    `<div class="onboard-row${avatarDone ? ' is-done' : ''}">
+      <span class="onboard-mark">${avatarDone ? '✅' : '2'}</span>
+      <div class="onboard-main">
+        <div class="onboard-title">${avatarDone ? `站点头像已就绪 <img class="onboard-thumb" src="${esc(st.avatarUrl)}" alt="">` : '换上站点头像'}</div>
+        ${avatarDone ? '' : '<div class="onboard-sub">出现在首页刊头和你的每条评论旁，发布时自动同步到广场。</div>'}
+      </div>
+      ${avatarDone ? '' : '<button class="btn btn-ghost btn-sm" data-act="onboard-avatar">上传头像</button>'}
+    </div>`,
+    `<div class="onboard-row${weiboDone ? ' is-done' : ''}">
+      <span class="onboard-mark">${weiboDone ? '✅' : '3'}</span>
+      <div class="onboard-main">
+        <div class="onboard-title">${weiboDone ? '已发过微博，保持记录 ✍️' : '发一条微博试试'}</div>
+        ${weiboDone ? '' : '<div class="onboard-sub">博客号不止长文，随手记的短内容更适合日常。</div>'}
+      </div>
+      ${weiboDone ? '' : '<a class="btn btn-ghost btn-sm" href="#/weibo">去发微博 →</a>'}
+    </div>`,
+    `<div class="onboard-row${manualDone ? ' is-done' : ''}">
+      <span class="onboard-mark">${manualDone ? '✅' : '4'}</span>
+      <div class="onboard-main">
+        <div class="onboard-title">${manualDone ? '使用手册已打开' : '看一眼使用手册'}</div>
+        ${manualDone ? '' : '<div class="onboard-sub">后台导览、写作流程、设置逐项说明，都在里面。</div>'}
+      </div>
+      ${manualDone ? '' : `<a class="btn btn-ghost btn-sm" href="${ONBOARD_GUIDE_URL}" target="_blank" rel="noopener" data-act="onboard-manual">打开手册 ↗</a>`}
+    </div>`,
+  ].join('')
+  return `<div class="panel onboard">
+    <div class="onboard-head">
+      <div>
+        <div class="onboard-hi">${allDone ? '🎉 全部就绪！' : '👋 欢迎使用博客号'}</div>
+        <div class="onboard-sub">${allDone ? '删掉那篇欢迎文章，写你自己的第一篇吧。' : '花一分钟做完这几步，让博客更像「你的」——做完或不想做，随时可跳过。'}</div>
+      </div>
+      ${allDone ? '<button class="btn btn-primary btn-sm" data-act="onboard-finish">完成引导</button>' : `<span class="chip chip-gray">已完成 ${doneCount}/4</span>`}
+    </div>
+    <div class="onboard-rows">${rows}</div>
+    <div class="onboard-foot"><button class="onboard-skip" data-act="onboard-skip" type="button">跳过引导，不再显示</button></div>
+  </div>`
+}
+
 async function viewHome() {
   let s
   try {
@@ -350,6 +426,7 @@ async function viewHome() {
       <div><div class="page-title">概览</div><div class="page-sub">小院今天的情况</div></div>
       <a class="btn btn-primary" href="#/editor/new">✍️ 写文章</a>
     </div>
+    ${onboardCardHtml(s)}
     <div class="stat-grid">
       <div class="stat-card"><div class="stat-label">已发布文章</div><div class="stat-value">${s.posts}</div></div>
       <div class="stat-card"><div class="stat-label">总阅读</div><div class="stat-value">${s.views}</div></div>
@@ -391,6 +468,55 @@ async function viewHome() {
       purgeBtn.disabled = false
     }
   })
+  // 新手引导卡事件：改名/头像写完 navigate() 重渲染重算；手册是 target=_blank 原生开新页
+  // （浏览器行为，无弹窗拦截问题），点击后异步记账；跳过/完成共用 onboardSetDone
+  const obName = $app.querySelector('[data-act=onboard-name]')
+  if (obName) obName.addEventListener('click', async () => {
+    const input = document.getElementById('onboard-name')
+    const v = input ? input.value.trim() : ''
+    if (!v) return toast('先给站点起个名字吧', true)
+    obName.disabled = true
+    try {
+      const d = await api('/admin/settings', { method: 'PUT', body: { siteName: v } })
+      state.settings = d.settings
+      toast('站点名字已保存 ✅')
+      navigate()
+    } catch (e) {
+      toast(e.message || '保存失败，请重试', true)
+      obName.disabled = false
+    }
+  })
+  const obAvatar = $app.querySelector('[data-act=onboard-avatar]')
+  if (obAvatar) obAvatar.addEventListener('click', () => {
+    pickFiles('image/jpeg,image/png,image/webp,image/gif', false, async (files) => {
+      if (!files[0]) return
+      obAvatar.disabled = true
+      try {
+        const d = await uploadFile(await compressImage(files[0]))
+        const r = await api('/admin/settings', { method: 'PUT', body: { avatarUrl: d.url } })
+        state.settings = r.settings
+        toast('站点头像已更新 ✅')
+        navigate()
+      } catch (e) {
+        toast(e.message || '上传失败，请重试', true)
+        obAvatar.disabled = false
+      }
+    })
+  })
+  const obManual = $app.querySelector('[data-act=onboard-manual]')
+  if (obManual) obManual.addEventListener('click', async () => {
+    if (!state.settings || state.settings.onboardingManual === '1') return
+    try {
+      const d = await api('/admin/settings', { method: 'PUT', body: { onboardingManual: '1' } })
+      state.settings = d.settings
+    } catch { /* 手册记账失败不打扰用户，下次点击再记 */ }
+  })
+  const obSkip = $app.querySelector('[data-act=onboard-skip]')
+  if (obSkip) obSkip.addEventListener('click', async () => {
+    if (await confirmBox('确定跳过新手引导吗？跳过后不再显示。')) await onboardSetDone('已跳过新手引导')
+  })
+  const obFinish = $app.querySelector('[data-act=onboard-finish]')
+  if (obFinish) obFinish.addEventListener('click', () => onboardSetDone('引导完成，开始写作吧 🎉'))
 }
 
 /* ---------------- 访客统计（#/stats，数据来自 /api/admin/visits，见 src/stats.ts） ---------------- */

@@ -195,6 +195,13 @@ api.post('/auth/setup', async (c) => {
       .run()
     const userId = Number(res.meta.last_row_id)
     await seedWelcomePost(c.env.DB, userId)
+    // 新手引导记账位（后台概览页清单卡）：仅首装点亮，老站无此键永不显示；
+    // 裸写 settings 后必须失效共享快照（db.ts 防线）。失败随 catch 释放锁——
+    // 此时用户行已落库，重试会撞「管理员已存在」，但直接登录不受影响，最坏退化为「无引导卡」
+    await c.env.DB
+      .prepare("INSERT INTO settings (key, value) VALUES ('onboarding', '1') ON CONFLICT(key) DO NOTHING")
+      .run()
+    await invalidateSharedSettings(c.env.DB)
     const token = await createSession(c.env.DB, userId)
     c.header('Set-Cookie', sessionCookie(token))
     return c.json({ ok: true, user: { id: userId, username, display_name: body?.displayName || username, avatar: '' } })
@@ -1863,6 +1870,11 @@ const BOOL_SETTINGS = [
   'siteClosed',
   'siteNoindex',
   'membersEnabled',
+  // 新手引导记账位（db.ts DEFAULT_SETTINGS 同注释）：onboarding='1' 引导激活；
+  // onboardingManual='1' 手册已打开。后台设置页「保存全部」不含这两键，别加进去——
+  // 整表提交会把引导态重置
+  'onboarding',
+  'onboardingManual',
 ]
 
 /** 站长 SEO 两项（B20）的后台回显形态：存库是结构化 JSON，输入框按「可粘贴形态」展示

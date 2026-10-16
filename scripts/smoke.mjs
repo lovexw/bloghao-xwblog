@@ -368,6 +368,27 @@ try {
   results.push(['闭站链路：灰度已随恢复撤下', grayscaleOff])
   console.log(`  ${grayscaleOff ? '✓' : '✗'} 闭站链路：灰度已随恢复撤下`)
 
+  // ── 新手引导记账位链路（概览页清单卡，db.ts onboarding 两键）──
+  // 本地库不经 /api/auth/setup（夹具直灌），「首装播种」断言在 docker-poc/smoke.sh 的真实首装段；
+  // 这里验证 Workers 形态下 GET 键在场（DEFAULT_SETTINGS 兜底）与 PUT 布尔归一化两口
+  console.log('\n▸ 新手引导记账位链路')
+  const obGet = await raw('GET', '/api/admin/settings', { headers: { Cookie: cookie } })
+  const obKeyOk = obGet.status === 200 && (await obGet.text()).includes('"onboarding":"')
+  results.push(['引导记账位：GET settings 键在场', obKeyOk])
+  console.log(`  ${obKeyOk ? '✓' : '✗'} 引导记账位：GET settings 键在场`)
+  const obOff = await putSettings({ onboarding: '0' })
+  const obOffOk = obOff.status === 200 && (await obOff.text()).includes('"onboarding":"0"')
+  results.push(['引导记账位：PUT 置 0 回显（跳过/完成口）', obOffOk])
+  console.log(`  ${obOffOk ? '✓' : '✗'} 引导记账位：PUT 置 0 回显（status ${obOff.status}）`)
+  const obOn = await putSettings({ onboarding: 'true', onboardingManual: '1' })
+  const obOnText = await obOn.text()
+  const obOnOk = obOn.status === 200 && obOnText.includes('"onboarding":"1"') && obOnText.includes('"onboardingManual":"1"')
+  results.push(['引导记账位：PUT \'true\' 归一化为 1 + 手册键', obOnOk])
+  console.log(`  ${obOnOk ? '✓' : '✗'} 引导记账位：PUT 'true' 归一化 + 手册键（status ${obOn.status}）`)
+  const obManualOff = await putSettings({ onboardingManual: '0' })
+  results.push(['引导记账位：手册键复位', obManualOff.status === 200])
+  console.log(`  ${obManualOff.status === 200 ? '✓' : '✗'} 引导记账位：手册键复位`)
+
   // ── 微博前台管理链路（登录管理员在 /weibo 页直接编辑/置顶/删除随手记）──
   // 全程用临时数据（新建→置顶→编辑→删除），不碰夹具，可重复运行
   console.log('\n▸ 微博前台管理链路')
