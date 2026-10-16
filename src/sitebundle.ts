@@ -6,8 +6,10 @@
  * （换服务器 / 换域名 / 换 BlogHao 实例，无损）。
  *
  * 三条不可动摇的契约（AGENTS「整站包」防线节，改这里先读）：
- *   ① **只还原到空站**：posts / weibo / pages 三表行数必须全为 0（或上次导入失败留下的残留，
- *      见 bundleImport 记账位），否则明确拒绝——**永不覆盖、永不合并**（不做 id/slug 冲突处理）。
+ *   ① **只还原到空站**：posts / weibo / pages 三表的**未删除**行数必须全为 0（软删除进回收站的
+ *      内容不算「内容」；新站自带的「示例文章」「关于我」两条种子删进回收站即可导入），
+ *      或上次导入失败留下的残留（见 bundleImport 记账位），否则明确拒绝——**永不覆盖、永不合并**
+ *      （不做 id/slug 冲突处理）。
  *   ② **只装内容，不装实例身份**：不含 users（管理员账号属于实例，目标站用它自己的登录）、
  *      不含会话、不含密钥类 settings（SECRET_SETTINGS，唯一来源在 db.ts）+ 实例态键。
  *   ③ **版本不匹配一律拒绝，不猜**：format 严格相等；包里出现当前 schema 没有的表/列 → 降版，
@@ -453,19 +455,36 @@ async function openBundle(env: Env, key: string): Promise<BundleResult<BundleArc
   return { ok: true, value: { src, entries, manifest: m.value } }
 }
 
-/** 空站判定：三表行数全 0；上次导入失败留下的残留（state=failed）允许被本次重试覆盖。
+/** 空站判定（返回「挡路的活内容」描述，空串 = 可以导入）。
+ *  口径 = 三表**未删除**的行数全为 0，不是「一行都没有」——理由见函数内注释（新站自带种子）。
  *  为什么 failed 残留不会变成「覆盖有内容站点」的口子：failed 只能由 markBundleImportFailed 写入，
  *  而它只把 state==='running' 的会话标失败；running 只能由 startBundleImport 写入，而 start 要求空站。
  *  也就是说 —— 存在 failed 残留时，站里那些行**全部是上次自己灌了一半的**，清掉重来正是用户要的。 */
-async function isImportableSite(db: D1Database): Promise<boolean> {
+async function importBlocker(db: D1Database): Promise<string> {
+  // 上次导入失败留下的残留放行（重试 = 重来），理由见 markBundleImportFailed
+  const st = await getBundleImportState(db)
+  if (st.state === 'failed') return ''
+  // 口径是「没有未删除的内容」而不是「一行都没有」：全新装好的站必然自带两条种子——
+  // 欢迎示例文章（/api/auth/setup 的 seedWelcomePost）与「关于我」页面（ensureSchema 的 pagesSeeded）。
+  // 若按「一行都没有」判定，换服务器时的**主用例**（新实例导入）永远用不了：
+  // 刚装好就被自己拦下（2026-10-16 端到端实测发现）。所以站长把这两条种子删进回收站即可导入；
+  // 导入本身会清空全站（含回收站），回收站里的旧内容不会成为漏网的数据损失。
   const c = await db
     .prepare(
-      'SELECT (SELECT COUNT(*) FROM posts) AS p, (SELECT COUNT(*) FROM weibo) AS w, (SELECT COUNT(*) FROM pages) AS g'
+      'SELECT (SELECT COUNT(*) FROM posts WHERE deleted_at IS NULL) AS p,' +
+        ' (SELECT COUNT(*) FROM weibo WHERE deleted_at IS NULL) AS w,' +
+        ' (SELECT COUNT(*) FROM pages WHERE deleted_at IS NULL) AS g'
     )
     .first<{ p: number; w: number; g: number }>()
-  if ((c?.p ?? 0) === 0 && (c?.w ?? 0) === 0 && (c?.g ?? 0) === 0) return true
-  const st = await getBundleImportState(db)
-  return st.state === 'failed'
+  const p = Number(c?.p ?? 0)
+  const w = Number(c?.w ?? 0)
+  const g = Number(c?.g ?? 0)
+  if (!p && !w && !g) return ''
+  const parts: string[] = []
+  if (p) parts.push(`${p} 篇文章`)
+  if (w) parts.push(`${w} 条微博`)
+  if (g) parts.push(`${g} 个页面`)
+  return parts.join(' / ')
 }
 
 /**
@@ -501,10 +520,11 @@ export async function startBundleImport(env: Env, key: string): Promise<BundleRe
     }
   }
 
-  if (!(await isImportableSite(db))) {
+  const blocker = await importBlocker(db)
+  if (blocker) {
     return {
       ok: false,
-      error: '本站已有内容，导入只允许还原到空站；请换一个全新实例，或先清空本站内容',
+      error: `本站还有 ${blocker}，导入只允许还原到「没有内容的站」。若这是刚装好的新站，请先把「示例文章」与「关于我」页面删除（移入回收站）再导入；导入会清空全站内容（含回收站）`,
       status: 400,
     }
   }
@@ -526,19 +546,26 @@ export async function startBundleImport(env: Env, key: string): Promise<BundleRe
   }
 }
 
-/** 多行 INSERT（受单条 SQL 变量上限约束，按行数切句、按条数切批） */
+/** 多行 INSERT（受单条 SQL 变量上限约束，按行数切句、按条数切批）。
+ *  `settings` 是唯一**不清空**的表（密钥 / 实例态键必须留住），所以它必须走 **upsert**——
+ *  目标站自己已有的同名键（siteName / onboarding / pagesSeeded…）会与包里的键撞 UNIQUE(key)，
+ *  裸 INSERT 直接 500（2026-10-16 端到端实测踩到）。其余表在 start 时已清空，裸 INSERT 即可。 */
 async function insertRows(db: D1Database, table: string, rows: Record<string, unknown>[]): Promise<number> {
   if (!rows.length) return 0
   const cols = Object.keys(rows[0])
   if (!cols.length) return 0
   const per = rowsPerStatement(cols.length)
   const tuple = '(' + cols.map(() => '?').join(',') + ')'
+  const upsert =
+    table === 'settings' && cols.includes('key') && cols.includes('value')
+      ? ' ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+      : ''
   const stmts: D1PreparedStatement[] = []
   for (let i = 0; i < rows.length; i += per) {
     const chunk = rows.slice(i, i + per)
     const binds: (string | number | null)[] = []
     for (const r of chunk) for (const c of cols) binds.push(normalizeBindValue(r[c]))
-    const sql = `INSERT INTO ${table} (${cols.join(',')}) VALUES ` + chunk.map(() => tuple).join(',')
+    const sql = `INSERT INTO ${table} (${cols.join(',')}) VALUES ` + chunk.map(() => tuple).join(',') + upsert
     stmts.push(db.prepare(sql).bind(...binds))
   }
   for (let i = 0; i < stmts.length; i += BATCH_STMTS) await db.batch(stmts.slice(i, i + BATCH_STMTS))
@@ -616,7 +643,7 @@ export async function finishBundleImport(env: Env, key: string): Promise<BundleR
 }
 
 /** 步骤失败时记一笔（前端据此提示「重试 = 重来」）。
- *  **只允许把「正在进行的这次导入」标成失败**——`isImportableSite` 对 failed 残留放行（重试 = 重来），
+ *  **只允许把「正在进行的这次导入」标成失败**——`importBlocker` 对 failed 残留放行（重试 = 重来），
  *  所以「done → failed」若可被一次杂散调用翻过去，就等于给出「覆盖有内容站点」的口子。
  *  反过来 failed 残留是安全的：要到达 failed 必须先 running，而 running 只可能从空站开始。 */
 export async function markBundleImportFailed(env: Env, key: string, error: string): Promise<void> {

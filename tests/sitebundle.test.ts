@@ -409,10 +409,12 @@ test('整站包：导出 → 还原到空站，数据与图片完整回来（且
   assert.equal(settingsJson.includes('我的旧站'), true)
 
   // ── 目标站：全新空站，已经装好自己的一套（管理员登录 + 自己的 siteUrl/密钥）──
+  // 故意让 siteName / theme 与包里的键**同名**：settings 是唯一不清空的表，必须走 upsert，
+  // 裸 INSERT 会撞 UNIQUE(key) 直接 500（2026-10-16 端到端实测踩到，本用例守着）
   const dstDb = freshDb()
   dstDb.raw.exec(`
     INSERT INTO users (id, username, display_name, password_hash, salt, created_at, updated_at) VALUES (1, 'admin', '站长', 'h', 's', 0, 0);
-    INSERT INTO settings (key, value) VALUES ('siteUrl', 'https://new.example'), ('externalToken', 'NEW-SECRET'), ('onboarding', '0');
+    INSERT INTO settings (key, value) VALUES ('siteUrl', 'https://new.example'), ('externalToken', 'NEW-SECRET'), ('onboarding', '0'), ('siteName', '目标站自己的站名'), ('theme', 'minimal');
   `)
   const dstR2 = memoryR2()
   const env = envOf(dstDb.d1, dstR2.bucket)
@@ -495,12 +497,60 @@ test('整站包：非空站一律拒绝（永不覆盖、永不合并）', async
   const r = await startBundleImport(envOf(dstDb.d1, dstR2.bucket) as never, key)
   assert.equal(r.ok, false)
   if (!r.ok) {
-    assert.match(r.error, /只允许还原到空站/)
+    assert.match(r.error, /只允许还原到/)
     assert.equal(r.status, 400)
   }
   // 目标站内容分毫未动
   assert.equal(dstDb.raw.prepare('SELECT COUNT(*) AS n FROM posts').get()!.n, 1)
   assert.equal(dstDb.raw.prepare('SELECT title FROM posts WHERE id = 9').get()!.title, '我的文章')
+})
+
+test('整站包：软删除的内容不算「内容」——新站把示例文章与关于我页删进回收站即可导入', async () => {
+  const srcDb = freshDb()
+  seedSource(srcDb.raw)
+  const srcR2 = memoryR2()
+  srcR2.map.set('u/202601/a.jpg', new Uint8Array([1, 2, 3, 4]))
+  const bytes = await drain(await buildBundleStream(envOf(srcDb.d1, srcR2.bucket) as never, 1))
+  const key = `${BUNDLE_PREFIX}seeds.zip`
+
+  const dstDb = freshDb()
+  // 全新装好的站自带两条种子：欢迎示例文章（setup 播种）+「关于我」页面（ensureSchema 播种）
+  dstDb.raw.exec(
+    "INSERT INTO posts (id, slug, title, content, status, created_at, updated_at) VALUES (1, 'hello', '示例文章', '<p>示例</p>', 'published', 1, 1)"
+  )
+  dstDb.raw.exec(
+    "INSERT INTO pages (id, slug, title, content, status, created_at, updated_at) VALUES (1, 'about', '关于我', '<p>关于</p>', 'published', 1, 1)"
+  )
+  const dstR2 = memoryR2()
+  await dstR2.bucket.put(key, bytes)
+  const env = envOf(dstDb.d1, dstR2.bucket)
+
+  // 种子还活着 → 拒绝，且报出「挡路的是什么」（后台直接把这句话显示给站长）
+  const blocked = await startBundleImport(env as never, key)
+  assert.equal(blocked.ok, false)
+  if (!blocked.ok) {
+    assert.equal(blocked.status, 400)
+    assert.match(blocked.error, /1 篇文章/)
+    assert.match(blocked.error, /1 个页面/)
+    assert.match(blocked.error, /移入回收站/)
+  }
+  assert.equal(dstDb.raw.prepare('SELECT COUNT(*) AS n FROM posts').get()!.n, 1)
+
+  // 删进回收站（软删）→ 算空站，可以导入（这是「换服务器」的主用例）
+  dstDb.raw.exec('UPDATE posts SET deleted_at = 123 WHERE id = 1')
+  dstDb.raw.exec('UPDATE pages SET deleted_at = 123 WHERE id = 1')
+  const started = await startBundleImport(env as never, key)
+  assert.equal(started.ok, true)
+  if (!started.ok) return
+  for (const s of started.value.steps) {
+    assert.equal((await runBundleImportStep(env as never, key, s.unit, s.cursor)).ok, true)
+  }
+  assert.equal((await finishBundleImport(env as never, key)).ok, true)
+
+  // 源站内容到位，且目标站原来的回收站残留被清掉（不留 id 冲突的半吊子行）
+  assert.equal(dstDb.raw.prepare('SELECT COUNT(*) AS n FROM posts').get()!.n, 1)
+  assert.equal(dstDb.raw.prepare('SELECT title FROM posts WHERE id = 1').get()!.title, '你好')
+  assert.equal(dstDb.raw.prepare('SELECT deleted_at FROM posts WHERE id = 1').get()!.deleted_at, null)
 })
 
 test('整站包：上次导入失败留下的残留允许被重试覆盖（重试 = 重来）', async () => {
@@ -586,7 +636,7 @@ test('整站包：导入成功后，杂散 step 不能把 done 翻成 failed（�
   // 站点现在有内容了 → 再次 start 必须被拒（内容分毫不动）
   const again = await startBundleImport(env as never, key)
   assert.equal(again.ok, false)
-  if (!again.ok) assert.match(again.error, /只允许还原到空站/)
+  if (!again.ok) assert.match(again.error, /只允许还原到/)
   assert.equal(dstDb.raw.prepare('SELECT COUNT(*) AS n FROM posts').get()!.n, 1)
   assert.equal(dstDb.raw.prepare('SELECT slug FROM posts WHERE id = 1').get()!.slug, 'hello')
 })

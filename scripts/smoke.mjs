@@ -1476,7 +1476,7 @@ try {
       body: JSON.stringify({ key: realKey }),
     })
     const startBody = await startRes.json().catch(() => null)
-    const guardOk = startRes.status === 400 && !!(startBody && /只允许还原到空站/.test(startBody.error || ''))
+    const guardOk = startRes.status === 400 && !!(startBody && /只允许还原到/.test(startBody.error || ''))
     results.push(['整站包：非空站导入被拒（永不覆盖、永不合并）', guardOk])
     console.log(`  ${guardOk ? '✓' : '✗'} 整站包：非空站导入被拒（status ${startRes.status}）`)
 

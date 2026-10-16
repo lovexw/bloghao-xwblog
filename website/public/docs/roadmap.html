@@ -255,7 +255,7 @@
 <tr>
 <td>B26</td>
 <td>✅ 整站包：一键打包整站 + 一键还原（<strong>2026-10-16 立项并落地</strong>，提案 docs/PROPOSAL-B26-SITE-BUNDLE.md）</td>
-<td>「换服务器 / 换域名 / 重新部署」的搬家件——与 Markdown 包 / WXR（带走文章去别家系统）、备份（全表 JSON 只导出不导入）分工不混。<strong>三条契约（站长拍板）</strong>：① <strong>只还原到空站</strong>（posts/weibo/pages 三表全 0，否则 400；永不覆盖、永不合并）② <strong>只装内容不装实例身份</strong>（12 张业务表去掉 users，settings 排除密钥 + 实例态键）③ <strong>版本不匹配一律拒绝不猜</strong>（包里多出当前没有的表/列 = 降版拒绝并报差异；缺当前新增列 = 升版按默认值补）。实现：<code>src/sitebundle.ts</code>（流式导出：表按字节切片 + 图片逐张从 R2 流入；分步导入：一表一分片 / 一批 50 张图）+ <code>src/zip.ts</code> 读取器（Range 读 + DecompressionStream，内存有界）+ 后台「设置 → 整站搬家」；包落 R2 <code>bundles/</code>（不进公开白名单），三条来源归一（后台上传 ≤100MB / <code>wrangler r2 object put</code> / Docker 丢 uploads）。机制与防线见 AGENTS.md「整站包」节，用法见 GUIDE §19</td>
+<td>「换服务器 / 换域名 / 重新部署」的搬家件——与 Markdown 包 / WXR（带走文章去别家系统）、备份（全表 JSON 只导出不导入）分工不混。<strong>三条契约（站长拍板）</strong>：① <strong>只还原到「没有内容的站」</strong>（posts/weibo/pages 三表<strong>未删除</strong>行数为 0——软删进回收站的不算；刚装好的新站先删掉自带的示例文章与「关于我」页面即可导入，否则 400 并报出挡路的内容；永不覆盖、永不合并）② <strong>只装内容不装实例身份</strong>（12 张业务表去掉 users，settings 排除密钥 + 实例态键）③ <strong>版本不匹配一律拒绝不猜</strong>（包里多出当前没有的表/列 = 降版拒绝并报差异；缺当前新增列 = 升版按默认值补）。实现：<code>src/sitebundle.ts</code>（流式导出：表按字节切片 + 图片逐张从 R2 流入；分步导入：一表一分片 / 一批 50 张图）+ <code>src/zip.ts</code> 读取器（Range 读 + DecompressionStream，内存有界）+ 后台「设置 → 整站搬家」；包落 R2 <code>bundles/</code>（不进公开白名单），三条来源归一（后台上传 ≤100MB / <code>wrangler r2 object put</code> / Docker 丢 uploads）。机制与防线见 AGENTS.md「整站包」节，用法见 GUIDE §19</td>
 </tr>
 </tbody></table></div>
 <h3 id="c-区-加分项可有可无">C 区 · 加分项（可有可无）</h3><div class="table-wrap"><table>

@@ -362,12 +362,12 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 | GET | `/api/admin/bundle/export` | 流式下载整站包 zip（`xwblog-site-<北京日期>.zip`）。含 12 张业务表（`BUNDLE_TABLES`，**不含 users**）+ 图床全部图片；`settings` 按键排除密钥类（`SECRET_SETTINGS`）与实例态键（`siteUrl`/`pageCacheEpoch`/`lastBackup*`/`bundleImport`）。全局窗口 2 次/10 分钟（全表 + 全量图片） |
 | POST | `/api/admin/bundle/upload` | 上传整站包（**原始 body 直传**，服务端流式落 R2 不缓冲）→ `{ok, key, size}`。走 100MB 入站体积档位；按 IP 3 次/10 分钟 |
 | GET | `/api/admin/bundle/list` | `{bundles:[{key,size,uploaded}], import:{state,key,at,error}}`——包列表（按上传时间倒序，最多 100 条）与当前导入状态（`idle`/`running`/`failed`/`done`） |
-| POST | `/api/admin/bundle/import/start` | 导入第一步：解析包 → 校验格式版本 → **校验空站** → 清空目标表（`settings` 除外）→ 置 `running`，返回 `{ok, plan:{key,bytes,manifest,steps:[{unit,cursor}]}}`。非空站 400（`posts`/`weibo`/`pages` 三表须全为 0；上次导入失败留下的 `failed` 残留允许重试 = 重来）；包里出现当前没有的表/列（降版）400 并报出差异；包不完整 400；按 IP 3 次/10 分钟 |
+| POST | `/api/admin/bundle/import/start` | 导入第一步：解析包 → 校验格式版本 → **校验空站** → 清空目标表（`settings` 除外）→ 置 `running`，返回 `{ok, plan:{key,bytes,manifest,steps:[{unit,cursor}]}}`。**非空站 400**（`posts`/`weibo`/`pages` 三表的**未删除**行数须全为 0，即 `deleted_at IS NULL`；软删进回收站的不算内容，报错会说明「还有几篇文章 / 几条微博 / 几个页面」；上次导入失败留下的 `failed` 残留允许重试 = 重来）；包里出现当前没有的表/列（降版）400 并报出差异；包不完整 400；按 IP 3 次/10 分钟 |
 | POST | `/api/admin/bundle/import/step` | 导入一步（`{key, unit, cursor}`）：一张表的一个分片，或一批 50 张图片。**必须先 start**（会话 `running` 且 key 对得上，否则 400）；失败记 `failed`（只把 `running` 标失败）。全局窗口 2000 次/10 分钟 |
 | POST | `/api/admin/bundle/import/finish` | 收尾：置 `done` + 清页缓存。同样要求会话 `running` 且 key 匹配 |
 | POST | `/api/admin/bundle/delete` | 删除一个整站包（导入成功后**不自动删**，用户可能还要在别的实例再导一次）。key 必须带 `bundles/` 前缀且无穿越字符 |
 
-契约三条（写死的行为，非设置项）：① **只还原到空站**——永不覆盖、永不合并（不做 id/slug 冲突处理）；② **只装内容不装实例身份**——不含管理员账号与会话、不含各类密钥（新站自己登录、自己填）；③ **版本不匹配一律拒绝不猜**——包比系统新（降版）报错并列出差异，系统比包新（升版）缺的列按默认值补。导入时 `posts.content` / `pages.content` 过 `sanitizeHtml`（其余字段沿用应用自身信任模型）。演示站全部端点 404，闭站时随全局中间件 503。用法见 [GUIDE.md](GUIDE.md) §19，机制与防线见 AGENTS.md「整站包」节
+契约三条（写死的行为，非设置项）：① **只还原到「没有内容的站」**——永不覆盖、永不合并（不做 id/slug 冲突处理）；「没有内容」= `posts`/`weibo`/`pages` 三表没有**未删除**的行（软删进回收站的不算），全新装好的站要先把自带的「示例文章」与「关于我」页面删进回收站（导入会清空全站含回收站）；② **只装内容不装实例身份**——不含管理员账号与会话、不含各类密钥（新站自己登录、自己填）；③ **版本不匹配一律拒绝不猜**——包比系统新（降版）报错并列出差异，系统比包新（升版）缺的列按默认值补。导入时 `posts.content` / `pages.content` 过 `sanitizeHtml`（其余字段沿用应用自身信任模型）。演示站全部端点 404，闭站时随全局中间件 503。用法见 [GUIDE.md](GUIDE.md) §19，机制与防线见 AGENTS.md「整站包」节
 
 ### GET /api/meta/themes
 已注册主题列表 `{themes:[{id,name,description,colors,appearance}]}`，`colors` 为后台皮肤卡预览色板（`[背景, 强调条, 卡面, 卡面2, 卡面3]`，未设置时为 `null`）；`appearance` 是该主题支持的外观变量元信息（角色/默认值/变量名清单/字号基线/圆角旋钮 `{var,default,lgFactor}`/字体预设，B9；后台实时预览用变量名构造同款覆盖样式）。

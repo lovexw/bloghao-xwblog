@@ -56,6 +56,11 @@ Markdown/WXR 是"**带走文章**"（丢评论 / 会员 / 点赞 / 设置）；�
 **永不覆盖、永不合并**——不处理 id / slug 冲突，不做字段级合并，不做部分更新。
 这一条守住，功能就是"小文件级"的；守不住，就得处理冲突矩阵与部分失败回滚，是无底洞。
 
+> **实现修正（2026-10-16，端到端实测发现，见 §十二.4）**：判定的"0 行"必须取
+> **未删除**（`deleted_at IS NULL`）的行——全新装好的站**必然自带两条种子**（欢迎示例文章 +
+> 「关于我」页面），按"一行都没有"判定会让"换服务器"的主用例**永远用不了**（新站刚装好就被自己拦下）。
+> 现口径 = "没有未删除的内容"，报错会说明挡路的是几篇文章 / 几条微博 / 几个页面。
+
 **C2. 包只装"内容"，不装"实例身份"。**
 
 - ✅ 打包与还原（12 张表）：`posts` `pages` `comments` `categories` `post_categories` `weibo`
@@ -279,15 +284,19 @@ POST /api/admin/bundle/import/finish  { key }
 
 ## 十二、落地结果与实现期加固（2026-10-16，回填）
 
-按 §五 清单全部落地。与提案的差异只有三处**加固**（都是实现期发现的守卫缺口，已写进 AGENTS.md「整站包」防线节 + tests/sitebundle.test.ts）：
+按 §五 清单全部落地。与提案的差异是四处**加固 / 修正**（都是实现期与端到端实测发现的缺口，已写进 AGENTS.md「整站包」防线节 + tests/sitebundle.test.ts）：
 
 1. **`runBundleImportStep` / `finishBundleImport` 都必须校验会话**（`bundleImport.state==='running'` 且 key 对得上）。提案只写了「必须先 start」的流程，但没把它做成服务端硬约束——不校验时直接调 `step` 就能绕开空站守卫往有内容的站里灌。冒烟「无会话直接调 step 被拒」守着。
 2. **`markBundleImportFailed` 只允许把 `running` 标成 `failed`**。因为空站判定对 `failed` 残留放行（「重试 = 重来」），若 `done` 能被一次杂散 `step` 调用翻成 `failed`，就等于给出「覆盖有内容站点」的口子。反过来 `failed` 残留是安全的：要到达 `failed` 必须先 `running`，而 `running` 只能从空站开始 —— 即存在 `failed` 残留时，站里那些行**全部是上次自己灌了一半的**。
 3. **图片 key 收集改成 keyset 分页扫**（原提案写法是整表 `SELECT content`）。正文单篇上限 1MB，整表读进 isolate 会打爆 128MB 内存——「内存有界」是硬要求，改成与表导出同一套 `rowid > ?` 分页。
+4. **C1 的判定口径修正为「没有未删除的内容」（`deleted_at IS NULL`）**——这是**端到端实测**才暴露的：全新装好的站必然自带两条种子（`/api/auth/setup` 的欢迎示例文章 + `ensureSchema` 的「关于我」页面），按提案字面的「三表行数全为 0」判定，**「换服务器」的主用例（新站导入）永远用不了**——新实例刚装好就被自己的守卫拦下。现口径 = 软删进回收站的不算内容，站长把两条种子删进回收站即可导入；报错文案也改成直接说明「挡路的是几篇文章 / 几条微博 / 几个页面」。**安全性不降级**：`start` 仍要求「没有活内容」，`failed` 残留的放行仍受 `markBundleImportFailed` 守卫（见第 2 条），且导入本身会清空全站（含回收站），不存在「回收站旧内容成为漏网损失」。
+5. **`settings` 必须走 upsert（`ON CONFLICT(key) DO UPDATE SET value = excluded.value`）**——同样是**端到端实测**才暴露：`settings` 是唯一**不清空**的表（密钥 / 实例态键必须留住），而目标站自己已有的同名键（`siteName`/`theme`/`onboarding`/`pagesSeeded`…）会与包里的键撞 `UNIQUE(key)`，裸多行 INSERT 直接 500（单测当时没撞上，因为目标站夹具的键与包里的键恰好不重名）。语义仍是「包里的键覆盖目标站同名键、目标站独有的键（密钥 / 实例态）原样保留」。
 
 另外两处**实现细节定型**（提案未细到这一层）：
 
 - 包文件名固定 ASCII `xwblog-site-<北京日期>.zip`（无需 RFC 5987 编码），上传落 R2 的 key 追加 6 位随机后缀防同日覆盖。
 - 单表触到 100,000 行上限时，先探一行确认「确实还有数据」才记入 `manifest.truncated`（刚好 10 万行不该误报）。
 
-验证口径（全部本机跑过）：`npm run typecheck` ✓、`npm test` **739/739** ✓、`npm run smoke` **248/249**（唯一失败项是既有的环境性用例「评论属地 dev 样本 cf」——本机 wrangler 注入 `CN/内蒙古` 而断言写死「美国」，与本功能无关）✓、docker-poc 的 `r2disk` 新增面（流式 put + range get）用 Node 直测 9 项全过 ✓（本机无 Docker，`docker-poc/smoke.sh` 未跑，待有 Docker 的机器补一次）。
+验证口径（全部本机跑过）：`npm run typecheck` ✓、`npm test` **740/740** ✓、`npm run smoke` **248/249**（唯一失败项是既有的环境性用例「评论属地 dev 样本 cf」——本机 wrangler 注入 `CN/内蒙古` 而断言写死「美国」，与本功能无关）✓、docker-poc 的 `r2disk` 新增面（流式 put + range get）用 Node 直测 9 项全过 ✓。
+
+**docker-poc（Node/Docker 形态）端到端实跑**：本机无 Docker，但 docker-poc 就是「同一份代码跑在 Node 上」，于是用 esbuild 打出与镜像里完全相同的 `dist/server.js`，起两个非演示租户跑完整搬家链路——源站建管理员 → 传图 → 发带图文章 → 导出整站包 → 目标站建管理员 → **守卫先挡下新站自带的两条种子并报出「1 篇文章 / 1 个页面」** → 按提示删进回收站 → 上传包（**流式落盘**）→ `start` → 逐 `step` → `finish` → 校验文章 / 标签 / 图片（逐字节）都在、非空站二次导入被拒。**第 4、5 两条修正都是这一步发现的**——单测当时全绿，却漏掉了「新站自带种子」与「settings 同名键撞 UNIQUE」这两个只有真实首装链路才会遇到的场景（也顺带验证了 r2disk 的流式 put 与 Range get 在真实链路里可用）。`docker-poc/smoke.sh` 本身未跑（需要 Docker），待有 Docker 的机器补一次。

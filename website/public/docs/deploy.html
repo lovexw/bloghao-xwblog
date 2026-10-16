@@ -210,7 +210,7 @@ docker compose up --build -d     # 镜像约 70MB（node:26-alpine），数据�
 </tr>
 <tr>
 <td><strong>整站搬家</strong>（换服务器 / 换域名 / 重新部署）</td>
-<td>后台「设置 → 整站搬家」：旧站<strong>导出整站包</strong>（含全部内容与图床图片）→ 新站登录后<strong>上传并一键还原</strong>。<strong>只允许还原到空站</strong>（没有文章 / 微博 / 页面），不覆盖不合并；包里不含管理员账号与各类密钥。大站可直接把包传进 R2 再还原：<code>npx wrangler r2 object put xwblog-images/bundles/xwblog-site-2026-10-16.zip --file=./xwblog-site-2026-10-16.zip</code>。详见 <a href="guide.html">GUIDE.md</a> §19</td>
+<td>后台「设置 → 整站搬家」：旧站<strong>导出整站包</strong>（含全部内容与图床图片）→ 新站登录后<strong>上传并一键还原</strong>。<strong>只允许还原到「没有内容的站」</strong>（没有未删除的文章 / 微博 / 页面；刚装好的新站请先把自带的「示例文章」与「关于我」页面删进回收站），不覆盖不合并；包里不含管理员账号与各类密钥。大站可直接把包传进 R2 再还原：<code>npx wrangler r2 object put xwblog-images/bundles/xwblog-site-2026-10-16.zip --file=./xwblog-site-2026-10-16.zip</code>。详见 <a href="guide.html">GUIDE.md</a> §19</td>
 </tr>
 </tbody></table></div>
 <h2 id="9-本地开发">9. 本地开发</h2><div class="codeblock" data-lang="bash"><pre><code>npm run db:init:local   # 初始化 .wrangler/state 下的本地 D1

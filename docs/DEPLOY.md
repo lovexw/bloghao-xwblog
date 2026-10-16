@@ -192,7 +192,7 @@ docker compose up --build -d     # 镜像约 70MB（node:26-alpine），数据�
 | 浏览数据 | Dashboard → Storage & Databases → D1 → xwblog-db → Console |
 | 重置管理员（清空用户重新创建） | `npx wrangler d1 execute DB --remote --command "DELETE FROM users; DELETE FROM sessions;"`，再访问 `/admin/` |
 | 查看图片占用量 | Dashboard → R2 → xwblog-images，或后台「媒体」页 / 概览页 |
-| **整站搬家**（换服务器 / 换域名 / 重新部署） | 后台「设置 → 整站搬家」：旧站**导出整站包**（含全部内容与图床图片）→ 新站登录后**上传并一键还原**。**只允许还原到空站**（没有文章 / 微博 / 页面），不覆盖不合并；包里不含管理员账号与各类密钥。大站可直接把包传进 R2 再还原：`npx wrangler r2 object put xwblog-images/bundles/xwblog-site-2026-10-16.zip --file=./xwblog-site-2026-10-16.zip`。详见 [GUIDE.md](GUIDE.md) §19 |
+| **整站搬家**（换服务器 / 换域名 / 重新部署） | 后台「设置 → 整站搬家」：旧站**导出整站包**（含全部内容与图床图片）→ 新站登录后**上传并一键还原**。**只允许还原到「没有内容的站」**（没有未删除的文章 / 微博 / 页面；刚装好的新站请先把自带的「示例文章」与「关于我」页面删进回收站），不覆盖不合并；包里不含管理员账号与各类密钥。大站可直接把包传进 R2 再还原：`npx wrangler r2 object put xwblog-images/bundles/xwblog-site-2026-10-16.zip --file=./xwblog-site-2026-10-16.zip`。详见 [GUIDE.md](GUIDE.md) §19 |
 
 ## 9. 本地开发
 
