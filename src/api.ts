@@ -94,6 +94,9 @@ import {
   finishBundleImport,
   getBundleImportState,
   markBundleImportFailed,
+  RESET_CONFIRM_PHRASE,
+  resetConfirmOk,
+  resetSiteContent,
   runBundleImportStep,
   startBundleImport,
 } from './sitebundle'
@@ -2221,6 +2224,23 @@ api.post('/admin/bundle/delete', async (c) => {
   }
   await c.env.IMAGES.delete(key)
   return c.json({ ok: true })
+})
+
+/* ---------------- 清空本站内容（整站搬家的准备步骤：把任何站变回「可导入的空站」） ----------------
+ * 与 /admin/bundle/* 同族，但独立成端点（老站想「重新开始」时也能用）。清的表与导入清的是
+ * 同一份常量（src/sitebundle.ts BUNDLE_CLEAR_TABLES）；保留设置 / 管理员账号 / 密钥 / 图床文件。
+ * 不可撤销——服务端硬校验确认语（resetConfirmOk），UI 的输入框只是引导。 */
+
+api.post('/admin/site/reset', async (c) => {
+  // 演示站：体验者凭据公示，一键清站等于把全站（含种子内容）删空且 2 小时才自愈，一律短路
+  if (isDemo(c.env)) return jsonError('演示站不支持清空', 404)
+  if (!rateLimit(`site-reset:${clientIp(c.req.raw)}`, 3, 10 * 60_000)) return jsonError('操作太频繁，请稍后再试', 429)
+  const body = await c.req.json<{ confirm?: string }>().catch(() => null)
+  if (!resetConfirmOk(body?.confirm)) {
+    return jsonError(`确认语不正确：请原样输入「${RESET_CONFIRM_PHRASE}」`, 400)
+  }
+  const r = await resetSiteContent(c.env)
+  return c.json({ ok: true, ...r })
 })
 
 /* ---------------- 密码 ---------------- */

@@ -366,8 +366,9 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 | POST | `/api/admin/bundle/import/step` | 导入一步（`{key, unit, cursor}`）：一张表的一个分片，或一批 50 张图片。**必须先 start**（会话 `running` 且 key 对得上，否则 400）；失败记 `failed`（只把 `running` 标失败）。全局窗口 2000 次/10 分钟 |
 | POST | `/api/admin/bundle/import/finish` | 收尾：置 `done` + 清页缓存。同样要求会话 `running` 且 key 匹配 |
 | POST | `/api/admin/bundle/delete` | 删除一个整站包（导入成功后**不自动删**，用户可能还要在别的实例再导一次）。key 必须带 `bundles/` 前缀且无穿越字符 |
+| POST | `/api/admin/site/reset` | **清空本站内容**（`{confirm}`，必须原样等于 `RESET_CONFIRM_PHRASE = '清空本站'` 否则 400）→ `{ok, cleared:{表:行数}, total, images, imagesDone}`。清 `BUNDLE_CLEAR_TABLES` 11 张业务表（与导入 `start` **同一份常量**，含回收站残留）+ **图床图片**（删的集合 = `collectBundleImageKeys` 与整站包会打包的图同一份口径，**减去**被保留表引用的图 = 站点头像 / 管理员头像），**保留** `settings`/`users`/会话/已上传的整站包（`bundles/`），并把记账位 `bundleImport` 归 `idle`；清完即通过空站守卫可直接导入。**硬删不可撤销**（图片删除是 best-effort，未跑完时 `imagesDone:false`）；演示站 404、按 IP 3 次/10 分钟 |
 
-契约三条（写死的行为，非设置项）：① **只还原到「没有内容的站」**——永不覆盖、永不合并（不做 id/slug 冲突处理）；「没有内容」= `posts`/`weibo`/`pages` 三表没有**未删除**的行（软删进回收站的不算），全新装好的站要先把自带的「示例文章」与「关于我」页面删进回收站（导入会清空全站含回收站）；② **只装内容不装实例身份**——不含管理员账号与会话、不含各类密钥（新站自己登录、自己填）；③ **版本不匹配一律拒绝不猜**——包比系统新（降版）报错并列出差异，系统比包新（升版）缺的列按默认值补。导入时 `posts.content` / `pages.content` 过 `sanitizeHtml`（其余字段沿用应用自身信任模型）。演示站全部端点 404，闭站时随全局中间件 503。用法见 [GUIDE.md](GUIDE.md) §19，机制与防线见 AGENTS.md「整站包」节
+契约三条（写死的行为，非设置项）：① **只还原到「没有内容的站」**——永不覆盖、永不合并（不做 id/slug 冲突处理）；「没有内容」= `posts`/`weibo`/`pages` 三表没有**未删除**的行（软删进回收站的不算），全新装好的站要先把自带的「示例文章」与「关于我」页面删进回收站，或调 `POST /api/admin/site/reset` 一键清空（导入会清空全站含回收站）；② **只装内容不装实例身份**——不含管理员账号与会话、不含各类密钥（新站自己登录、自己填）；③ **版本不匹配一律拒绝不猜**——包比系统新（降版）报错并列出差异，系统比包新（升版）缺的列按默认值补。导入时 `posts.content` / `pages.content` 过 `sanitizeHtml`（其余字段沿用应用自身信任模型）。演示站全部端点 404，闭站时随全局中间件 503。用法见 [GUIDE.md](GUIDE.md) §19，机制与防线见 AGENTS.md「整站包」节
 
 ### GET /api/meta/themes
 已注册主题列表 `{themes:[{id,name,description,colors,appearance}]}`，`colors` 为后台皮肤卡预览色板（`[背景, 强调条, 卡面, 卡面2, 卡面3]`，未设置时为 `null`）；`appearance` 是该主题支持的外观变量元信息（角色/默认值/变量名清单/字号基线/圆角旋钮 `{var,default,lgFactor}`/字体预设，B9；后台实时预览用变量名构造同款覆盖样式）。

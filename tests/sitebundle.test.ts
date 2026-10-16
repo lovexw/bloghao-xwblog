@@ -19,6 +19,9 @@ import {
   markBundleImportFailed,
   normalizeBindValue,
   parseBundleManifest,
+  RESET_CONFIRM_PHRASE,
+  resetConfirmOk,
+  resetSiteContent,
   rowsPerStatement,
   runBundleImportStep,
   sanitizeImportedRow,
@@ -140,8 +143,8 @@ function memoryR2(): MemoryR2 {
       const bytes = map.get(key)
       return bytes ? objectOf(key, bytes, false) : null
     },
-    async delete(key: string) {
-      map.delete(key)
+    async delete(key: string | string[]) {
+      for (const k of Array.isArray(key) ? key : [key]) map.delete(k)
     },
     async list(opts?: { prefix?: string; limit?: number }) {
       const prefix = opts?.prefix ?? ''
@@ -551,6 +554,100 @@ test('整站包：软删除的内容不算「内容」——新站把示例文�
   assert.equal(dstDb.raw.prepare('SELECT COUNT(*) AS n FROM posts').get()!.n, 1)
   assert.equal(dstDb.raw.prepare('SELECT title FROM posts WHERE id = 1').get()!.title, '你好')
   assert.equal(dstDb.raw.prepare('SELECT deleted_at FROM posts WHERE id = 1').get()!.deleted_at, null)
+})
+
+test('清空本站：确认语判定（缺省 / 只写一半 / 非字符串一律不认）', () => {
+  assert.equal(RESET_CONFIRM_PHRASE, '清空本站')
+  assert.equal(resetConfirmOk('清空本站'), true)
+  assert.equal(resetConfirmOk(' 清空本站 '), true) // 两侧空白容忍（前端会 trim）
+  assert.equal(resetConfirmOk('清空'), false)
+  assert.equal(resetConfirmOk('清空本站内容'), false)
+  assert.equal(resetConfirmOk(''), false)
+  assert.equal(resetConfirmOk(undefined), false)
+  assert.equal(resetConfirmOk(null), false)
+  assert.equal(resetConfirmOk(123), false)
+  assert.equal(resetConfirmOk({ confirm: '清空本站' }), false)
+})
+
+test('清空本站：内容清光（含回收站）、设置与管理员账号留住，清完就能导入', async () => {
+  // 源站（要搬走的那个站）
+  const srcDb = freshDb()
+  seedSource(srcDb.raw)
+  const srcR2 = memoryR2()
+  srcR2.map.set('u/202601/a.jpg', new Uint8Array([1, 2, 3, 4]))
+  const bytes = await drain(await buildBundleStream(envOf(srcDb.d1, srcR2.bucket) as never, 1))
+  const key = `${BUNDLE_PREFIX}reset.zip`
+
+  // 目标站：一整套内容 + 管理员 + 密钥 + 实例态键 + 图床里的旧图
+  const dstDb = freshDb()
+  seedSource(dstDb.raw)
+  dstDb.raw.exec(
+    "INSERT INTO users (id, username, display_name, password_hash, salt, avatar, created_at, updated_at) VALUES (1, 'admin', '站长', 'h', 's', '/images/u/avatar.png', 0, 0)"
+  )
+  // 内容里有回收站残留（软删行）：清空必须一并清掉
+  dstDb.raw.exec("INSERT INTO posts (id, slug, title, content, status, created_at, updated_at, deleted_at) VALUES (99, 'trashed', '回收站里的', '<p>x</p>', 'published', 1, 1, 123)")
+  // 站点头像 / 管理员头像也是图床文件（走 /admin/upload，必有 uploads 行），但它们被**保留**的
+  // settings / users 引用着——清空绝不能把这两张删了（否则保留的身份配置全变破图）
+  dstDb.raw.exec(
+    "INSERT INTO uploads (id, key, name, mime, size, created_at, hash) VALUES (3, 'u/avatar.png', 'avatar.png', 'image/png', 4, 1, 'h3'), (4, 'u/logo.png', 'logo.png', 'image/png', 4, 1, 'h4')"
+  )
+  dstDb.raw.exec("INSERT INTO settings (key, value) VALUES ('avatarUrl', '/images/u/logo.png')")
+  const dstR2 = memoryR2()
+  dstR2.map.set('u/202601/a.jpg', new Uint8Array([1, 2, 3, 4]))
+  dstR2.map.set('u/avatar.png', new Uint8Array([5, 5, 5, 5]))
+  dstR2.map.set('u/logo.png', new Uint8Array([6, 6, 6, 6]))
+  const env = envOf(dstDb.d1, dstR2.bucket)
+  await dstR2.bucket.put(key, bytes)
+  const st = (k: string) => (dstDb.raw.prepare('SELECT value FROM settings WHERE key = ?').get(k) as { value: string } | undefined)?.value
+
+  // 清空前：有内容 → 导入被拒（这正是要清空的原因；此时记账位是 seedSource 留的 running）
+  const blocked = await startBundleImport(env as never, key)
+  assert.equal(blocked.ok, false)
+  // 模拟「上次导入失败留下的残留」（那种状态下导入本就允许重试，清空同样要把它归零）
+  dstDb.raw.exec("UPDATE settings SET value = '{\"state\":\"failed\",\"key\":\"x\",\"at\":1,\"error\":\"boom\"}' WHERE key = 'bundleImport'")
+
+  // ── 清空 ──
+  const r = await resetSiteContent(env as never)
+  assert.equal(r.cleared.posts, 2) // 1 篇活着的 + 1 篇回收站残留
+  assert.equal(r.cleared.weibo, 1)
+  assert.equal(r.cleared.pages, 1)
+  assert.equal(r.cleared.comments, 1)
+  assert.equal(r.cleared.members, 1)
+  assert.equal(r.cleared.uploads, 4) // a.jpg / b.png / avatar.png / logo.png
+  assert.equal(r.images, 2) // 只删内容侧的两张：被保留表引用的两张头像排除在外
+  assert.equal(r.imagesDone, true)
+  assert.ok(r.total >= 11)
+
+  // 内容表（含回收站残留）全空
+  for (const t of BUNDLE_TABLES.filter((x) => x !== 'settings')) {
+    assert.equal(dstDb.raw.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get()!.n, 0, `${t} 应被清空`)
+  }
+  // settings / 管理员账号留住（换站不必重新填配置，也不会把自己锁在外面）
+  assert.equal(st('siteName'), '我的旧站')
+  assert.equal(st('theme'), 'paper')
+  assert.equal(st('externalToken'), 'OLD-SECRET-MUST-NOT-LEAK')
+  assert.equal(st('siteUrl'), 'https://old.example')
+  assert.equal(dstDb.raw.prepare('SELECT COUNT(*) AS n FROM users').get()!.n, 1)
+  // 记账位归 idle（failed 残留的放行口子随之消失，界面也不再显示「上次导入失败」）
+  assert.equal((await getBundleImportState(dstDb.d1)).state, 'idle')
+  // 图床文件：内容侧的图删掉（清的集合 = 整站包会打包的集合），**被保留表引用的头像不删**，
+  // 要用的整站包本身也不能误删
+  assert.equal(dstR2.map.has('u/202601/a.jpg'), false)
+  assert.equal(dstR2.map.has('og/202601/b.png'), false)
+  assert.deepEqual([...(dstR2.map.get('u/avatar.png') ?? [])], [5, 5, 5, 5])
+  assert.deepEqual([...(dstR2.map.get('u/logo.png') ?? [])], [6, 6, 6, 6])
+  assert.equal(dstR2.map.has(key), true)
+
+  // ── 清空后：导入不再被空站守卫拦（这就是这个功能的用途）──
+  const started = await startBundleImport(env as never, key)
+  assert.equal(started.ok, true, started.ok ? '' : started.error)
+  if (!started.ok) return
+  for (const s of started.value.steps) assert.equal((await runBundleImportStep(env as never, key, s.unit, s.cursor)).ok, true)
+  assert.equal((await finishBundleImport(env as never, key)).ok, true)
+  assert.equal(dstDb.raw.prepare('SELECT title FROM posts WHERE id = 1').get()!.title, '你好')
+  assert.equal(dstDb.raw.prepare('SELECT COUNT(*) AS n FROM posts').get()!.n, 1)
+  // 新站的图随包回来（清空 → 导入 = 一次干净的换站）
+  assert.deepEqual([...(dstR2.map.get('u/202601/a.jpg') ?? [])], [1, 2, 3, 4])
 })
 
 test('整站包：上次导入失败留下的残留允许被重试覆盖（重试 = 重来）', async () => {

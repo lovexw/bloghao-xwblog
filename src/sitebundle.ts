@@ -5,6 +5,10 @@
  * 与 Markdown 包 / WXR 的分工：那两条是「带走文章」（换别家博客系统），这里是「原样搬家」
  * （换服务器 / 换域名 / 换 BlogHao 实例，无损）。
  *
+ * 配套的 `resetSiteContent`（「清空本站内容」）是「准备导入」的步骤：把任何站变回空站，
+ * 清的表与 `startBundleImport` 是同一份常量，清的图与整站包会打包的图是同一份收集口径；
+ * 保留设置 / 管理员账号 / 密钥 / R2 里已上传的整站包。
+ *
  * 三条不可动摇的契约（AGENTS「整站包」防线节，改这里先读）：
  *   ① **只还原到空站**：posts / weibo / pages 三表的**未删除**行数必须全为 0（软删除进回收站的
  *      内容不算「内容」；新站自带的「示例文章」「关于我」两条种子删进回收站即可导入），
@@ -21,6 +25,7 @@
  * 公开白名单内**），再按 Range 读（src/zip.ts 的读取器），前端分步驱动（每步一次小请求，可重试）。
  */
 import { invalidateSharedSettings, saveSettings, SECRET_SETTINGS, tableColumns } from './db'
+import { collectReferencedKeys } from './audit'
 import { collectImageKeysFromHtml, keyOf } from './export'
 import { purgePageCache } from './pagecache'
 import { sanitizeHtml } from './sanitize'
@@ -95,6 +100,8 @@ const IMAGE_BATCH = 50
 const MAX_BIND_PARAMS = 100
 /** D1 batch 单次语句条数（保守值） */
 const BATCH_STMTS = 50
+/** 单次 R2 delete 的 key 数（绑定支持数组形态，500 是保守值） */
+const R2_DELETE_BATCH = 500
 
 export interface BundleManifest {
   format: number
@@ -236,6 +243,101 @@ export async function getBundleImportState(db: D1Database): Promise<BundleImport
 
 export async function setBundleImportState(db: D1Database, s: BundleImportState): Promise<void> {
   await saveSettings(db, { [BUNDLE_STATE_KEY]: JSON.stringify(s) })
+}
+
+/* ---------------- 清空本站内容（整站搬家的准备步骤，也可独立使用） ---------------- */
+
+/** 清空本站的确认语（服务端硬校验）：后台要求站长原样输入这句话，防误触。
+ *  真正的闸在这里——UI 的输入框只是引导，绕过 UI 直接打接口同样必须对得上这句话。 */
+export const RESET_CONFIRM_PHRASE = '清空本站'
+
+/** 确认语判定（纯函数，Node 直接测）：两侧空白容忍，其余一律不认（缺省 / 数字 / 只写一半都不行） */
+export function resetConfirmOk(v: unknown): boolean {
+  return typeof v === 'string' && v.trim() === RESET_CONFIRM_PHRASE
+}
+
+export interface ResetResult {
+  /** 各表清掉的行数（表名 → 行数，仅用于后台回显） */
+  cleared: Record<string, number>
+  /** 合计行数 */
+  total: number
+  /** 已删除的图床文件数量 */
+  images: number
+  /** 图片清理是否完整跑完（false = 中途失败：站点已清空，剩下的图需要自己在 R2 里清） */
+  imagesDone: boolean
+}
+
+/** 清空后**仍被保留下来的表**（users / settings）引用到的图片 key——它们不能被删：
+ *  `users.avatar`（管理员头像）与 `settings` 里的图片地址（站点头像 `avatarUrl`、页脚自定义 HTML、
+ *  自定义 CSS 的 `url()` 等）都随「保留身份与配置」活着，删了就是一片破图。
+ *  引用识别复用媒体体检的 `audit.ts collectReferencedKeys`（同一份正则口径，纯函数），
+ *  候选集只给要删的 key，命中即排除——不做子串包含判断，天然规避 key 互为前缀的误判。 */
+async function preservedImageKeys(db: D1Database, candidates: string[]): Promise<Set<string>> {
+  if (!candidates.length) return new Set()
+  const texts: string[] = []
+  const users = await db.prepare("SELECT avatar AS v FROM users WHERE avatar LIKE '%/images/%'").all<{ v: string }>()
+  for (const r of users.results ?? []) if (r.v) texts.push(r.v)
+  const settings = await db.prepare("SELECT value AS v FROM settings WHERE value LIKE '%/images/%'").all<{ v: string }>()
+  for (const r of settings.results ?? []) if (r.v) texts.push(r.v)
+  return collectReferencedKeys(candidates, texts)
+}
+
+/**
+ * 一键清空本站内容：把任何站（刚装好的新站 / 装满内容的老站）立刻变回「没有内容的站」，
+ * 于是整站包可以直接导入——省掉「先手动把内容一条条删进回收站」这一步。
+ *
+ * 清的就是 `BUNDLE_CLEAR_TABLES`（= 包里的 11 张业务表，`settings` 除外），与 `startBundleImport`
+ * 清的是**同一份常量、同一个顺序**——两处永远不会漂移，清完必然通过空站守卫。
+ * 图片也一并清：删的对象 = `collectBundleImageKeys` 收集的集合（与**整站包会打包哪些图**同一份
+ * 口径：媒体库 ∪ 正文 / 封面 / 微博引用）**减去**被保留表引用的那些（见 `preservedImageKeys`：
+ * 站点头像 / 管理员头像），等于「把这个包会带走、且清空后不会再被用到的图删掉」。
+ * **保留**：`settings`（站点设置 / 各类密钥 / 实例态键）、`users`（管理员账号与登录态）、会话，
+ * 以及 R2 里 `bundles/` 下已上传的整站包（不在图片 key 白名单内，清空不会误删要用的包）。
+ * 记账位 `bundleImport` 一并归 `idle`：清空后「上次导入失败 / 跑一半」的残留已无意义
+ * （顺带把正在跑的导入会话作废，它的后续 step 会以「会话不存在」正常失败）。
+ *
+ * 顺序是有讲究的：先收集图片 key（清表后就查不到了）→ 清表 → **最后**才删 R2 对象（best-effort）。
+ * 图片删除中途失败最坏只是「图床里留了没人引用的孤儿」（`imagesDone:false` 如实上报），
+ * 绝不会出现「图没了、文章还在」的破站状态。
+ */
+export async function resetSiteContent(env: Env): Promise<ResetResult> {
+  const db = env.DB
+  const cleared: Record<string, number> = {}
+  for (const t of BUNDLE_CLEAR_TABLES) {
+    const row = await db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).first<{ n: number }>()
+    cleared[t] = Number(row?.n ?? 0)
+  }
+  const total = Object.values(cleared).reduce((a, b) => a + b, 0)
+
+  // 图片 key 先收集（清表后就查不到了）：收集 / 排除任何一步抛错就跳过图片清理
+  // ——站点照常清空，宁少删不错删
+  let imageKeys: string[] = []
+  try {
+    const candidates = await collectBundleImageKeys(db)
+    const keep = await preservedImageKeys(db, candidates)
+    imageKeys = candidates.filter((k) => !keep.has(k))
+  } catch {
+    imageKeys = []
+  }
+
+  // 逐表 DELETE（与 startBundleImport 同一份清单）：D1 没有跨语句事务，中途失败会当场抛错，
+  // 后台提示重试即可——本操作幂等，再清一次没有副作用。
+  await db.batch(BUNDLE_CLEAR_TABLES.map((t) => db.prepare(`DELETE FROM ${t}`)))
+  await setBundleImportState(db, { state: 'idle', key: '', at: Date.now() })
+  await purgePageCache(db)
+
+  let images = 0
+  let imagesDone = true
+  try {
+    for (let i = 0; i < imageKeys.length; i += R2_DELETE_BATCH) {
+      const batch = imageKeys.slice(i, i + R2_DELETE_BATCH)
+      await env.IMAGES.delete(batch)
+      images += batch.length
+    }
+  } catch {
+    imagesDone = false
+  }
+  return { cleared, total, images, imagesDone }
 }
 
 /* ---------------- 导出（A 档） ---------------- */
@@ -524,7 +626,7 @@ export async function startBundleImport(env: Env, key: string): Promise<BundleRe
   if (blocker) {
     return {
       ok: false,
-      error: `本站还有 ${blocker}，导入只允许还原到「没有内容的站」。若这是刚装好的新站，请先把「示例文章」与「关于我」页面删除（移入回收站）再导入；导入会清空全站内容（含回收站）`,
+      error: `本站还有 ${blocker}，导入只允许还原到「没有内容的站」。若是刚装好的新站，把自带的「示例文章」与「关于我」页面删除（移入回收站）即可；老站整体换新，先用下方「清空本站内容」把本站清空。导入会清空全站内容（含回收站）`,
       status: 400,
     }
   }

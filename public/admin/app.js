@@ -3474,7 +3474,7 @@ async function viewSettings() {
     </div>
 
     <div class="panel" style="padding:20px;">
-      <div class="form-section"><h3>整站搬家</h3><div class="sec-desc">把整站原样打成一个包带走：全部文章 / 微博 / 页面 / 评论 / 会员 / 分类标签 / 友链 / 图床图片。<b>只允许还原到「没有内容的站」</b>（没有未删除的文章 / 微博 / 页面；刚装好的新站请先把自带的「示例文章」与「关于我」页面删进回收站），<b>不会覆盖、不会合并</b>；包与系统版本不匹配会明确报错，不猜。包里不含管理员账号与各类密钥（新站自己登录、自己填）。换服务器 / 换域名 / 重新部署时用它。</div>
+      <div class="form-section"><h3>整站搬家</h3><div class="sec-desc">把整站原样打成一个包带走：全部文章 / 微博 / 页面 / 评论 / 会员 / 分类标签 / 友链 / 图床图片。<b>只允许还原到「没有内容的站」</b>（没有未删除的文章 / 微博 / 页面；刚装好的新站请先把自带的「示例文章」与「关于我」页面删进回收站，或直接用下面的「清空本站内容」），<b>不会覆盖、不会合并</b>；包与系统版本不匹配会明确报错，不猜。包里不含管理员账号与各类密钥（新站自己登录、自己填）。换服务器 / 换域名 / 重新部署时用它。</div>
         <div class="fav-row">
           <a class="btn" href="/api/admin/bundle/export" download>导出整站包</a>
           <span class="sec-desc">含全部图片，包可能较大，生成需要等一会儿</span>
@@ -3490,6 +3490,10 @@ async function viewSettings() {
         </div>
         <div class="sec-desc" id="bundle-import-state" style="margin-top:10px;">…</div>
         <div class="sec-desc" id="bundle-progress"></div>
+        <div class="fav-row" style="margin-top:14px;">
+          <button class="btn btn-danger" id="btn-site-reset" type="button">清空本站内容</button>
+          <span class="sec-desc">把本站变回「没有内容的空站」：清空全部文章 / 微博 / 页面 / 评论 / 会员等内容 <b>+ 图床里的图片文件</b>，保留站点设置、管理员账号与各类密钥（已上传的整站包也不会被误删）。<b>不可撤销</b>（不是进回收站）。还原前需要清空时用它；想留底请先「导出整站包」。</span>
+        </div>
       </div>
     </div>
     </div>`
@@ -3789,7 +3793,7 @@ async function viewSettings() {
    * 契约：只还原到「没有内容的站」（未删除的文章 / 微博 / 页面为空；新站先删示例文章与关于我页），
    * 永不覆盖 / 合并；版本不匹配由服务端明确报错。 */
   function bundleStateText(st) {
-    if (!st || st.state === 'idle') return '还没有导入过。导入只允许还原到「没有内容的站」——刚装好的新站请先把自带的示例文章与「关于我」页面删除（进回收站即可）再点「开始还原」。'
+    if (!st || st.state === 'idle') return '还没有导入过。导入只允许还原到「没有内容的站」——刚装好的新站请先把自带的示例文章与「关于我」页面删除（进回收站即可），或直接点下面的「清空本站内容」，再点「开始还原」。'
     const at = st.at ? fmtDateTime(st.at) : ''
     if (st.state === 'running') return `上次导入没跑完（${at}）——再点「开始还原」即可，还原是「从头重来」语义。`
     if (st.state === 'failed') return `上次导入失败（${at}）：${st.error || '未知原因'}——修好后再点「开始还原」会从头重来。`
@@ -3931,6 +3935,50 @@ async function viewSettings() {
     }
     btn.disabled = false
     btn.textContent = '开始还原'
+  })
+
+  /* 「清空本站内容」：不可撤销的清库操作，走「输入确认语」的强确认（服务端硬校验同一句话，
+   * 这里的输入框只是引导）。清内容 + 图床图片，保留设置 / 管理员账号 / 密钥 / 已上传的整站包
+   * ——与服务端 resetSiteContent 同口径。 */
+  const RESET_PHRASE = '清空本站' // 镜像 src/sitebundle.ts 的 RESET_CONFIRM_PHRASE（真正的闸在服务端）
+  document.getElementById('btn-site-reset').addEventListener('click', () => {
+    const m = modal(`<div class="modal-head"><span>清空本站内容</span><button class="modal-close" data-close type="button" aria-label="关闭">×</button></div>
+      <div class="modal-body">
+        <p style="margin:0 0 10px;">这会把本站<b>全部内容彻底清空</b>：文章 / 微博 / 独立页面 / 评论 / 分类标签 / 友链 / 会员与积分记录，以及<b>图床里的图片文件</b>（含微博视频）。<b>不可撤销</b>（不是移入回收站，没有 30 天可恢复）。</p>
+        <p style="margin:0 0 10px;">会<b>保留</b>：站点设置、管理员账号与登录密码、各类密钥，以及<b>已上传的整站包</b>（R2 的 <code>bundles/</code>，清空不会误删你要用来还原的包）。<b>站点头像与管理员头像的图片也会保留</b>（它们跟着设置 / 账号一起留着）。</p>
+        <p style="margin:0 0 6px;">确定要继续，请在下面原样输入 <code>${esc(RESET_PHRASE)}</code>：</p>
+        <input class="input" id="site-reset-confirm" style="width:100%;" autocomplete="off" placeholder="${esc(RESET_PHRASE)}">
+        <div class="sec-desc" style="margin-top:8px;">想留底的话，先取消、点上面的「导出整站包」。</div>
+      </div>
+      <div class="modal-foot"><button class="btn" data-close type="button">取消</button><button class="btn btn-danger" id="site-reset-go" type="button" disabled>确认清空</button></div>`)
+    const input = m.mask.querySelector('#site-reset-confirm')
+    const go = m.mask.querySelector('#site-reset-go')
+    input.addEventListener('input', () => {
+      go.disabled = input.value.trim() !== RESET_PHRASE
+    })
+    input.addEventListener('keydown', (e) => {
+      // 中文输入法组词回车不算提交（全站同口径）
+      if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && !go.disabled) go.click()
+    })
+    go.addEventListener('click', async () => {
+      go.disabled = true
+      go.textContent = '清空中…'
+      try {
+        const r = await api('/admin/site/reset', { method: 'POST', body: { confirm: input.value.trim() } })
+        m.close()
+        const parts = [`${r.total || 0} 行数据`]
+        if (r.images) parts.push(`${r.images} 个图床文件`)
+        const tail = r.imagesDone === false ? '（图片清理没跑完，剩下的需在 R2 里自行清理）' : ''
+        toast(`本站内容已清空：${parts.join(' / ')} ✅${tail}`)
+        const prog = document.getElementById('bundle-progress')
+        if (prog) prog.textContent = ''
+        await refreshBundleList().catch(() => {})
+      } catch (e) {
+        toast(e.message, true)
+        go.disabled = false
+        go.textContent = '确认清空'
+      }
+    })
   })
 
   // 演示站该区不可用（服务端 404），静默即可；api() 只在 401 时弹 toast，这里再兜一层

@@ -1495,6 +1495,29 @@ try {
     results.push(['整站包：被拒后站点内容分毫未动', untouched])
     console.log(`  ${untouched ? '✓' : '✗'} 整站包：被拒后站点内容分毫未动（status ${stillThere.status}）`)
 
+    // 「清空本站内容」（空站守卫的配套）两道闸：未登录 401 / 确认语不对 400。
+    // 真清空**不在冒烟里跑**——它会毁掉本地开发库的内容（happy path 由 tests/sitebundle.test.ts 覆盖，
+    // 那里用内存库跑「清空 → 导入成功」的完整链路）。
+    const anonReset = await raw('POST', '/api/admin/site/reset', {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: '清空本站' }),
+    })
+    const badReset = await raw('POST', '/api/admin/site/reset', {
+      headers: jsonHeaders,
+      body: JSON.stringify({ confirm: '清空' }),
+    })
+    const resetGuardOk = anonReset.status === 401 && badReset.status === 400
+    results.push(['整站包：清空本站 未登录 401 / 确认语错 400', resetGuardOk])
+    console.log(
+      `  ${resetGuardOk ? '✓' : '✗'} 整站包：清空本站守卫（未登录 ${anonReset.status} / 确认语错 ${badReset.status}）`
+    )
+
+    // 确认语不对时绝不能动数据（这类「不可撤销」端点的典型事故就是参数校验放在删除之后）
+    const afterBad = await raw('GET', bypassUrl('/post/smoke-multi-tag'))
+    const notWiped = afterBad.status === 200
+    results.push(['整站包：清空本站确认语错时内容分毫未动', notWiped])
+    console.log(`  ${notWiped ? '✓' : '✗'} 整站包：清空本站确认语错时内容分毫未动（status ${afterBad.status}）`)
+
     // 清理：删掉本次上传的两个包，列表随之消失
     const del = (key) =>
       raw('POST', '/api/admin/bundle/delete', { headers: jsonHeaders, body: JSON.stringify({ key }) })
