@@ -568,6 +568,7 @@ export async function mountEditor(root, postId, opts = {}) {
     og_image: '',
     minTier: 'all',
     hasPassword: false,
+    ai_generated: 0,
   }
   if (postId) {
     const d = await api(`/admin/posts/${postId}`)
@@ -703,6 +704,10 @@ export async function mountEditor(root, postId, opts = {}) {
       <div id="ed-schedule-picker" style="display:none;">
         <input class="input" type="datetime-local" id="ed-publish-at" step="60">
         <div style="font-size:12px;color:var(--sub);margin-top:6px;">北京时间，精确到分钟；到点后 1 分钟内自动发布</div>
+      </div>
+      <div class="switch-row">
+        <div><div class="switch-label">AI 生成</div><div class="switch-sub">自愿申报：本文由 AI 生成或 AI 深度参与创作，勾选后文章页显示标注</div></div>
+        <label class="switch"><input type="checkbox" id="ed-ai" ${post.ai_generated ? 'checked' : ''}><span class="track"></span></label>
       </div>
 
       <div class="drawer-title">分享卡图</div>
@@ -950,6 +955,7 @@ export async function mountEditor(root, postId, opts = {}) {
       categoryId: catVal ? Number(catVal) : null,
       pinned: document.getElementById('ed-pinned').checked,
       minTier: document.getElementById('ed-min-tier').value,
+      aiGenerated: document.getElementById('ed-ai').checked ? 1 : 0,
       slug: document.getElementById('ed-slug').value.trim(),
       status: post.status,
       publishAt: post.publish_at,

@@ -606,6 +606,8 @@ export async function renderPost(c: C): Promise<Response> {
       readingMinutes: readingMinutes(row.content),
       minTier,
       locked,
+      // AI 生成标注（编辑器自愿申报）：<人工智能生成合成内容标识办法> 显式标识口径，meta 行输出
+      aiGenerated: !!row.ai_generated,
     },
     category: categoryRow ? { name: categoryRow.name, slug: categoryRow.slug } : null,
     categories,

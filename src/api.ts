@@ -583,6 +583,7 @@ async function readPostPayload(c: { req: { json: () => Promise<unknown> } }) {
     categoryId: 'categoryId' in b,
     minTier: 'minTier' in b,
     password: 'password' in b,
+    aiGenerated: 'aiGenerated' in b,
   }
   const tags = Array.isArray(b.tags)
     ? b.tags
@@ -612,6 +613,8 @@ async function readPostPayload(c: { req: { json: () => Promise<unknown> } }) {
     // 访问密码（src/protect.ts）：仅在键存在时参与写入；空串 = 解除加密，缺键 = 保持现状。
     // 明文只在本次请求内存在，落库前即转 PBKDF2，响应里永远只有 hasPassword 布尔
     password: String(b.password ?? '').slice(0, 64),
+    // AI 生成标注（编辑器「更多」自愿申报）：缺键 = 保持现状（列表页状态切换的 {status} 载荷不会误清）
+    aiGenerated: b.aiGenerated ? 1 : 0,
     has,
   }
 }
@@ -727,8 +730,8 @@ api.post('/admin/posts', async (c) => {
   // 自动摘要取净化后的正文（与 PUT 更新同口径：粘贴内容里的标签/实体不进导读面）
   const clean = sanitizeHtml(p.content)
   const res = await c.env.DB.prepare(
-    `INSERT INTO posts (slug, title, content, summary, cover, tags, status, pinned, author_id, published_at, publish_at, min_tier, password_hash, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO posts (slug, title, content, summary, cover, tags, status, pinned, author_id, published_at, publish_at, min_tier, password_hash, ai_generated, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       slug,
@@ -746,6 +749,7 @@ api.post('/admin/posts', async (c) => {
       p.status === 'scheduled' ? (p.publishAt ?? null) : null,
       p.minTier,
       passwordHash,
+      p.aiGenerated,
       now,
       now
     )
@@ -840,8 +844,10 @@ api.put('/admin/posts/:id', async (c) => {
   if (status === 'scheduled' && publishAt == null) return jsonError('定时发布必须填写发布时间')
   // 访问密码：键存在才参与（空串解除、非空设置/更换），缺键保持原值——自动安全永远不误清
   const passwordHash = p.has.password ? (p.password ? await hashPostPassword(p.password) : '') : existing.password_hash || ''
+  // AI 生成标注：同缺键即保留口径（列表页只发 {status} 的 PUT 不得误清）
+  const aiGenerated = p.has.aiGenerated ? p.aiGenerated : (existing.ai_generated ?? 0)
   await c.env.DB.prepare(
-    `UPDATE posts SET slug = ?, title = ?, content = ?, summary = ?, cover = ?, tags = ?, status = ?, pinned = ?, published_at = ?, publish_at = ?, min_tier = ?, password_hash = ?, updated_at = ? WHERE id = ?`
+    `UPDATE posts SET slug = ?, title = ?, content = ?, summary = ?, cover = ?, tags = ?, status = ?, pinned = ?, published_at = ?, publish_at = ?, min_tier = ?, password_hash = ?, ai_generated = ?, updated_at = ? WHERE id = ?`
   )
     .bind(
       slug,
@@ -856,6 +862,7 @@ api.put('/admin/posts/:id', async (c) => {
       publishAt,
       minTier,
       passwordHash,
+      aiGenerated,
       Date.now(),
       id
     )

@@ -70,6 +70,8 @@ export interface PostRow {
   min_tier?: string
   /** 访问密码（src/protect.ts）：salt:hash（PBKDF2），空 = 未加密；不进任何后台响应 */
   password_hash?: string
+  /** AI 生成标注（编辑器「更多」自愿申报，0/1）：1 = 文章页 meta 行显示 AI 生成标识；老库 ALTER 补列前可能缺省 */
+  ai_generated?: number
   created_at: number
   updated_at: number
   /** 回收站：非 NULL = 已移入回收站（毫秒），NULL = 存活（src/trash.ts） */

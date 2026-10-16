@@ -977,6 +977,37 @@ try {
     await raw('DELETE', `/api/admin/trash/post/${pwId}`, { headers: { Cookie: cookie } })
   }
 
+  // AI 生成标注链路（显式标识口径）：建文带 aiGenerated → 只发 {status} 的 PUT（列表页真实载荷）不得误清
+  // → 后台出参带 ai_generated:1 → 文章页 meta 行渲染「AI 生成」标注 → 清理
+  const aiCreate = await raw('POST', '/api/admin/posts', {
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({
+      title: '冒烟：AI 生成标注',
+      content: '<p>冒烟 AI 标注正文</p>',
+      status: 'draft',
+      aiGenerated: 1,
+    }),
+  })
+  const aiCreated = await aiCreate.json().catch(() => null)
+  const aiId = aiCreated?.post?.id
+  results.push(['AI 标注：建文带 aiGenerated', aiCreate.status === 200 && !!aiId])
+  console.log(`  ${aiCreate.status === 200 && !!aiId ? '✓' : '✗'} AI 标注：建文带 aiGenerated（id ${aiId}）`)
+  if (aiId) {
+    const aiCookie = { headers: { Cookie: cookie } }
+    const aiToggle = await raw('PUT', `/api/admin/posts/${aiId}`, {
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ status: 'published' }),
+    })
+    await check('GET', `/api/admin/posts/${aiId}`, 200, '"ai_generated":1', aiCookie)
+    await check('GET', `/post/${aiCreated?.post?.slug}`, 200, 'AI 生成')
+    const aiMarkOk = aiToggle.status === 200
+    results.push(['AI 标注：缺键 PUT 保留 + 文章页渲染', aiMarkOk])
+    console.log(`  ${aiMarkOk ? '✓' : '✗'} AI 标注：缺键 PUT 保留 + 文章页渲染`)
+    // 清理：软删 + 彻底删除（不碰夹具，可重复运行）
+    await raw('DELETE', `/api/admin/posts/${aiId}`, { headers: { Cookie: cookie } })
+    await raw('DELETE', `/api/admin/trash/post/${aiId}`, { headers: { Cookie: cookie } })
+  }
+
   // 后台会员管理：未登录一律 401（路由必须注册在 /admin/* 鉴权中间件之后）→ 搜索 → 拉黑（会话即刻失效 + 登录 403 banned）→ 恢复 active（下轮可复用）
   await check('GET', '/api/admin/members', 401, '请先登录')
   await check('PUT', '/api/admin/members/1', 401, '请先登录', {

@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS posts (
   published_at INTEGER,
   publish_at   INTEGER,                -- 定时发布时间：到点由 Cron 翻成 published（src/scheduler.ts）
   password_hash TEXT   NOT NULL DEFAULT '', -- 访问密码（src/protect.ts）：salt:hash（PBKDF2），空 = 未加密；与 min_tier 并存，密码墙优先
+  ai_generated INTEGER NOT NULL DEFAULT 0, -- AI 生成标注（编辑器「更多」自愿申报，勾选后文章页 meta 行显示标识；PUT 缺键即保留同 password 口径）
   created_at   INTEGER NOT NULL,
   updated_at   INTEGER NOT NULL,
   deleted_at   INTEGER                 -- 回收站：非 NULL = 已移入回收站（30 天后 cron 彻底清除，src/trash.ts）

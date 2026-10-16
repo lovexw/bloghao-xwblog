@@ -961,6 +961,8 @@ const SCHEMA_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: 'posts', column: 'min_tier', ddl: "ALTER TABLE posts ADD COLUMN min_tier TEXT NOT NULL DEFAULT 'all'" },
   // 文章访问密码（src/protect.ts）：salt:hash（PBKDF2），空 = 未加密；解锁 Cookie 的 HMAC key 就用它
   { table: 'posts', column: 'password_hash', ddl: "ALTER TABLE posts ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''" },
+  // AI 生成标注（编辑器「更多」自愿申报，<人工智能生成合成内容标识办法> 显式标识口径）：0/1，前台文章页 meta 行显示
+  { table: 'posts', column: 'ai_generated', ddl: 'ALTER TABLE posts ADD COLUMN ai_generated INTEGER NOT NULL DEFAULT 0' },
   // 会员昵称 30 天一次修改窗口（src/utils.ts nicknameCooldown）：NULL = 从未改过，首次修改不受限
   { table: 'members', column: 'display_name_changed_at', ddl: 'ALTER TABLE members ADD COLUMN display_name_changed_at INTEGER' },
   // 评论头像（C2）：绑定的 QQ 号，仅头像抓取记账位——任何公开出参不携带（头像走站内转存，见 members.avatar）

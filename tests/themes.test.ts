@@ -189,6 +189,12 @@ for (const [themeId, theme] of Object.entries(THEMES as Record<string, ThemeModu
     assert.ok(!html.includes('pn-nav'), `${themeId}.post 未传 prev/next 不渲染相邻导航`)
   })
 
+  test(`${themeId}: post 渲染（AI 生成标注：勾选才出，缺省输出不变）`, () => {
+    const ai = theme.post({ ...postData(), post: { ...postData().post, aiGenerated: true } })
+    assert.ok(ai.includes('AI 生成'), `${themeId}.post 勾选 aiGenerated 应在 meta 行渲染 AI 生成标注`)
+    assert.ok(!theme.post(postData()).includes('AI 生成'), `${themeId}.post 缺省不渲染 AI 标注（未设置 = 输出不变）`)
+  })
+
   test(`${themeId}: post 渲染分享按钮（canonical 链接 + QR 矩阵位串无损下发）`, () => {
     const d = postData()
     d.share = { url: 'https://blog.xiaowuleyi.com/post/hello?a=1&b=2', qr: packMatrix(qrMatrix('https://blog.xiaowuleyi.com/post/hello')!) }
