@@ -130,7 +130,7 @@ hub 的表定义唯一来源 `plaza/schema.sql`（sites / items / likes / site_s
 **两个安全配置**（未配也能跑，但建议配齐）：
 
 - `PLAZA_HASH_SECRET`：点赞/曝光的 IP/vid 天级哈希私盐。设了走 `HMAC-SHA256`（库泄露也无法枚举还原）；Workers 用 `wrangler secret put` 注入，**Node 形态（demo/hub-node）未设时会自动生成一枚并落盘到数据目录**（`<DB 目录>/hash-secret`，重启不变），所以自托管形态默认即私盐。改它只影响「当天」去重（一天内可能重复计 1 次），属可接受代价。
-- `TRUST_PROXY`（Node 形态）：访客 IP 信任档位，与 docker-poc 同口径同默认——`proxy`（默认，Caddy/Nginx 反代后取 XFF 末跳，**剥掉客户端自带的 `cf-connecting-ip` / `x-real-ip`**）、`cf`（前有 Cloudflare）、`off`（Node 直接暴露）。**档位必须与真实部署一致**，否则客户端伪造转发头即可重置按 IP 的点赞去重与限流桶。
+- `TRUST_PROXY`（Node 形态）：访客 IP 信任档位，与 docker-poc 同口径同默认——`proxy`（默认，Caddy/Nginx 反代后取 XFF 末跳，**剥掉客户端自带的 `cf-connecting-ip` / `x-real-ip`**）、`cf`（前有 Cloudflare）、`off`（Node 直接暴露）。**档位必须与真实部署一致**，否则客户端伪造转发头即可重置按 IP 的点赞去重与限流桶。**官方 hub 用 `cf`**（bloghao.com 走 Cloudflare 代理、Caddy 回源，Caddy 末跳会落到 CF 边缘 IP，同边缘用户会互相挤掉点赞——所以取 CF 写入的 `cf-connecting-ip` 才是真客户端 IP）；官方部署的 compose 里显式设 `TRUST_PROXY=cf`。**注意**：官方源站 IP 可被直连（绕过 CF），`cf` 档下 `cf-connecting-ip` 理论上可被直连请求伪造——建议用防火墙把源站 80/443 收窄到 Cloudflare 回源段（与本仓库无关的服务器运维项）。
 
 ## docker-poc 自托管分站的自动收录（2026-10-16）
 
