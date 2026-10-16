@@ -12,12 +12,17 @@ import { Hono } from 'hono'
 import type { Context } from 'hono'
 import { cors } from 'hono/cors'
 import {
+  cleanVid,
+  daySaltedHash,
   generatePlazaToken,
   normalizePulledWeibo,
   parseRssItems,
+  parseRssSiteTitle,
   rssDateToMs,
   scoreFeed,
+  spotlightWeight,
   statsDay,
+  validateBeaconEvents,
   validateIngest,
   verifyPlazaSignature,
   type PlazaFeedEntry,
@@ -45,9 +50,12 @@ interface SiteRow {
 
 const app = new Hono<{ Bindings: Env }>()
 
-/** 公开 API 统一 CORS：官网前台 fetch 用（无 Cookie 面开放 CORS 无风险；管理端点不在此列） */
+/** 公开 API 统一 CORS：官网前台 fetch 用（无 Cookie 面开放 CORS 无风险；管理端点与 site-stats 不在此列） */
 app.use('/api/feed', cors())
 app.use('/api/sites', cors())
+// 轻互动（P2）是 POST 但同样无 Cookie 面匿名计数：官网同域直用，开 CORS 兼容自建 hub 跨域页面
+app.use('/api/like', cors())
+app.use('/api/beacon', cors())
 
 /* ---------------- 调用统计（每日一行，供 ops 控制面 /api/admin/stats 出全局数据） ---------------- */
 
@@ -65,6 +73,35 @@ async function bumpStats(db: Env['DB'], field: StatsField, n = 1): Promise<void>
   } catch {
     /* 库异常吞掉：少计一次无所谓，别影响 feed/ingest 本身 */
   }
+}
+
+/** 站点级互动日聚合 +n（P2）：views/clicks/likes 三个字段白名单收口，失败静默同 bumpStats */
+type SiteStatsField = 'views' | 'clicks' | 'likes'
+async function bumpSiteStats(db: Env['DB'], siteId: number, field: SiteStatsField, n: number): Promise<void> {
+  try {
+    await db
+      .prepare(
+        `INSERT INTO site_stats (day, site_id, ${field}) VALUES (?, ?, ?)
+         ON CONFLICT(day, site_id) DO UPDATE SET ${field} = ${field} + ?`
+      )
+      .bind(statsDay(), siteId, n, n)
+      .run()
+  } catch {
+    /* 少计一次无所谓 */
+  }
+}
+
+/**
+ * 访客 IP：Workers 用 cf-connecting-ip（平台侧可信）；Node 容器在 Caddy 反代后，
+ * 取 X-Forwarded-For 最后一跳（Caddy 追加的真实来源，与 docker-poc TRUST_PROXY=proxy 同口径）。
+ * 拿不到归并 0.0.0.0 共桶——限流宁紧勿松，真实部署两种形态都有可信头。
+ */
+function ipOf(c: Context<{ Bindings: Env }>): string {
+  const cf = (c.req.header('cf-connecting-ip') || '').trim()
+  if (cf) return cf
+  const xff = c.req.header('x-forwarded-for') || ''
+  const hops = xff.split(',').map((s) => s.trim()).filter(Boolean)
+  return hops[hops.length - 1] || '0.0.0.0'
 }
 
 /** 管理面鉴权：Bearer PLAZA_ADMIN_TOKEN（hub 站长单管理员，与目录人工审核同一信任模型）。
@@ -158,23 +195,39 @@ async function readBodyLimited(res: Response, maxBytes: number): Promise<ArrayBu
 
 /* ---------------- 公开面 ---------------- */
 
-/** feed：混排出参。candidates 取最近 300 条（量纲按社区几百站设计，够用很久） */
+/** feed：混排出参。candidates 取最近 300 条（量纲按社区几百站设计，够用很久）。
+ *  P0.1 起支持 ?site=N 站点视图（官网站点页数据面）；聚光期站点（P0.4）weight 临时 +2 档 */
 app.get('/api/feed', async (c) => {
   await ensureSchemaExtras(c.env.DB)
   c.header('Cache-Control', 'public, max-age=60')
   const limit = Math.max(1, Math.min(100, Number(c.req.query('limit')) || 30))
   const kind = c.req.query('kind')
   const kindFilter = kind === 'post' || kind === 'weibo' ? kind : null
+  // site 参数：正整数才进过滤，其余按没传处理（不 400——与 kind 非法值同口径）
+  const siteQ = Number(c.req.query('site'))
+  const siteFilter = Number.isInteger(siteQ) && siteQ > 0 ? siteQ : null
+  let site: { id: number; name: string; url: string; avatar: string; verified: number; createdAt: number } | null = null
+  if (siteFilter) {
+    const row = await c.env.DB.prepare(
+      'SELECT id, site_name AS name, site_url AS url, avatar, verified, created_at AS createdAt, disabled FROM sites WHERE id = ?'
+    )
+      .bind(siteFilter)
+      .first<{ id: number; name: string; url: string; avatar: string; verified: number; createdAt: number; disabled: number }>()
+    // 查无此站 / 已停用一律 404 不透露细节；站点视图需要站名/头像/主址渲染页头
+    if (!row || row.disabled) return c.json({ error: 'site not found' }, 404)
+    site = { id: row.id, name: row.name, url: row.url, avatar: row.avatar, verified: row.verified, createdAt: row.createdAt }
+  }
   const sql = `
-    SELECT i.kind, i.ref, i.title, i.summary, i.url, i.image, i.published_at AS publishedAt,
-           s.id AS siteId, s.site_name AS siteName, s.site_url AS siteUrl,
+    SELECT i.id, i.kind, i.ref, i.title, i.summary, i.url, i.image, i.published_at AS publishedAt, i.likes,
+           s.id AS siteId, s.site_name AS siteName, s.site_url AS siteUrl, s.created_at AS siteCreatedAt,
            s.avatar AS siteAvatar, s.verified AS siteVerified, s.weight AS siteWeight
     FROM items i JOIN sites s ON s.id = i.site_id
-    WHERE s.disabled = 0 AND i.hidden = 0 ${kindFilter ? 'AND i.kind = ?' : ''}
+    WHERE s.disabled = 0 AND i.hidden = 0 ${kindFilter ? 'AND i.kind = ?' : ''} ${siteFilter ? 'AND s.id = ?' : ''}
     ORDER BY i.published_at DESC LIMIT 300`
   const { results } = await c.env.DB.prepare(sql)
-    .bind(...(kindFilter ? [kindFilter] : []))
+    .bind(...[kindFilter, siteFilter].filter((v): v is string | number => v !== null))
     .all<{
+      id: number
       kind: PlazaItem['kind']
       ref: string
       title: string
@@ -182,12 +235,16 @@ app.get('/api/feed', async (c) => {
       url: string
       image: string
       publishedAt: number
+      likes: number
       siteId: number
       siteName: string
       siteUrl: string
+      siteCreatedAt: number
+      siteAvatar: string
       siteVerified: number
       siteWeight: number
     }>()
+  const now = Date.now()
   const feed: PlazaFeedEntry[] = scoreFeed(
     (results ?? []).map((r) => ({
       // scoreFeed 的入参是 { item, siteId, … } 包裹形状，SQL 扁平行要按契约组装
@@ -200,29 +257,51 @@ app.get('/api/feed', async (c) => {
         image: r.image,
         publishedAt: r.publishedAt,
       },
+      id: r.id,
+      likes: r.likes,
       siteId: r.siteId,
       siteName: r.siteName,
       siteUrl: r.siteUrl,
       siteAvatar: r.siteAvatar || '',
       siteVerified: r.siteVerified === 1,
-      siteWeight: r.siteWeight,
+      // 新站聚光（P0.4）：7 天内注册的站 weight 临时 +2 档（封顶 10），评分前套用
+      siteWeight: spotlightWeight(r.siteWeight, r.siteCreatedAt, now),
     })),
     limit
   )
   await bumpStats(c.env.DB, 'feed_hits')
-  return c.json({ feed })
+  return c.json({
+    feed,
+    ...(site
+      ? {
+          site: {
+            id: site.id,
+            name: site.name,
+            url: site.url,
+            avatar: site.avatar,
+            verified: site.verified === 1,
+            createdAt: site.createdAt,
+          },
+        }
+      : {}),
+  })
 })
 
-/** 站点名录：官网「收录了哪些博客号」与广场页侧栏共用 */
+/** 站点名录：官网「收录了哪些博客号」与广场页侧栏共用。
+ *  P1 起带 recentItems（近 7 日条数）——侧栏活跃榜与最新入驻位的数据面 */
 app.get('/api/sites', async (c) => {
   await ensureSchemaExtras(c.env.DB)
   c.header('Cache-Control', 'public, max-age=60')
+  const weekAgo = Date.now() - 7 * 86_400_000
   const { results } = await c.env.DB.prepare(
     `SELECT s.id, s.site_url AS url, s.site_name AS name, s.avatar, s.verified,
             s.created_at AS createdAt,
-            (SELECT COUNT(*) FROM items i WHERE i.site_id = s.id) AS items
+            (SELECT COUNT(*) FROM items i WHERE i.site_id = s.id) AS items,
+            (SELECT COUNT(*) FROM items i WHERE i.site_id = s.id AND i.published_at >= ?) AS recentItems
      FROM sites s WHERE s.disabled = 0 ORDER BY s.verified DESC, s.created_at ASC LIMIT 200`
-  ).all()
+  )
+    .bind(weekAgo)
+    .all()
   await bumpStats(c.env.DB, 'sites_hits')
   return c.json({ sites: results ?? [] })
 })
@@ -233,6 +312,123 @@ app.get('/', (c) =>
 <body><p>博客号广场数据服务。<a href="https://bloghao.com/plaza/">去官网看广场 →</a>　<a href="https://github.com/bloghao/bloghao/blob/main/docs/PLAZA.md">接入文档</a></p></body></html>`
   )
 )
+
+/* ---------------- 轻互动（P2）：匿名点赞 / 曝光点击回传 / 站长数据卡 ----------------
+ * 隐私红线（PLAZA-2.0-PLAN）：互动一律匿名聚合计数——不存原始 IP / vid，
+ * 只存「北京日 + 当日盐」sha256；无账号无 Cookie 面，防刷靠天级去重 + 双层限流。 */
+
+/** 点赞限流口径（拍板建议采纳）：每 IP 每条 1 次/天（likes 表主键去重）、每会话 60 次/天、
+ *  每 IP 全场 200 次/天（NAT 后多人共用宽限）。内存层另加每 IP 30 次/分的提交频率闸 */
+const LIKE_VID_DAILY = 60
+const LIKE_IP_DAILY = 200
+
+app.post('/api/like', async (c) => {
+  await ensureSchemaExtras(c.env.DB)
+  const body = safeJsonParse(await c.req.text()) as { itemId?: unknown; vid?: unknown } | null
+  const itemId = Math.round(Number(body?.itemId))
+  const vid = cleanVid(body?.vid)
+  if (!Number.isInteger(itemId) || itemId <= 0 || !vid) return c.json({ error: 'bad params' }, 400)
+  const ip = ipOf(c)
+  if (!ingestRateLimit(`like:${ip}`, 30, 60_000)) return c.json({ error: 'too many requests' }, 429)
+  const item = await c.env.DB.prepare('SELECT id, site_id FROM items WHERE id = ? AND hidden = 0')
+    .bind(itemId)
+    .first<{ id: number; site_id: number }>()
+  if (!item) return c.json({ error: 'item not found' }, 404)
+  const day = statsDay()
+  const ipHash = await daySaltedHash(day, ip)
+  const vidHash = await daySaltedHash(day, vid)
+  // 会话/全场限额：计的是当日去重日志行数，超限 429（前台按「今天赞得够多了」提示）
+  const vidCount = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM likes WHERE day = ? AND vid_hash = ?')
+    .bind(day, vidHash)
+    .first<{ n: number }>()
+  if ((vidCount?.n ?? 0) >= LIKE_VID_DAILY) return c.json({ error: 'daily limit' }, 429)
+  const ipCount = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM likes WHERE day = ? AND ip_hash = ?')
+    .bind(day, ipHash)
+    .first<{ n: number }>()
+  if ((ipCount?.n ?? 0) >= LIKE_IP_DAILY) return c.json({ error: 'daily limit' }, 429)
+  // 主键 (day, item_id, ip_hash) 即「每 IP 每条 1 次/天」：INSERT OR IGNORE 撞键 = 今天已赞过
+  const ins = await c.env.DB.prepare(
+    'INSERT OR IGNORE INTO likes (day, item_id, ip_hash, vid_hash, created_at) VALUES (?, ?, ?, ?, ?)'
+  )
+    .bind(day, itemId, ipHash, vidHash, Date.now())
+    .run()
+  if ((ins.meta.changes ?? 0) < 1) return c.json({ ok: true, duplicate: true })
+  const upd = await c.env.DB.prepare('UPDATE items SET likes = likes + 1 WHERE id = ?').bind(itemId).run()
+  if ((upd.meta.changes ?? 0) > 0) await bumpSiteStats(c.env.DB, item.site_id, 'likes', 1)
+  const row = await c.env.DB.prepare('SELECT likes FROM items WHERE id = ?').bind(itemId).first<{ likes: number }>()
+  return c.json({ ok: true, likes: row?.likes ?? 0 })
+})
+
+/** 曝光/点击批量回传（P2.2）：官网页攒批（10 条 / 30 秒 / 离页 sendBeacon）合并上报，
+ *  无 IP 无指纹（vid 只进天级哈希限不了重放但重放只多计 ≤20/条，价值低）；写前校验站点存在 */
+app.post('/api/beacon', async (c) => {
+  await ensureSchemaExtras(c.env.DB)
+  const ip = ipOf(c)
+  if (!ingestRateLimit(`beacon:${ip}`, 20, 60_000)) return c.json({ error: 'too many requests' }, 429)
+  const body = safeJsonParse(await c.req.text()) as { events?: unknown } | null
+  const events = validateBeaconEvents(body?.events)
+  if (!events.length) return c.json({ ok: true, accepted: 0 })
+  // 只认真实存在的站点：一次 IN 校验，伪造 site_id 的条目整批剔除（防任意行膨胀 site_stats）
+  const ids = [...new Set(events.map((e) => e.s))]
+  const placeholders = ids.map(() => '?').join(',')
+  const { results } = await c.env.DB.prepare(`SELECT id FROM sites WHERE id IN (${placeholders})`)
+    .bind(...ids)
+    .all<{ id: number }>()
+  const known = new Set((results ?? []).map((r) => r.id))
+  let accepted = 0
+  for (const e of events) {
+    if (!known.has(e.s)) continue
+    await bumpSiteStats(c.env.DB, e.s, e.k === 'v' ? 'views' : 'clicks', e.n)
+    accepted += e.n
+  }
+  return c.json({ ok: true, accepted })
+})
+
+/** 站长数据卡（P2.3）：「广场同步」插件设置卡的数据面。token 即身份（与 ingest 同一枚，
+ *  header 优先、?token= 兜底方便站长浏览器直开）；出参只含本站聚合，Cache-Control no-store */
+app.get('/api/site-stats', async (c) => {
+  await ensureSchemaExtras(c.env.DB)
+  const token = (c.req.header('x-plaza-token') || c.req.query('token') || '').trim()
+  if (!/^[0-9a-f]{32}$/.test(token)) return c.json({ error: 'bad token' }, 401)
+  if (!ingestRateLimit(`sstats:${ipOf(c)}`, 30, 60_000)) return c.json({ error: 'too many requests' }, 429)
+  const site = await c.env.DB.prepare(
+    'SELECT id, site_name AS name, site_url AS url FROM sites WHERE token = ? AND disabled = 0'
+  )
+    .bind(token)
+    .first<{ id: number; name: string; url: string }>()
+  // 查无此站与已停用同一句 401（与 ingest 不透露存在性同口径）
+  if (!site) return c.json({ error: 'unauthorized' }, 401)
+  const weekAgo = statsDay(Date.now() - 7 * 86_400_000)
+  const [totals, days, items] = await Promise.all([
+    // 点赞累计以 items.likes 为权威（全生命周期）；曝光/点击从 P2.2 上线日起才有数
+    c.env.DB
+      .prepare(
+        `SELECT
+           (SELECT COALESCE(SUM(likes), 0) FROM items WHERE site_id = ?) AS likes,
+           (SELECT COALESCE(SUM(views), 0) FROM site_stats WHERE site_id = ?) AS views,
+           (SELECT COALESCE(SUM(clicks), 0) FROM site_stats WHERE site_id = ?) AS clicks`
+      )
+      .bind(site.id, site.id, site.id)
+      .first<{ likes: number; views: number; clicks: number }>(),
+    c.env.DB
+      .prepare(
+        'SELECT day, views, clicks, likes FROM site_stats WHERE site_id = ? AND day >= ? ORDER BY day ASC LIMIT 7'
+      )
+      .bind(site.id, weekAgo)
+      .all(),
+    c.env.DB.prepare('SELECT COUNT(*) AS n FROM items WHERE site_id = ?').bind(site.id).first<{ n: number }>(),
+  ])
+  return c.json(
+    {
+      site: { id: site.id, name: site.name, url: site.url },
+      items: items?.n ?? 0,
+      totals: { views: totals?.views ?? 0, clicks: totals?.clicks ?? 0, likes: totals?.likes ?? 0 },
+      days: days.results ?? [],
+    },
+    // token 在 query 兜底形态下可能进代理日志：响应明确不可缓存
+    { headers: { 'Cache-Control': 'no-store' } }
+  )
+})
 
 /* ---------------- push ingest（博客端「广场同步」插件上报） ---------------- */
 
@@ -294,15 +490,40 @@ app.post('/api/ingest', async (c) => {
 
 let schemaExtrasDone = false
 
-/** sites.avatar 老库补列：新库 schema 已含（CREATE IF NOT EXISTS 不补老列），这里惰性 ALTER 一次。
- *  列已存在时 SQLite 报错，吞掉即幂等 */
+/**
+ * 老库惰性迁移：新库 schema.sql 已含全部列/表（CREATE IF NOT EXISTS 不补老列），
+ * 这里对存量库补齐——列 ALTER 撞「已存在」吞掉即幂等，新表/索引用 IF NOT EXISTS 天然幂等。
+ * 两种部署形态（Workers D1 / hub-node node:sqlite）都走这里，升级不再需要手工 execute schema。
+ */
 async function ensureSchemaExtras(db: Env['DB']): Promise<void> {
   if (schemaExtrasDone) return
   schemaExtrasDone = true
-  try {
-    await db.prepare("ALTER TABLE sites ADD COLUMN avatar TEXT NOT NULL DEFAULT ''").run()
-  } catch {
-    /* 列已存在 */
+  for (const stmt of [
+    "ALTER TABLE sites ADD COLUMN avatar TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE items ADD COLUMN likes INTEGER NOT NULL DEFAULT 0',
+    `CREATE TABLE IF NOT EXISTS likes (
+      day TEXT NOT NULL,
+      item_id INTEGER NOT NULL,
+      ip_hash TEXT NOT NULL,
+      vid_hash TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (day, item_id, ip_hash)
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_likes_vid ON likes(day, vid_hash)',
+    `CREATE TABLE IF NOT EXISTS site_stats (
+      day TEXT NOT NULL,
+      site_id INTEGER NOT NULL,
+      views INTEGER NOT NULL DEFAULT 0,
+      clicks INTEGER NOT NULL DEFAULT 0,
+      likes INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (day, site_id)
+    )`,
+  ]) {
+    try {
+      await db.prepare(stmt).run()
+    } catch {
+      /* 已存在：幂等迁移 */
+    }
   }
 }
 
@@ -510,6 +731,15 @@ async function pullSiteRss(env: Env, site: SiteRow): Promise<number> {
   const buf = await readBodyLimited(res, 2 * 1024 * 1024)
   if (!buf) return 0
   const xml = new TextDecoder().decode(buf)
+  // 站点名回填（P0.2）：站没起名（空或还是注册时的裸域名默认值）时从 RSS channel title 补；
+  // 站长起过的名字绝不覆盖——判定「裸域名默认值」按注册端点同一推导（url 去协议头）
+  const rssTitle = parseRssSiteTitle(xml)
+  if (rssTitle) {
+    const defaultName = site.site_url.replace(/^https?:\/\//, '')
+    if (!site.site_name || site.site_name === defaultName) {
+      await env.DB.prepare('UPDATE sites SET site_name = ? WHERE id = ?').bind(rssTitle, site.id).run()
+    }
+  }
   const entries = parseRssItems(xml, 20)
   let n = 0
   for (const e of entries) {
@@ -587,7 +817,8 @@ async function pullAllSites(env: Env): Promise<number> {
   return pulled
 }
 
-/** cron：pull 补漏 + 顺手把 180 天无心跳的站点自动休眠（不删站，管理员回来重新启用即可） */
+/** cron：pull 补漏 + 顺手把 180 天无心跳的站点自动休眠（不删站，管理员回来重新启用即可） +
+ *  点赞去重日志清理（只服务当天去重，7 天前的行无用——表恒小） */
 export async function scheduledCron(env: Env): Promise<{ pulled: number; dormant: number }> {
   let pulled = 0
   let dormant = 0
@@ -599,6 +830,7 @@ export async function scheduledCron(env: Env): Promise<{ pulled: number; dormant
       .bind(Date.now() - 180 * 86_400_000)
       .run()
     dormant = r.meta.changes ?? 0
+    await env.DB.prepare('DELETE FROM likes WHERE day < ?').bind(statsDay(Date.now() - 7 * 86_400_000)).run()
   } catch {
     /* 库异常静默：cron 下一轮再来 */
   }

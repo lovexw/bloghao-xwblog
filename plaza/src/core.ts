@@ -225,15 +225,18 @@ export function scorePlazaItem(
   return recency + weight + jitter
 }
 
-/** 候选 → 排序后的 feed（desc），limit 收口；纯函数，D1 读数在 index.ts */
+/** 候选 → 排序后的 feed（desc），limit 收口；纯函数，D1 读数在 index.ts。
+ *  siteWeight 由调用方先过 spotlightWeight（聚光加成是站点级前置，评分函数保持单一职责） */
 export function scoreFeed(
-  candidates: { item: PlazaItem; siteId: number; siteName: string; siteUrl: string; siteAvatar?: string; siteVerified: boolean; siteWeight: number }[],
+  candidates: { item: PlazaItem; id?: number; likes?: number; siteId: number; siteName: string; siteUrl: string; siteAvatar?: string; siteVerified: boolean; siteWeight: number }[],
   limit: number,
   opts: ScoreOptions = {}
 ): PlazaFeedEntry[] {
   const rand = opts.rand ?? Math.random
   return candidates
     .map((c) => ({
+      id: c.id ?? 0,
+      likes: c.likes ?? 0,
       kind: c.item.kind,
       ref: c.item.ref,
       title: c.item.title,
@@ -295,8 +298,79 @@ export function rssDateToMs(s: string, now = Date.now()): number {
   return Number.isFinite(t) && t > 0 ? t : now
 }
 
+/**
+ * RSS channel <title> → 站点名（P0.2 pull 路回填 site_name 用）。
+ * 只在第一个 <item>/<entry> 之前找——channel 头部的 title 才是站名，文章标题一律不认；
+ * CDATA 与纯文本节点都收，截 100 字（与管理端改名同限）。
+ */
+export function parseRssSiteTitle(xml: string): string {
+  const channel = xml.match(/<(?:channel|feed)[\s>][\s\S]*?<\/(?:channel|feed)>/i)?.[0] ?? xml
+  const head = channel.split(/<(?:item|entry)[\s>]/i)[0]
+  const m = head.match(/<title(?:\s[^>]*)?>\s*(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/title>/i)
+  return ((m?.[1] ?? m?.[2] ?? '')).trim().slice(0, 100)
+}
+
 /** 统计日 key：北京时间日期 YYYY-MM-DD（与内核时间纪律同口径：+8h 后取 UTC 分量；
  *  plaza 是独立模块不 import src/utils，这里按同一算法本地实现，tests 有镜像用例守着） */
 export function statsDay(now = Date.now()): string {
   return new Date(now + 8 * 3600_000).toISOString().slice(0, 10)
+}
+
+/* ---------------- 轻互动（P2：匿名点赞 + 曝光/点击回传） ----------------
+ * 隐私红线：互动数据是匿名聚合计数，不是行为档案——不存原始 IP / vid，
+ * 只存「北京日 + 当日盐」的 sha256（同 IP 跨日哈希不同，无法跨天串联）。 */
+
+/** 客户端 vid 口径：32 hex（crypto.randomUUID 去横线，与站点 token 同形），防重放的关键字段 */
+export function cleanVid(v: unknown): string {
+  return typeof v === 'string' && /^[0-9a-f]{32}$/.test(v) ? v : ''
+}
+
+/** sha256 → hex（日盐哈希用；Workers 与 Node 18+ 都有 WebCrypto） */
+export async function sha256Hex(s: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
+  return toHex(digest)
+}
+
+/** 当日盐哈希：sha256(day + ':' + 原值)——同一天内稳定可去重，跨天不可串联 */
+export async function daySaltedHash(day: string, value: string): Promise<string> {
+  return sha256Hex(`${day}:${value}`)
+}
+
+/** 曝光/点击事件类型：v = 卡片曝光，c = 出站点击 */
+export type BeaconKind = 'v' | 'c'
+
+export interface BeaconEvent {
+  /** 站点 id（hub 侧 sites.id，feed 出参 siteId） */
+  s: number
+  k: BeaconKind
+  /** 聚合计数（客户端同站同类合并后的次数） */
+  n: number
+}
+
+/** 回传单条事件硬上限（条数与单条计数都封顶：客户端攒批 ≤50 条，单条 ≤20 次全够用） */
+export const BEACON_MAX_EVENTS = 50
+export const BEACON_MAX_N = 20
+
+/**
+ * 回传入参校验（纯函数）：形状不对的条目按没传处理（宽松收下合法部分，与 ingest 同口径），
+ * 同 (s,k) 条目合并计数（客户端可能分头发同站事件，hub 侧再合并一次省 upsert 次数）。
+ * 返回按 s 升序的合并清单——去重后能一次 SELECT 校验站点存在性。
+ */
+export function validateBeaconEvents(raw: unknown): BeaconEvent[] {
+  const list = Array.isArray(raw) ? raw.slice(0, BEACON_MAX_EVENTS) : []
+  const merged = new Map<string, BeaconEvent>()
+  for (const raw2 of list) {
+    if (!raw2 || typeof raw2 !== 'object') continue
+    const e = raw2 as Record<string, unknown>
+    const s = Math.round(Number(e.s))
+    if (!Number.isFinite(s) || s <= 0 || s > 2_147_483_647) continue
+    if (e.k !== 'v' && e.k !== 'c') continue
+    const n = Math.round(Number(e.n))
+    if (!Number.isFinite(n) || n <= 0) continue
+    const key = `${s}|${e.k}`
+    const prev = merged.get(key)
+    if (prev) prev.n = Math.min(BEACON_MAX_EVENTS * BEACON_MAX_N, prev.n + Math.min(BEACON_MAX_N, n))
+    else merged.set(key, { s, k: e.k, n: Math.min(BEACON_MAX_N, n) })
+  }
+  return [...merged.values()].sort((a, b) => a.s - b.s)
 }

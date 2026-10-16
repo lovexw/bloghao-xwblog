@@ -2976,13 +2976,15 @@ async function viewPlugins() {
     .map((p) => {
       const fields = Array.isArray(p.configFields) ? p.configFields : []
       const cfgBtn = fields.length ? `<button class="btn btn-sm" type="button" data-srv-cfg="${esc(p.id)}">配置</button>` : ''
+      // 广场数据卡（B25 P2.3）：站长看见广场带来的量，是回访广场最强的理由
+      const statsBtn = p.id === 'plaza-sync' ? `<button class="btn btn-sm" type="button" data-srv-stats="${esc(p.id)}" title="广场带来的曝光 / 点击 / 点赞">数据</button>` : ''
       return `<div class="pl-row">
       <span class="pl-ico">${esc((p.title || p.id).charAt(0).toUpperCase())}</span>
       <div class="pl-main">
         <div class="pl-name">${esc(p.title || p.id)}${p.version ? `<span class="pl-ver">v${esc(p.version)}</span>` : ''}</div>
         <div class="pl-desc">${esc(p.description || '暂无介绍')}${p.author ? ` · ${esc(p.author)}` : ''}</div>
       </div>
-      ${cfgBtn}
+      ${statsBtn}${cfgBtn}
       <label class="switch"><input type="checkbox" data-srv-id="${esc(p.id)}" ${srvOff.has(p.id) ? '' : 'checked'}><span class="track"></span></label>
     </div>`
     })
@@ -3147,6 +3149,48 @@ async function viewPlugins() {
           handleApiErr(e)
         }
       })
+    })
+  )
+
+  // 广场数据卡（B25 P2.3）：代理端点 /admin/plaza-stats 拿本站曝光 / 点击 / 点赞与近 7 日趋势
+  $app.querySelectorAll('[data-srv-stats]').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      btn.disabled = true
+      let d
+      try {
+        d = await api('/admin/plaza-stats')
+      } catch (e) {
+        btn.disabled = false
+        return handleApiErr(e)
+      }
+      btn.disabled = false
+      const t = d.totals || {}
+      const days = Array.isArray(d.days) ? d.days : []
+      const dayRows = days
+        .map(
+          (x) =>
+            `<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;padding:6px 4px;border-top:1px solid var(--line);font-variant-numeric:tabular-nums;">
+          <span>${esc(x.day || '')}</span><span>${x.views - 0}</span><span>${x.clicks - 0}</span><span>${x.likes - 0}</span></div>`
+        )
+        .join('')
+      const m = modal(
+        `<div class="modal-head"><span>广场数据 — ${esc((d.site && d.site.name) || '')}</span><button class="modal-close" data-close>×</button></div>
+        <div class="modal-body" style="padding:16px 20px;max-height:60vh;overflow-y:auto;">
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;">
+            <div class="stat-card"><div class="stat-label">广场曝光</div><div class="stat-value">${t.views - 0}</div></div>
+            <div class="stat-card"><div class="stat-label">带回点击</div><div class="stat-value">${t.clicks - 0}</div></div>
+            <div class="stat-card"><div class="stat-label">收到点赞</div><div class="stat-value">${t.likes - 0}</div></div>
+          </div>
+          ${
+            dayRows
+              ? `<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;padding:0 4px 6px;font-size:12px;color:var(--sub);"><span>日期</span><span>曝光</span><span>点击</span><span>点赞</span></div>${dayRows}
+          <p class="switch-sub" style="margin-top:10px;">曝光 / 点击自广场 2.0 上线起计数（近 7 日逐日），点赞为累计值；「来自广场」的回访在你的统计页看来源域名。</p>`
+              : '<p class="switch-sub">暂无逐日数据——广场页有人逛起来就会出现。已收录条数：' + (d.items - 0) + ' 条。</p>'
+          }
+        </div>
+        <div class="modal-foot"><button class="btn" data-act="close">关闭</button></div>`
+      )
+      m.mask.querySelector('[data-act=close]').addEventListener('click', m.close)
     })
   )
 }

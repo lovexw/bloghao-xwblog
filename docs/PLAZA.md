@@ -49,9 +49,12 @@ npx wrangler deploy -c plaza/wrangler.jsonc
 
 ### 公开端点
 
-- `GET /api/feed?limit=30&kind=post|weibo`——混排 feed（CORS 全开，官网直接消费）
-- `GET /api/sites`——站点名录（认证标、条数）
+- `GET /api/feed?limit=30&kind=post|weibo&site=N`——混排 feed（CORS 全开，官网直接消费）。`site=N` 进站点视图（B25 P0.1）：出参多一个 `site` 块（`{id, name, url, avatar, verified, createdAt}`）供页头渲染；站点不存在 / 已停用 404。每条条目带 `id`（hub 侧主键，点赞目标）与 `likes`（点赞累计）
+- `GET /api/sites`——站点名录（认证标、总条数、`recentItems` 近 7 日条数——侧栏活跃榜 / 最新入驻 / 新站「新」标的数据面）
 - `POST /api/ingest`——博客端上报（协议见下）
+- `POST /api/like`——匿名点赞（B25 P2.1）：`{"itemId": <feed 条目 id>, "vid": "<32hex>"}`；防重 = localStorage 记已赞 + hub 端天级去重（每 IP 每条 1 次/天、每会话 60 次/天、每 IP 全场 200 次/天）；返回 `{ok, likes}` / `{ok, duplicate:true}`；限流 429。hub 不存原始 IP / vid，只存「北京日 + 当日盐」的 sha256（跨日不可串联），去重日志 7 天前由 cron 清掉
+- `POST /api/beacon`——曝光/点击批量回传（B25 P2.2）：`{"events":[{"s":<siteId>,"k":"v"|"c","n":<次数>}]}`，≤50 条、单条 n≤20；官网页攒批（10 条 / 30 秒 / 离页 sendBeacon）匿名计数，无 IP 无指纹；hub 校验站点存在性后按（北京日，站点）聚合进 site_stats
+- `GET /api/site-stats`——站长数据卡（B25 P2.3）：`X-Plaza-Token` 头携带站点 token（`?token=` 兜底方便浏览器直开，响应 no-store）；出参只含本站：`{site:{id,name,url}, items, totals:{views,clicks,likes}, days:[{day,views,clicks,likes}](近 7 日)}`。曝光/点击自 P2.2 上线起计数，点赞累计以 items.likes 为权威
 
 ### 管理端点（Bearer PLAZA_ADMIN_TOKEN）补充
 
@@ -78,8 +81,10 @@ hub 静默跳过，不影响其余补漏。管理端 `POST /api/admin/pull` 可�
 `score = recency + weight + jitter`，三项分别压在 1 / 0.5 / 0.3 以内（总分上限 1.8），没有谁能一票定序：
 
 - **recency** `1/(1 + 龄期天数/2)`：今天 ≈ 1，一周 ≈ 0.22，一月 ≈ 0.06（衰减平缓，老文不永沉）
-- **weight**：站点权重 0-10 × 0.05/档（管理员按内容质量定档）
+- **weight**：站点权重 0-10 × 0.05/档（管理员按内容质量定档）；**新站聚光**（B25 P0.4）——注册 7 天内的站 weight 临时 +2 档（封顶 10），到期自动回落，冷启动扶持不改动管理员定的档
 - **jitter**：0~0.3 随机抖动（每次刷新换序，「逛」的感觉）
+
+官网广场页消费 feed 的完整口径（双视图卡片墙 / 卡片三型 / 站点视图 / 侧栏活跃榜 / 匿名点赞 / 曝光点击回传 / `utm_source=bloghao-plaza` 出站标记）见 **PLAZA-2.0-PLAN.md** 与 `website/public/plaza/plaza.js`。
 
 ## ingest 协议（第三方博客系统也能接）
 
@@ -113,7 +118,11 @@ X-Plaza-Signature: <hex(HMAC-SHA256(token, timestamp + "." + rawBody))>
 
 ## pull 补漏路
 
-hub cron（每 6 小时）会抓各站 `/rss.xml` 给没接插件的老站兜底：只灌 **30 天内**的文章（RSS 没有微博）、单站单次 20 条、`source='pull'` 标记且**绝不覆盖** push 数据；站点注册时默认开启，管理端点可按站关闭。180 天无 push 心跳的站点 cron 自动休眠（不删站，重新启用即恢复）。pull 只收 https 链接、跳过带锁标志的条目（与 push 路同口径）；内网后缀 / IP 字面量的站点地址注册时不收、pull 时跳过。
+hub cron（每 6 小时）会抓各站 `/rss.xml` 给没接插件的老站兜底：只灌 **30 天内**的文章（RSS 没有微博）、单站单次 20 条、`source='pull'` 标记且**绝不覆盖** push 数据；站点注册时默认开启，管理端点可按站关闭。180 天无 push 心跳的站点 cron 自动休眠（不删站，重新启用即恢复）。pull 只收 https 链接、跳过带锁标志的条目（与 push 路同口径）；内网后缀 / IP 字面量的站点地址注册时不收、pull 时跳过。**站点名自动补全**（B25 P0.2）：站没起名（空或还是注册时的裸域名默认值）时，从 RSS channel `<title>` 回填 `site_name`——站长起过的名字绝不覆盖。
+
+## schema 与部署
+
+hub 的表定义唯一来源 `plaza/schema.sql`（sites / items / likes / site_stats / stats），Workers D1 与 Node（demo/hub-node，启动即 `exec(schema.sql)`）双形态共用。**升级自动迁移**：hub 路由的 `ensureSchemaExtras` 对存量库惰性补列/补表（`sites.avatar`、`items.likes`、`likes`、`site_stats`，全部幂等），两种形态都不需要手工 `d1 execute`。`likes` 是点赞去重日志（7 天前的行 cron 清掉），`site_stats` 是站点级互动日聚合（几百站量级一年 ~11 万行），`stats` 仍是全局调用计数。
 
 ## docker-poc 自托管分站的自动收录（2026-10-16）
 
@@ -140,6 +149,7 @@ docker-poc 控制面配置了 `PLAZA_HUB_URL` + `PLAZA_ADMIN_TOKEN`（指向自�
 
 ## 隐私与边界
 
-- 广场只收**公开内容**的标题 / 摘要 / 链接 / 封面，不收正文、不收评论、不收任何访客数据
+- 广场只收**公开内容**的标题 / 摘要 / 链接 / 封面，不收正文、不收评论、不收任何访客身份
 - hub 的 items 表是**派生数据**：源站删了推 `deleted` 即清，hub 被删也不影响任何博客站
 - 官网广场页所有动态字段走 `esc` / `textContent` 渲染，feed 内容属半可信（来自各站站长），hub 端另有 https-only 与长度截断两道闸
+- **轻互动是匿名聚合计数，不是行为档案**（B25 P2）：点赞与曝光/点击回传无账号无 Cookie 面，hub 不存原始 IP / vid，只存「北京日 + 当日盐」哈希（同 IP 跨日哈希不同，无法跨天串联）；曝光/点击在 hub 侧只落（北京日，站点）两维聚合，没有条目级、没有访客级记录；官网页的 vid 是纯随机串（localStorage），仅作客户端防重，不掺任何设备信息

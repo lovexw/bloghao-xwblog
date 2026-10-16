@@ -99,6 +99,7 @@ import {
   fireWeiboPublished,
   listBufferChannels,
   listServerPlugins,
+  PLAZA_OFFICIAL_HUB,
 } from './hooks'
 import { SITE_MODE_VALUES, siteBase, toHomePost, type SiteMode } from './render'
 import { sanitizeHtml } from './sanitize'
@@ -617,6 +618,28 @@ async function readPostPayload(c: { req: { json: () => Promise<unknown> } }) {
 
 // 服务端插件列表（后台「插件」页展示与启停，见 src/hooks.ts）
 api.get('/admin/server-plugins', (c) => c.json({ plugins: listServerPlugins() }))
+
+/* 广场数据卡（B25 P2.3）：后台「插件 → 广场同步」的「数据」按钮拉 hub /api/site-stats。
+ * 站点 token 服务端代理（不出浏览器网络面板，demo 短路与其他外呼工具同口径）；
+ * hub 地址走 plazaEndpoint（留空 = 官方 hub）。传 502 让前台展示「hub 连不上」而非 500 */
+api.get('/admin/plaza-stats', async (c) => {
+  if (isDemo(c.env)) return jsonError('演示站不开放广场数据卡', 404)
+  const settings = await getSettings(c.env.DB)
+  const token = (settings.plazaToken || '').trim()
+  if (!token) return jsonError('还没填广场站点 Token（设置 → 服务端插件）')
+  const endpoint = (settings.plazaEndpoint || PLAZA_OFFICIAL_HUB).trim().replace(/\/+$/, '')
+  if (!/^https:\/\//i.test(endpoint)) return jsonError('广场地址无效（需 https:// 开头）')
+  try {
+    const res = await fetch(`${endpoint}/api/site-stats`, {
+      headers: { 'x-plaza-token': token },
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) return jsonError(`广场 hub 返回 ${res.status}，请检查 Token 是否有效`, 502)
+    return c.json((await res.json()) as Record<string, unknown>)
+  } catch {
+    return jsonError('广场 hub 连不上，稍后再试', 502)
+  }
+})
 
 /* ---------------- 编辑器插件远程安装（B8 插件半边，机制 src/pluginpkg.ts） ----------------
  * 安装 = 抓 https 插件文件 → 内容安检 → 落 R2 → 登记 settings.pluginsInstalled；
