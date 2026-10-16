@@ -582,6 +582,7 @@ export async function renderPost(c: C): Promise<Response> {
     // 作者评论的头像位用站点头像（与微博卡同源），游客/会员评论不适用
     adminAvatar: settings.avatarUrl || undefined,
     tip: settings.moderateComments === '1' && !user ? tr(en, '提交后审核通过即展示') : undefined,
+    showRegion: settings.showCommentRegion === '1',
     en,
   })
 
@@ -835,6 +836,7 @@ export async function renderGuestbook(c: C): Promise<Response> {
       memberName: !user && member ? (member.display_name || member.username || '').slice(0, 24) : undefined,
       adminAvatar: settings.avatarUrl || undefined,
       tip: settings.moderateComments === '1' && !user ? tr(en, '提交后审核通过即展示') : undefined,
+      showRegion: settings.showCommentRegion === '1',
       guestbook: true,
       // 页头已有「留言板」大标题，留言区标题换成「全部留言」避免重复
       title: tr(en, '全部留言'),

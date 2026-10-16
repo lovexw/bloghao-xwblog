@@ -582,6 +582,68 @@ try {
     }
   }
 
+  // ── 评论 IP 属地链路（settings.showCommentRegion 默认关）──
+  // 采集无条件（写库定格 request.cf 快照），展示门控在服务端。wrangler dev 会注入样本 cf
+  // （US/Texas），这里守「采集 → 换算 → 门控」全链真实生效：关 = SSR/JSON 连属地名都不出现；
+  // 开 = SSR 出披露 + 快照评论渲染属地标签 + JSON 带 ip_region。标签映射在 tests/ipregion.test.ts
+  console.log('\n▸ 评论 IP 属地链路')
+  {
+    const rMark = `冒烟属地评论 ${Date.now()}`
+    await raw('POST', '/api/public/comments', {
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ slug: 'smoke-multi-tag', content: rMark, nickname: '作者' }),
+    })
+    // 默认关：SSR 无属地元素与披露文案；微博评论 JSON 不带 ip_region 键（门控在 SELECT，不只是前端藏）
+    const offPage = await raw('GET', bypassUrl('/post/smoke-multi-tag'))
+    const offHtml = await offPage.text()
+    const offOk = !offHtml.includes('cmt-region') && !offHtml.includes('IP 属地')
+    results.push(['评论属地：默认关，SSR 无属地与披露', offOk])
+    console.log(`  ${offOk ? '✓' : '✗'} 评论属地：默认关，SSR 无属地与披露`)
+
+    // 开启：SSR 表单出披露 + 属地快照渲染成标签；JSON 出参带换算好的 ip_region
+    await raw('PUT', '/api/admin/settings', {
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ showCommentRegion: '1' }),
+    })
+    const onPage = await raw('GET', bypassUrl('/post/smoke-multi-tag'))
+    const onHtml = await onPage.text()
+    const onOk = onHtml.includes('IP 属地') && onHtml.includes('cmt-region') && onHtml.includes('>美国<')
+    results.push(['评论属地：开启后 SSR 出披露 + 属地标签（dev 样本 cf=美国）', onOk])
+    console.log(`  ${onOk ? '✓' : '✗'} 评论属地：开启后 SSR 出披露 + 属地标签（dev 样本 cf=美国）`)
+
+    // 临时微博走一遍 JSON 面（微博 id 时点不定，自建再验），验完软删清理
+    const wbCreate = await raw('POST', '/api/admin/weibo', {
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ content: '冒烟属地临时微博', status: 'published' }),
+    })
+    const wbCreated = await wbCreate.json().catch(() => null)
+    const wbId = wbCreated?.weibo?.id
+    if (wbId) {
+      await raw('POST', `/api/public/weibo/${wbId}/comments`, {
+        headers: { 'Content-Type': 'application/json', Cookie: cookie },
+        body: JSON.stringify({ content: rMark }),
+      })
+      const onJson = await (await raw('GET', `/api/public/weibo/${wbId}/comments`)).json()
+      const onJsonOk = onJson.comments?.some((x) => x.content === rMark && typeof x.ip_region === 'string' && x.ip_region.length > 0)
+      results.push(['评论属地：微博 JSON 出 ip_region（服务端换算标签）', onJsonOk])
+      console.log(`  ${onJsonOk ? '✓' : '✗'} 评论属地：微博 JSON 出 ip_region（${onJson?.comments?.find((x) => x.content === rMark)?.ip_region || '空'}）`)
+      await raw('DELETE', `/api/admin/weibo/${wbId}`, { headers: { Cookie: cookie } })
+    } else {
+      results.push(['评论属地：微博 JSON 出 ip_region（服务端换算标签）', false])
+      console.log('  ✗ 评论属地：微博 JSON 出 ip_region（临时微博创建失败）')
+    }
+
+    // 还原默认关
+    const back = await raw('PUT', '/api/admin/settings', {
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ showCommentRegion: '0' }),
+    })
+    const backSettings = await back.json().catch(() => null)
+    const backOk = back.status === 200 && backSettings?.settings?.showCommentRegion === '0'
+    results.push(['评论属地：开关还原', backOk])
+    console.log(`  ${backOk ? '✓' : '✗'} 评论属地：开关还原`)
+  }
+
   // ── 回收站（软删除）链路：删除 → 前台/RSS/sitemap/后台列表全部不可见 → 回收站可见
   // → 恢复复活 → 再删 → 彻底删除。防「软删行从某个公开面泄漏」的核心回归守卫 ──
   console.log('\n▸ 回收站（软删除）链路')

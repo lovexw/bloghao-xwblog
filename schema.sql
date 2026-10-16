@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS comments (
   content    TEXT    NOT NULL,
   status     TEXT    NOT NULL DEFAULT 'approved', -- approved | pending
   ip         TEXT    NOT NULL DEFAULT '',
+  ip_region  TEXT    NOT NULL DEFAULT '', -- 评论 IP 属地快照（src/ipregion.ts）：写库定格 cf（CN:Guangdong / US / HK），空 = 无数据（旧评论/自托管）不展示
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_comments_post ON comments (post_id, created_at);

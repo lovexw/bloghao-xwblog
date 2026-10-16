@@ -107,6 +107,8 @@ export interface CommentRow {
   content: string
   status: 'approved' | 'pending'
   ip: string
+  /** 评论 IP 属地快照（src/ipregion.ts）：写库定格 cf（CN:Guangdong / US / HK），空 = 无数据不展示；公开出参走 showCommentRegion 门控，标签由 ipRegionLabel 单点格式化 */
+  ip_region?: string
   created_at: number
   /** 会员徽标冗余字段：评论列表 LEFT JOIN members 带出（member_id > 0 时非空，契约 DEVPLAN 附录 A） */
   member_name?: string

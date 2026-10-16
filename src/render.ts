@@ -6,6 +6,7 @@ import { cstDate, esc, excerpt, extractWeiboTopics, fmtDate, fmtDateCN, fmtDateT
 import { replaceEmoji } from './emoji'
 import { appearanceHeadStyle } from './appearance'
 import { customCssHeadStyle } from './skinpack'
+import { ipRegionLabel } from './ipregion'
 import { seoHeadHtml } from './seo'
 import { enBetaBannerHtml, fmtDateEn, fmtDateEnShort, fmtDateTimeEn, isEn, plural, tr, weiboTimeEn } from './i18n'
 
@@ -819,8 +820,16 @@ function memberIdentity(name: string, en: boolean): string {
   return `<p class="cmt-as">${en ? 'Commenting as member' : '以会员'} <b>${esc(name)}</b>${en ? '' : ' 的身份发言'}</p><input class="cmt-hp" name="link" tabindex="-1" autocomplete="off" aria-hidden="true">`
 }
 
-/** 卡片内折叠评论区骨架：列表与表单内容由 site.js 按需填充；adminName / memberName 传入时表单免填昵称（管理员优先） */
-export function weiboCommentPanel(w: WeiboItemView, allowComments: boolean, adminName?: string, memberName?: string, en = false): string {
+/** 卡片内折叠评论区骨架：列表与表单内容由 site.js 按需填充；adminName / memberName 传入时表单免填昵称（管理员优先）。
+ *  showRegion 开启时在提示位预置「IP 属地」披露文案（site.js 提交/回复会覆盖提示位，属预期） */
+export function weiboCommentPanel(
+  w: WeiboItemView,
+  allowComments: boolean,
+  adminName?: string,
+  memberName?: string,
+  en = false,
+  showRegion = false
+): string {
   return `<div class="wb-cmt" data-wb-cmt="${w.id}" hidden>
   <div class="wb-cmt-list" data-role="list"><p class="wb-cmt-loading">${tr(en, '加载中…')}</p></div>
   ${
@@ -840,7 +849,7 @@ export function weiboCommentPanel(w: WeiboItemView, allowComments: boolean, admi
   </div>`
   }
   <textarea class="wb-cmt-textarea" name="content" maxlength="1000" rows="2" placeholder="${tr(en, '说点什么…')}" required></textarea>
-  <div class="wb-cmt-foot"><span class="wb-cmt-tip"></span><button class="wb-cmt-submit" type="submit">${tr(en, '发送')}</button></div>
+  <div class="wb-cmt-foot"><span class="wb-cmt-tip">${showRegion ? esc(tr(en, '发布后将显示 IP 属地')) : ''}</span><button class="wb-cmt-submit" type="submit">${tr(en, '发送')}</button></div>
 </form>`
       : ''
   }
@@ -864,7 +873,7 @@ export function weiboCards(o: {
   return o.items
     .map((w) => {
       const foot = weiboCardFoot(w, isAdmin, en)
-      const panel = weiboCommentPanel(w, allowComments, o.adminName, o.memberName, en)
+      const panel = weiboCommentPanel(w, allowComments, o.adminName, o.memberName, en, o.settings.showCommentRegion === '1')
       return `<article class="wb-card${w.pinned ? ' is-pinned' : ''}" id="wb-${w.id}">
   <header class="wb-head">
     <span class="wb-avatar">${o.avatarHtml}</span>
@@ -1337,6 +1346,9 @@ export function commentsHtml(o: {
   tip?: string
   /** 留言板模式：区块与表单换成 guestbook 专用 id，提交目标不同 */
   guestbook?: boolean
+  /** 展示评论 IP 属地（settings.showCommentRegion）：标签由 ipRegionLabel 单点格式化，
+   *  关闭时不渲染；采集与出参门控见 api.ts */
+  showRegion?: boolean
   /** 英文测试版：文案走词典/英文语序，中文路径不传即原样 */
   en?: boolean
 }): string {
@@ -1370,11 +1382,14 @@ export function commentsHtml(o: {
     <button class="cmt-del-btn" type="button" data-cmt-del="${c.id}" title="${tr(en, '删除这条评论（其下回复一并删除，不可恢复）')}">${tr(en, '删除')}</button>`
       : ''
     const kids = children.get(c.id) || []
+    // IP 属地：与楼号同款小灰字（复用内联样式，七主题零改动）；开关关闭或无快照（旧评论/自托管）不渲染
+    const region = o.showRegion ? ipRegionLabel(c.ip_region || '', en) : ''
     return `<li class="cmt-item" id="cmt-${c.id}">
   <div class="cmt-head">
     ${commentAvatarHtml(c, o.adminAvatar)}
     <span class="cmt-name">${esc(c.nickname)}${badge}</span>
     <span class="cmt-time">${en ? fmtDateTimeEn(c.created_at) : fmtDateTime(c.created_at)}</span>
+    ${region ? `<span class="cmt-region" style="font-size:11px;opacity:0.45">${esc(region)}</span>` : ''}
     ${floor ? `<span class="cmt-floor" style="font-size:11px;opacity:0.45;font-variant-numeric:tabular-nums">#${floor}</span>` : ''}
     ${adminBtns}
   </div>
@@ -1404,7 +1419,7 @@ export function commentsHtml(o: {
     o.guestbook ? tr(en, '想对作者说点什么…') : tr(en, '写下你的想法…')
   }" required></textarea>
   <div class="cmt-form-foot">
-    <span class="cmt-tip">${esc(o.tip || tr(en, '留言即刻展示，请友善交流'))}</span>
+    <span class="cmt-tip">${esc(`${o.tip || tr(en, '留言即刻展示，请友善交流')}${o.showRegion ? ` · ${tr(en, '发布后将显示 IP 属地')}` : ''}`)}</span>
     <button class="cmt-submit" type="submit">${tr(en, '发送')}</button>
   </div>
 `

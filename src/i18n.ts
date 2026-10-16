@@ -83,6 +83,7 @@ const ZH_EN: Record<string, string> = {
   '发送': 'Post',
   '留言即刻展示，请友善交流': 'Comments appear instantly — please be kind',
   '提交后审核通过即展示': 'Your comment will appear once approved',
+  '发布后将显示 IP 属地': 'Your IP region will be shown publicly',
   '还没有留言，来抢沙发～': 'No comments yet — be the first!',
   '还没有人留言，来坐个沙发，说点什么吧～': 'No messages yet — come say hello!',
   '作者已关闭留言。': 'Comments are closed.',

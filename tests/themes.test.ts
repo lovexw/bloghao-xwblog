@@ -444,7 +444,7 @@ test('site.js 微博评论头像镜像：会员图 / 作者站点头像 / 游客
   const listEl = { innerHTML: '' }
   const rows = [
     { id: 1, parent_id: 0, is_admin: 0, nickname: '会员甲', content: '内容', created_at: TS, member_avatar: '/images/u/202610/a.png' },
-    { id: 2, parent_id: 0, is_admin: 0, nickname: '游客甲', content: '内容', created_at: TS },
+    { id: 2, parent_id: 0, is_admin: 0, nickname: '游客甲', content: '内容', created_at: TS, ip_region: '广东' },
     { id: 3, parent_id: 0, is_admin: 1, nickname: '站长', content: '内容', created_at: TS },
     { id: 4, parent_id: 0, is_admin: 0, nickname: '游客乙', content: '内容', created_at: TS, avatar: '/images/u/guest.png' },
   ]
@@ -457,6 +457,9 @@ test('site.js 微博评论头像镜像：会员图 / 作者站点头像 / 游客
   assert.match(listEl.innerHTML, /wb-cmt-floor"[^>]*>#1</, '楼层号从 #1 起编')
   assert.match(listEl.innerHTML, /wb-cmt-floor"[^>]*>#4</, '四条顶层编到 #4')
   assert.match(listEl.innerHTML, /wb-cmt-badge">楼主</, '作者徽标微博语境 = 楼主')
+  // IP 属地：接口带 ip_region（服务端已换算成标签）才渲染，没带的行不占位
+  assert.match(listEl.innerHTML, /wb-cmt-region"[^>]*>广东</, '属地小灰字与 SSR cmt-region 同构')
+  assert.equal((listEl.innerHTML.match(/wb-cmt-region/g) || []).length, 1, '没属地的行不渲染占位')
   // 接口没带 adminAvatar（站点未设头像）时，作者评论退回首字块，与 SSR 同态
   listEl.innerHTML = ''
   render({ querySelector: () => listEl }, [rows[2]], false, '')

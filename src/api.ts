@@ -87,6 +87,8 @@ import { collectRoutes } from './collect'
 import { exportRoutes } from './export'
 import { adminExternalRoutes, externalRoutes, notifyAdminComment, telegramRoutes } from './external'
 import { fetchPublicResource } from './fetchsafe'
+import { isEn } from './i18n'
+import { ipRegionLabel, regionSnapshot } from './ipregion'
 import {
   cleanServerPluginConfig,
   fireBackupCompleted,
@@ -1812,7 +1814,11 @@ api.get('/admin/comments', async (c) => {
     // 全局待审数：侧栏「评论」角标在审核操作后随本接口刷新
     c.env.DB.prepare("SELECT COUNT(*) AS n FROM comments WHERE status = 'pending'").first<{ n: number }>(),
   ])
-  return c.json({ items: listRes.results ?? [], total: countRes?.n ?? 0, page, pending: pendingRes?.n ?? 0 })
+  // IP 属地：后台列表换算成中文标签展示（审核判断用），与前台展示开关无关——数据反正在库里
+  const items = (listRes.results ?? []).map((r: Record<string, unknown>) =>
+    r.ip_region ? { ...r, ip_region: ipRegionLabel(String(r.ip_region), false) } : r
+  )
+  return c.json({ items, total: countRes?.n ?? 0, page, pending: pendingRes?.n ?? 0 })
 })
 
 /** 后台回复评论（文章/微博通用）：挂在同一条顶层评论下，直接展示并带「作者」徽标 */
@@ -1892,6 +1898,7 @@ const SECRET_MASK = '••••••••'
 const BOOL_SETTINGS = [
   'allowComments',
   'moderateComments',
+  'showCommentRegion',
   'notifyNewComment',
   'rssFullText',
   'backupEnabled',
@@ -2405,6 +2412,9 @@ async function publicComment(
   // 会员身份（与管理员互斥取一路；banned 已在 getMemberUser 查询层视为未登录）
   const member = user ? null : await getMemberUser(db, c.req.raw)
   const ip = clientIp(c.req.raw)
+  // IP 属地快照（src/ipregion.ts）：与 ip 同一请求瞬间定格，采集无条件（与 ip 本体同类的
+  // 内部数据），展示与否由 settings.showCommentRegion 在出参端门控——开关不影响采集
+  const ipRegion = regionSnapshot(c.req.raw)
   // 管理员发言不受留言频率限制；会员是登录身份，放宽到 10 条/10 分钟（仍防滥用），游客维持 5 条
   if (!user && !member && !rateLimit(`cmt:${ip}`, 5, 10 * 60_000)) return jsonError(o.freqMessage, 429)
   if (member && !rateLimit(`mcmt:${member.id}`, 10, 10 * 60_000)) return jsonError(o.freqMessage, 429)
@@ -2432,7 +2442,7 @@ async function publicComment(
     if (parentId && !parent) return jsonError(`要回复的${o.noun}不存在`, 404)
     await db
       .prepare(
-        "INSERT INTO comments (post_id, weibo_id, parent_id, is_admin, nickname, content, status, ip, created_at) VALUES (?, ?, ?, 1, ?, ?, 'approved', ?, ?)"
+        "INSERT INTO comments (post_id, weibo_id, parent_id, is_admin, nickname, content, status, ip, ip_region, created_at) VALUES (?, ?, ?, 1, ?, ?, 'approved', ?, ?, ?)"
       )
       .bind(
         t.postId,
@@ -2441,6 +2451,7 @@ async function publicComment(
         (user.display_name || user.username).slice(0, 24),
         content,
         ip,
+        ipRegion,
         now
       )
       .run()
@@ -2456,9 +2467,9 @@ async function publicComment(
     const nickname = (member.display_name || member.username).slice(0, 24)
     const ins = await db
       .prepare(
-        'INSERT INTO comments (post_id, weibo_id, parent_id, member_id, is_admin, nickname, content, status, ip, created_at) VALUES (?, ?, 0, ?, 0, ?, ?, ?, ?, ?)'
+        'INSERT INTO comments (post_id, weibo_id, parent_id, member_id, is_admin, nickname, content, status, ip, ip_region, created_at) VALUES (?, ?, 0, ?, 0, ?, ?, ?, ?, ?, ?)'
       )
-      .bind(t.postId, t.weiboId, member.id, nickname, content, pending ? 'pending' : 'approved', ip, now)
+      .bind(t.postId, t.weiboId, member.id, nickname, content, pending ? 'pending' : 'approved', ip, ipRegion, now)
       .run()
     // 新留言推送 TG 与插件广播（与游客同路，见下方游客分支注释）
     const base = siteBase(settings, new URL(c.req.url).origin)
@@ -2489,7 +2500,7 @@ async function publicComment(
   if (o.withContact) {
     await db
       .prepare(
-        'INSERT INTO comments (post_id, weibo_id, parent_id, is_admin, nickname, email, website, qq, avatar, content, status, ip, created_at) VALUES (?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO comments (post_id, weibo_id, parent_id, is_admin, nickname, email, website, qq, avatar, content, status, ip, ip_region, created_at) VALUES (?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .bind(
         t.postId,
@@ -2502,15 +2513,16 @@ async function publicComment(
         content,
         pending ? 'pending' : 'approved',
         ip,
+        ipRegion,
         now
       )
       .run()
   } else {
     await db
       .prepare(
-        'INSERT INTO comments (post_id, weibo_id, parent_id, is_admin, nickname, qq, avatar, content, status, ip, created_at) VALUES (?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO comments (post_id, weibo_id, parent_id, is_admin, nickname, qq, avatar, content, status, ip, ip_region, created_at) VALUES (?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
-      .bind(t.postId, t.weiboId, nickname, guestQQ, guestAvatar, content, pending ? 'pending' : 'approved', ip, now)
+      .bind(t.postId, t.weiboId, nickname, guestQQ, guestAvatar, content, pending ? 'pending' : 'approved', ip, ipRegion, now)
       .run()
   }
   // 新留言推送到 Telegram（异步，不阻塞回复；开关在后台「设置 → 外部发布」）
@@ -2590,13 +2602,22 @@ api.get('/public/weibo/:id/comments', async (c) => {
   const wb = await getWeiboById(c.env.DB, id)
   if (!wb || wb.status !== 'published') return jsonError('这条微博不存在', 404)
   const settings = await getSettings(c.env.DB)
+  // IP 属地（src/ipregion.ts）：展示开关门控在服务端——关闭时连 ip_region 列都不进 SELECT，
+  // 开启时出参已是格式化好的标签（en 按 isEn 口径），客户端只渲染字符串不做映射
+  const showRegion = settings.showCommentRegion === '1'
+  const en = isEn(settings)
   const { results } = await c.env.DB
     .prepare(
-      "SELECT cm.id, cm.parent_id, cm.is_admin, cm.nickname, cm.content, cm.created_at, cm.avatar, m.display_name AS member_name, m.tier AS member_tier, m.avatar AS member_avatar FROM comments cm LEFT JOIN members m ON m.id = cm.member_id WHERE cm.weibo_id = ? AND cm.status = 'approved' ORDER BY cm.created_at ASC LIMIT 200"
+      `SELECT cm.id, cm.parent_id, cm.is_admin, cm.nickname, cm.content, cm.created_at, cm.avatar${
+        showRegion ? ', cm.ip_region' : ''
+      }, m.display_name AS member_name, m.tier AS member_tier, m.avatar AS member_avatar FROM comments cm LEFT JOIN members m ON m.id = cm.member_id WHERE cm.weibo_id = ? AND cm.status = 'approved' ORDER BY cm.created_at ASC LIMIT 200`
     )
     .bind(id)
     .all()
-  return c.json({ comments: results ?? [], allowComments: settings.allowComments === '1', adminAvatar: settings.avatarUrl || '' })
+  const comments = showRegion
+    ? (results ?? []).map((r: Record<string, unknown>) => ({ ...r, ip_region: ipRegionLabel(String(r.ip_region || ''), en) }))
+    : results ?? []
+  return c.json({ comments, allowComments: settings.allowComments === '1', adminAvatar: settings.avatarUrl || '' })
 })
 
 api.post('/public/weibo/:id/comments', async (c) => {

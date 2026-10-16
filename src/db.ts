@@ -43,6 +43,9 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   footerText: '由 博客号 驱动 · 住在 Cloudflare 上',
   allowComments: '1',
   moderateComments: '0',
+  // 评论 IP 属地展示开关（src/ipregion.ts）：采集无条件（写库定格 request.cf 快照），
+  // 此开关只管前台展示——关闭时连公开出参都不带；开启前的旧评论无属地，不追溯回填
+  showCommentRegion: '0',
   postsPerPage: '10',
   about: '<p>在这里写下关于你的故事。</p>',
   faviconUrl: '',
@@ -970,6 +973,9 @@ const SCHEMA_COLUMNS: { table: string; column: string; ddl: string }[] = [
   // 游客 QQ 头像（C2 扩展）：游客选填的 qq（仅抓取记账位，公开出参不携带）+ 服务端抓取转存的站内头像地址
   { table: 'comments', column: 'qq', ddl: "ALTER TABLE comments ADD COLUMN qq TEXT NOT NULL DEFAULT ''" },
   { table: 'comments', column: 'avatar', ddl: "ALTER TABLE comments ADD COLUMN avatar TEXT NOT NULL DEFAULT ''" },
+  // 评论 IP 属地（src/ipregion.ts）：写库定格 request.cf 快照（CN:Guangdong / US / HK），采集无条件，
+  // 展示走 settings.showCommentRegion 门控；开启前的旧评论与无 cf 的自托管形态为空串不展示
+  { table: 'comments', column: 'ip_region', ddl: "ALTER TABLE comments ADD COLUMN ip_region TEXT NOT NULL DEFAULT ''" },
   // 分类描述（B23）：归档页页头说明 + meta description；建表列体见 schema.sql
   { table: 'categories', column: 'description', ddl: "ALTER TABLE categories ADD COLUMN description TEXT NOT NULL DEFAULT ''" },
 ]

@@ -2062,6 +2062,7 @@ async function viewComments() {
           ${Number(cm.is_admin) ? '<span class="chip chip-green">作者</span>' : ''}
           ${cm.status === 'pending' ? '<span class="chip chip-warn">待审核</span>' : '<span class="chip chip-green">已展示</span>'}
           <span class="chip chip-gray">${typeChip}</span>
+          ${cm.ip_region ? `<span class="chip chip-gray">${esc(cm.ip_region)}</span>` : ''}
           ${target}
           ${cm.parent_nickname ? `<span class="chip chip-gray">回复 @${esc(cm.parent_nickname)}</span>` : ''}
           <span style="color:var(--sub);font-size:12px;">${fmtDateTime(cm.created_at)}</span>
@@ -3324,6 +3325,10 @@ async function viewSettings() {
           <div><div class="switch-label">留言先审后展</div><div class="switch-sub">开启后新留言需在「评论」里手动通过</div></div>
           <label class="switch"><input type="checkbox" id="st-moderateComments" ${s.moderateComments === '1' ? 'checked' : ''}><span class="track"></span></label>
         </div>
+        <div class="switch-row">
+          <div><div class="switch-label">展示评论 IP 属地</div><div class="switch-sub">开启后文章 / 留言板 / 微博的评论区显示发言者 IP 属地（国内到省、国外到国家）。属地随新评论采集，开启前的旧评论不回填；自托管部署（无 Cloudflare 地理数据）不显示</div></div>
+          <label class="switch"><input type="checkbox" id="st-showCommentRegion" ${s.showCommentRegion === '1' ? 'checked' : ''}><span class="track"></span></label>
+        </div>
         <div class="form-item" style="max-width:180px;"><label>每页文章数</label><input class="input" id="st-postsPerPage" type="number" min="1" max="50" value="${esc(s.postsPerPage)}"></div>
       </div>
     </div>
@@ -3605,6 +3610,7 @@ async function viewSettings() {
       edition: (document.querySelector('input[name="st-edition"]:checked') || { value: 'zh' }).value,
       allowComments: g('st-allowComments').checked ? '1' : '0',
       moderateComments: g('st-moderateComments').checked ? '1' : '0',
+      showCommentRegion: g('st-showCommentRegion').checked ? '1' : '0',
       postsPerPage: g('st-postsPerPage').value || '10',
       membersEnabled: g('st-membersEnabled').checked ? '1' : '0',
       rankTopN: g('st-rankTopN').value || '10',
