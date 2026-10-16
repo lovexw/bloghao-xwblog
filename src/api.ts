@@ -55,6 +55,7 @@ import {
   postAdminView,
   invalidateSharedSettings,
   saveSettings,
+  SECRET_SETTINGS,
   seedWelcomePost,
   setPostCategory,
   uniqueSlug,
@@ -86,6 +87,16 @@ import { awardCommentPoints, awardPoints, normalizeMinTier } from './points'
 import { collectRoutes } from './collect'
 import { exportRoutes } from './export'
 import { adminExternalRoutes, externalRoutes, notifyAdminComment, telegramRoutes } from './external'
+import {
+  BUNDLE_PREFIX,
+  buildBundleStream,
+  bundleFileName,
+  finishBundleImport,
+  getBundleImportState,
+  markBundleImportFailed,
+  runBundleImportStep,
+  startBundleImport,
+} from './sitebundle'
 import { fetchPublicResource } from './fetchsafe'
 import { isEn } from './i18n'
 import { ipRegionLabel, regionSnapshot } from './ipregion'
@@ -137,18 +148,26 @@ export const api = new Hono<AppEnv>()
  * 风险（正常客户端与 curl 都带 CL），公开写端点另有限流与蜜罐在前 */
 const BODY_LIMIT_BYTES = 2 * 1024 * 1024
 const BODY_LIMIT_UPLOAD_BYTES = 30 * 1024 * 1024
+/** 整站包上传（B26）：包含全部图片，可能几百 MB，单独给平台请求体上限（CF ≈100MB） */
+const BODY_LIMIT_BUNDLE_BYTES = 100 * 1024 * 1024
 /* 上传豁免路径**必须写全前缀**：api 路由挂在 /api 下（index.ts `app.route('/api', api)`），
  * 而 c.req.path 是完整路径（/api/admin/upload）。这里曾漏写 /api 前缀，于是上传端点一直按
  * 2MB 的普通限额预检——超过 2MB 的视频 / 大图 / 开放接口配图直接 413（前端只看到「上传失败」）。
  * 2026-10-13 站长上传 20MB 视频失败暴露：此前没有 >2MB 请求体的测试，所以一路潜伏到线上。
  * 冒烟「上传体积预检」用例守着（3MB mp4 必须 200，26MB 必须 413）。 */
 const UPLOAD_PATH_PREFIXES = ['/api/admin/upload', '/api/admin/og-image', '/api/external/weibo']
+/** 整站包上传：独立档位（比普通上传高），同样必须写全前缀 */
+const BUNDLE_PATH_PREFIXES = ['/api/admin/bundle/upload']
 api.use('*', async (c, next) => {
   if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) {
     const p = c.req.path
-    const isUpload = UPLOAD_PATH_PREFIXES.some((prefix) => p.startsWith(prefix))
+    const limit = BUNDLE_PATH_PREFIXES.some((x) => p.startsWith(x))
+      ? BODY_LIMIT_BUNDLE_BYTES
+      : UPLOAD_PATH_PREFIXES.some((x) => p.startsWith(x))
+        ? BODY_LIMIT_UPLOAD_BYTES
+        : BODY_LIMIT_BYTES
     const cl = Number(c.req.header('Content-Length') || '0')
-    if (cl > (isUpload ? BODY_LIMIT_UPLOAD_BYTES : BODY_LIMIT_BYTES)) return c.text('请求体过大', 413)
+    if (cl > limit) return c.text('请求体过大', 413)
   }
   await next()
 })
@@ -1891,8 +1910,8 @@ api.delete('/admin/comments/:id', async (c) => {
 
 /* ---------------- 设置 ---------------- */
 // 敏感项只写不读：GET 一律打码返回（明文只在生成 Token / 保存后不再回显）；
-// PUT 收到打码占位符视为「保持原值」，这样前端整表提交不会把占位符写进库
-const SECRET_SETTINGS = ['externalToken', 'telegramBotToken', 'telegramWebhookSecret', 'bufferAccessToken', 'plazaToken', 'commentWebhookUrl', 'turnstileSecret']
+// PUT 收到打码占位符视为「保持原值」，这样前端整表提交不会把占位符写进库。
+// SECRET_SETTINGS 的唯一来源在 db.ts（整站包导出也要用它跳过密钥），这里只引用
 const SECRET_MASK = '••••••••'
 // 布尔开关统一收口：'1'/'true' → '1'，其余一律 '0'（新增布尔键加进表即可，别再抄判断分支）
 const BOOL_SETTINGS = [
@@ -2113,6 +2132,95 @@ api.post('/admin/backup', async (c) => {
   }
   if (!r.skipped && !r.ok) return jsonError('备份失败：' + (r.error || '未知错误'), 500)
   return c.json({ ok: r.ok, skipped: !!r.skipped, key: r.key, bytes: r.bytes, error: r.error })
+})
+
+/* ---------------- 整站包（B26：一键导出整站 / 一键导入还原到空站，机制 src/sitebundle.ts） ----------------
+ * 设计见 docs/PROPOSAL-B26-SITE-BUNDLE.md。三条契约：只还原到空站 / 只装内容不装实例身份 /
+ * 版本不匹配一律拒绝（不做覆盖、不做合并）。全部端点都在 /admin/* 鉴权中间件之后。 */
+
+/** 一键导出整站包：流式吐 zip（与 Markdown / WXR 导出同形，不落 R2） */
+api.get('/admin/bundle/export', async (c) => {
+  // 演示站守卫：整站包含全库内容与图片，体验者凭据公示，敏感面一律短路
+  if (isDemo(c.env)) return jsonError('演示站不开放导出', 404)
+  // 全表导出 + 全量图片流式打包，连点会在同一 isolate 堆叠多个任务——全局窗口内只放两次
+  if (!rateLimit('bundle-export:global', 2, 10 * 60_000)) return jsonError('导出刚刚执行过，请稍后再试', 429)
+  const now = Date.now()
+  const stream = await buildBundleStream(c.env, now)
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${bundleFileName(now)}"`,
+      'Cache-Control': 'no-cache',
+    },
+  })
+})
+
+/** 上传整站包：流式落 R2 bundles/（不缓冲，避免大包打爆 isolate），供导入读取 */
+api.post('/admin/bundle/upload', async (c) => {
+  if (isDemo(c.env)) return jsonError('演示站不开放导入', 404)
+  if (!rateLimit(`bundle-upload:${clientIp(c.req.raw)}`, 3, 10 * 60_000)) return jsonError('操作太频繁，请稍后再试', 429)
+  const body = c.req.raw.body
+  if (!body) return jsonError('请求体为空')
+  const key = `${BUNDLE_PREFIX}${bundleFileName(Date.now()).replace(/\.zip$/, '')}-${Math.random().toString(36).slice(2, 8)}.zip`
+  const obj = await c.env.IMAGES.put(key, body, { httpMetadata: { contentType: 'application/zip' } })
+  return c.json({ ok: true, key, size: obj?.size ?? 0 })
+})
+
+/** 列出已上传的整站包 + 当前导入状态（后台卡片回显；导入失败后可据此提示「重试 = 重来」） */
+api.get('/admin/bundle/list', async (c) => {
+  if (isDemo(c.env)) return jsonError('演示站不开放导入', 404)
+  const listed = await c.env.IMAGES.list({ prefix: BUNDLE_PREFIX, limit: 100 })
+  const bundles = (listed.objects ?? [])
+    .map((o) => ({ key: o.key, size: o.size ?? 0, uploaded: o.uploaded instanceof Date ? o.uploaded.getTime() : 0 }))
+    .sort((a, b) => b.uploaded - a.uploaded)
+  return c.json({ bundles, import: await getBundleImportState(c.env.DB) })
+})
+
+/** 导入第一步：校验包与版本 → 校验空站 → 清空目标表 → 给出步骤清单 */
+api.post('/admin/bundle/import/start', async (c) => {
+  if (isDemo(c.env)) return jsonError('演示站不开放导入', 404)
+  if (!rateLimit(`bundle-import:${clientIp(c.req.raw)}`, 3, 10 * 60_000)) return jsonError('操作太频繁，请稍后再试', 429)
+  const body = await c.req.json<{ key?: string }>().catch(() => null)
+  const r = await startBundleImport(c.env, String(body?.key ?? ''))
+  if (!r.ok) return jsonError(r.error, r.status)
+  return c.json({ ok: true, plan: r.value })
+})
+
+/** 导入步骤：一张表的一个分片，或一批图片（前端按步骤清单循环调用，每步一次小请求） */
+api.post('/admin/bundle/import/step', async (c) => {
+  if (isDemo(c.env)) return jsonError('演示站不开放导入', 404)
+  // 步骤数随站点规模增长（每片一请求），限额给宽；仍是重操作，按全局窗口兜底
+  if (!rateLimit('bundle-step:global', 2000, 10 * 60_000)) return jsonError('操作太频繁，请稍后再试', 429)
+  const body = await c.req.json<{ key?: string; unit?: string; cursor?: number }>().catch(() => null)
+  const key = String(body?.key ?? '')
+  const r = await runBundleImportStep(c.env, key, String(body?.unit ?? ''), Number(body?.cursor ?? -1))
+  if (!r.ok) {
+    // 记一笔失败态：空站判定允许 failed 残留被下次重试覆盖（重试 = 重来）
+    await markBundleImportFailed(c.env, key, r.error)
+    return jsonError(r.error, r.status)
+  }
+  return c.json({ ok: true, ...r.value })
+})
+
+/** 导入收尾：置状态 done + 清页缓存 */
+api.post('/admin/bundle/import/finish', async (c) => {
+  if (isDemo(c.env)) return jsonError('演示站不开放导入', 404)
+  const body = await c.req.json<{ key?: string }>().catch(() => null)
+  const r = await finishBundleImport(c.env, String(body?.key ?? ''))
+  if (!r.ok) return jsonError(r.error, r.status)
+  return c.json({ ok: true, import: r.value.state })
+})
+
+/** 删除一个整站包（导入成功后不自动删：用户可能还要在别的实例上再导一次） */
+api.post('/admin/bundle/delete', async (c) => {
+  if (isDemo(c.env)) return jsonError('演示站不开放导入', 404)
+  const body = await c.req.json<{ key?: string }>().catch(() => null)
+  const key = String(body?.key ?? '')
+  if (!key.startsWith(BUNDLE_PREFIX) || key.includes('..') || key.includes('\\') || key.includes('\0')) {
+    return jsonError('包标识非法')
+  }
+  await c.env.IMAGES.delete(key)
+  return c.json({ ok: true })
 })
 
 /* ---------------- 密码 ---------------- */

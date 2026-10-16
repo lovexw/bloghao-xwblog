@@ -121,6 +121,19 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   onboardingManual: '',
 }
 
+/** 敏感设置键：GET / PUT 响应一律打码（api.ts），整站包导出整体跳过（sitebundle.ts）。
+ *  唯一来源就在这里——新增敏感键只改这张表，别在别处再抄一份（曾因清单分叉漏打码）。
+ *  明文只在生成时返回一次；打码占位符提交 = 保留原值（同 SECRET_SETTINGS 口径） */
+export const SECRET_SETTINGS = [
+  'externalToken',
+  'telegramBotToken',
+  'telegramWebhookSecret',
+  'bufferAccessToken',
+  'plazaToken',
+  'commentWebhookUrl',
+  'turnstileSecret',
+]
+
 // settings 读取的共享快照层（Cache API）：生产 Workers 上 caches.default 是 colo 级共享——
 // 跨 isolate 同读一份快照，热读省掉每次请求的 D1 查询；写路径 invalidateSharedSettings
 // 推送式 delete（全 colo 立即失效，写返回后任何 isolate 读必见新值，无 TTL 旧值窗口）。
@@ -1146,7 +1159,9 @@ export const SCHEMA_INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_posts_feed ON posts (status, pinned DESC, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL',
 ]
 
-async function tableColumns(db: D1Database, table: string): Promise<Set<string>> {
+/** 表列清单（PRAGMA table_info）：ensureSchema 迁移与整站包版本比对共用。
+ *  调用方只传 BUNDLE_TABLES / SCHEMA_COLUMNS 里的固定表名（非用户输入），无注入面 */
+export async function tableColumns(db: D1Database, table: string): Promise<Set<string>> {
   const { results } = await db.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>()
   return new Set((results ?? []).map((r) => r.name))
 }

@@ -189,11 +189,15 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
   "publishAt": 1791121500000,
   "pinned": false,
   "slug": "留空自动生成，可自定义",
-  "password": "访问密码，可空"
+  "minTier": "all | member | coffee | top",
+  "password": "访问密码，可空",
+  "aiGenerated": false
 }
 ```
 
-约束：title ≤ 150 字；content ≤ 1MB；tags ≤ 8 个、每个 ≤ 20 字；cover 必须以 `/` 或 `http(s)://` 开头；`categoryId` 为 null/空表示未分类，不存在分类 id 时被忽略；`password` ≤ 64 位。`status:"scheduled"` 时 `publishAt` 为毫秒时间戳（到点由每分钟 Cron 翻成 published 并把 `published_at` 设为该时刻，同时推 Telegram；转 published/draft 时 `publishAt` 自动清空）。
+约束：title ≤ 150 字；content ≤ 1MB；tags ≤ 8 个、每个 ≤ 20 字；cover 必须以 `/` 或 `http(s)://` 开头；`categoryId` 为 null/空表示未分类，不存在分类 id 时被忽略；`password` ≤ 64 位；`minTier` 是会员可见档位（`all` 公开默认 / `member` 登录会员 / `coffee` 咖啡 / `top` 顶级，脏值归一为 `all`）；`aiGenerated` 是「AI 生成」自愿申报（`true` = 文章页日期行显示 AI 生成标识，对应《人工智能生成合成内容标识办法》显式标识口径，缺省不显示）。`status:"scheduled"` 时 `publishAt` 为毫秒时间戳（到点由每分钟 Cron 翻成 published 并把 `published_at` 设为该时刻，同时推 Telegram；转 published/draft 时 `publishAt` 自动清空）。
+
+**部分更新（PUT）**：`minTier` / `aiGenerated` 与其余键同为「缺键即保留」语义——只发 `{status}` 的列表页状态切换不会误清档位与 AI 标注。
 
 **访问密码（文章加密码）**：`password` 缺键 = 保持现状（自动保存安全），非空 = 设置 / 更换（服务端 PBKDF2 单向哈希落库，明文与哈希都不回显），空串 = 解除加密。响应里只有 `hasPassword` 布尔，`password_hash` 永不出现。加密文章的前台行为（机制见 `src/protect.ts`）：文章页在密码验证通过前只渲染密码表单（正文、评论区、自动摘要、JSON-LD 描述一概不出，管理员登录除外）；解锁走表单 `POST /post/:slug/unlock`（`application/x-www-form-urlencoded`，Body `password=…`，非 JSON API）——成功 303 回文章页并签发 HttpOnly 解锁 Cookie `bloghao_pp`（HMAC key 即该文 password_hash，30 天有效、改密即失效），失败 303 回 `?pwerr=1`，限流触发 303 回 `?pwerr=slow`（每 IP 每文 10 次 / 10 分钟）。防泄漏口径：RSS 不出该文 `content:encoded` 全文；关键词搜索不命中加密文章；`/random` 不进加密文章。
 
@@ -314,6 +318,7 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 | POST | `/api/admin/tools/md` | Body `{md}` → `{html}`，Markdown 渲染 |
 | POST | `/api/admin/tools/linkmeta` | Body `{url}` → `{meta:{title, description, image, siteName}}`，编辑器「网址卡片」抓取目标页 og 元数据；只抓 http(s) 公网地址（私有网段/非常规端口拒绝，限长限时），抓不到时字段为空（前端用域名占位组卡）。限频 10 次/分钟/IP |
 | POST | `/api/admin/tools/sanitize` | Body `{html}` → `{html}`，白名单净化（粘贴用） |
+| POST | `/api/admin/cache/purge` | 一键清理页面边缘缓存：换 settings `pageCacheEpoch` 让旧副本整代作废（浏览器侧响应不变）；后台「概览 → 系统」按钮消费 |
 
 ### 插件（编辑器插件远程安装 + 服务端插件，B8）
 | 方法 | 路径 | 说明 |
@@ -324,6 +329,7 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 | POST | `/api/admin/plugins/uninstall` | Body `{id}`：删 R2 文件并撤登记（编辑器刷新后不再加载），演示站 404 |
 | GET | `/plugins/installed.json` | （Worker 路由，管理员会话）远程插件清单 `[{id, at}]`，编辑器据此加载 `/plugin-files/<id>`；未登录 404 |
 | GET | `/plugin-files/:id` | （Worker 路由，管理员会话）下发已安装插件文件（`application/javascript` + nosniff + no-store）；未登录 / 未安装 404 |
+| GET | `/api/admin/plaza-stats` | 广场数据卡（后台「插件 → 广场同步 → 数据」）：服务端以 `settings.plazaToken` + `plazaEndpoint`（留空 = 官方 hub）代理请求 hub `/api/site-stats`，Token 不进浏览器网络面板；未配 Token 或 hub 出错回 502，演示站 404 |
 
 服务端插件配置经 `PUT /api/admin/settings` 的 `serverPluginConfig` 键写入（见上表可写键），事件槽清单见 docs/PLUGINS.md。
 
@@ -346,6 +352,22 @@ Body `{"delta": 1}` 或 `{"delta": -1}`，返回 `{"ok":true,"likes":7}`。计�
 | POST | `/api/admin/backup` | 手动触发一次全量备份（与每晚 Cron 同一逻辑）：全部业务表导成 JSON 存进 R2 `backups/` 目录，返回 `{ok, key, bytes}`（开关关闭时 `skipped:true`）。结果同时写入设置 `lastBackupAt` / `lastBackupKey` / `lastBackupBytes`。Cron 由 wrangler.jsonc `triggers.crons` 配置（北京时间 00:30），失败时经 Telegram 提醒站长 |
 | GET | `/api/admin/export/markdown` | 下载 Markdown 包 zip：`posts/*.md`（YAML front-matter 含 title/slug/date/status/tags/category/cover/summary，正文 HTML→MD）、`weibo.md`、`pages/*.md`、`images/…`（正文/封面/微博引用的站内图，从 R2 流式打包）、`manifest.json`（含 missingImages 清单）。未被引用的图床文件不打包 |
 | GET | `/api/admin/export/wxr` | 下载 WordPress WXR 1.2 单文件：文章（HTML 正文、publish/draft 状态、分类与标签），供 WordPress / emlog 导入器使用；微博不进 WXR |
+
+### 整站包（B26：一键导出整站 / 一键还原到空站）
+
+与上面三条导出路的分工：Markdown 包 / WXR 是「带走文章去别家系统」，整站包是「原样搬家」（换服务器 / 换域名 / 重新部署同一系统，数据无损）；备份只导出不导入。包 = `manifest.json` + `tables/<表>.<片>.json` + `images/<key>`，单包 ≤2GB，落在 R2 `bundles/`（**不在 /images 公开白名单**，只有登录管理员能操作）。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/admin/bundle/export` | 流式下载整站包 zip（`xwblog-site-<北京日期>.zip`）。含 12 张业务表（`BUNDLE_TABLES`，**不含 users**）+ 图床全部图片；`settings` 按键排除密钥类（`SECRET_SETTINGS`）与实例态键（`siteUrl`/`pageCacheEpoch`/`lastBackup*`/`bundleImport`）。全局窗口 2 次/10 分钟（全表 + 全量图片） |
+| POST | `/api/admin/bundle/upload` | 上传整站包（**原始 body 直传**，服务端流式落 R2 不缓冲）→ `{ok, key, size}`。走 100MB 入站体积档位；按 IP 3 次/10 分钟 |
+| GET | `/api/admin/bundle/list` | `{bundles:[{key,size,uploaded}], import:{state,key,at,error}}`——包列表（按上传时间倒序，最多 100 条）与当前导入状态（`idle`/`running`/`failed`/`done`） |
+| POST | `/api/admin/bundle/import/start` | 导入第一步：解析包 → 校验格式版本 → **校验空站** → 清空目标表（`settings` 除外）→ 置 `running`，返回 `{ok, plan:{key,bytes,manifest,steps:[{unit,cursor}]}}`。非空站 400（`posts`/`weibo`/`pages` 三表须全为 0；上次导入失败留下的 `failed` 残留允许重试 = 重来）；包里出现当前没有的表/列（降版）400 并报出差异；包不完整 400；按 IP 3 次/10 分钟 |
+| POST | `/api/admin/bundle/import/step` | 导入一步（`{key, unit, cursor}`）：一张表的一个分片，或一批 50 张图片。**必须先 start**（会话 `running` 且 key 对得上，否则 400）；失败记 `failed`（只把 `running` 标失败）。全局窗口 2000 次/10 分钟 |
+| POST | `/api/admin/bundle/import/finish` | 收尾：置 `done` + 清页缓存。同样要求会话 `running` 且 key 匹配 |
+| POST | `/api/admin/bundle/delete` | 删除一个整站包（导入成功后**不自动删**，用户可能还要在别的实例再导一次）。key 必须带 `bundles/` 前缀且无穿越字符 |
+
+契约三条（写死的行为，非设置项）：① **只还原到空站**——永不覆盖、永不合并（不做 id/slug 冲突处理）；② **只装内容不装实例身份**——不含管理员账号与会话、不含各类密钥（新站自己登录、自己填）；③ **版本不匹配一律拒绝不猜**——包比系统新（降版）报错并列出差异，系统比包新（升版）缺的列按默认值补。导入时 `posts.content` / `pages.content` 过 `sanitizeHtml`（其余字段沿用应用自身信任模型）。演示站全部端点 404，闭站时随全局中间件 503。用法见 [GUIDE.md](GUIDE.md) §19，机制与防线见 AGENTS.md「整站包」节
 
 ### GET /api/meta/themes
 已注册主题列表 `{themes:[{id,name,description,colors,appearance}]}`，`colors` 为后台皮肤卡预览色板（`[背景, 强调条, 卡面, 卡面2, 卡面3]`，未设置时为 `null`）；`appearance` 是该主题支持的外观变量元信息（角色/默认值/变量名清单/字号基线/圆角旋钮 `{var,default,lgFactor}`/字体预设，B9；后台实时预览用变量名构造同款覆盖样式）。

@@ -3472,6 +3472,26 @@ async function viewSettings() {
         </div>
       </div>
     </div>
+
+    <div class="panel" style="padding:20px;">
+      <div class="form-section"><h3>整站搬家</h3><div class="sec-desc">把整站原样打成一个包带走：全部文章 / 微博 / 页面 / 评论 / 会员 / 分类标签 / 友链 / 图床图片。<b>只允许还原到「空站」</b>（没有任何文章 / 微博 / 页面），<b>不会覆盖、不会合并</b>；包与系统版本不匹配会明确报错，不猜。包里不含管理员账号与各类密钥（新站自己登录、自己填）。换服务器 / 换域名 / 重新部署时用它。</div>
+        <div class="fav-row">
+          <a class="btn" href="/api/admin/bundle/export" download>导出整站包</a>
+          <span class="sec-desc">含全部图片，包可能较大，生成需要等一会儿</span>
+        </div>
+        <div class="fav-row" style="margin-top:14px;">
+          <button class="btn" id="btn-bundle-upload" type="button">上传整站包</button>
+          <span class="sec-desc" id="bundle-upload-status">支持 .zip（本系统导出的包）；大站也可以用 wrangler 直接传</span>
+        </div>
+        <div class="fav-row">
+          <select class="input" id="bundle-pick" style="max-width:420px;"></select>
+          <button class="btn btn-primary" id="btn-bundle-import" type="button">开始还原</button>
+          <button class="btn" id="btn-bundle-delete" type="button">删除此包</button>
+        </div>
+        <div class="sec-desc" id="bundle-import-state" style="margin-top:10px;">…</div>
+        <div class="sec-desc" id="bundle-progress"></div>
+      </div>
+    </div>
     </div>`
   )
 
@@ -3762,6 +3782,158 @@ async function viewSettings() {
     btn.disabled = false
     btn.textContent = '立即备份'
   })
+
+  /* ---- 整站搬家（B26）：一键导出整站包 / 一键还原到空站 ----
+   * 还原是「分步驱动」：start 拿到步骤清单（每张表的分片 + 每批图片），前端循环 step——
+   * 每步一次小请求（避免一个超大请求打爆 isolate，也让中途失败可以整轮重来）；finish 收尾。
+   * 契约：只还原到空站，永不覆盖 / 合并；版本不匹配由服务端明确报错。 */
+  function bundleStateText(st) {
+    if (!st || st.state === 'idle') return '还没有导入过。导入只允许还原到空站（没有文章 / 微博 / 页面的新站）。'
+    const at = st.at ? fmtDateTime(st.at) : ''
+    if (st.state === 'running') return `上次导入没跑完（${at}）——再点「开始还原」即可，还原是「从头重来」语义。`
+    if (st.state === 'failed') return `上次导入失败（${at}）：${st.error || '未知原因'}——修好后再点「开始还原」会从头重来。`
+    return `上次导入已完成（${at}）。`
+  }
+
+  function renderBundleList(data) {
+    const stEl = document.getElementById('bundle-import-state')
+    if (stEl) stEl.textContent = bundleStateText(data.import)
+    const sel = document.getElementById('bundle-pick')
+    if (!sel) return
+    const list = data.bundles || []
+    if (!list.length) {
+      sel.innerHTML = '<option value="">（还没有上传过整站包）</option>'
+      return
+    }
+    sel.innerHTML = list
+      .map(
+        (b) =>
+          `<option value="${esc(b.key)}">${esc(b.key.replace(/^bundles\//, ''))} · ${fmtSize(b.size)}${b.uploaded ? ' · ' + esc(fmtDateTime(b.uploaded)) : ''}</option>`
+      )
+      .join('')
+  }
+
+  async function refreshBundleList() {
+    renderBundleList(await api('/admin/bundle/list'))
+  }
+
+  /** 整站包上传：原始 body 直传（服务端流式落 R2，不缓冲），走 XHR 才有上传进度 */
+  function uploadBundleFile(file, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', '/api/admin/bundle/upload')
+      xhr.setRequestHeader('Content-Type', 'application/zip')
+      xhr.responseType = 'json'
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100))
+      }
+      xhr.onload = () => {
+        const d = xhr.response || {}
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(d)
+          return
+        }
+        // 与 api() / uploadFile() 的会话过期兜底同口径
+        if (xhr.status === 401 && state.user) {
+          state.user = null
+          authView('login')
+          toast('登录已过期，请重新登录', true)
+        }
+        reject(new Error(d.error || '上传失败'))
+      }
+      xhr.onerror = () => reject(new Error('上传失败（网络错误）'))
+      xhr.send(file)
+    })
+  }
+
+  document.getElementById('btn-bundle-upload').addEventListener('click', () => {
+    pickFiles('application/zip,.zip', false, async (files) => {
+      const file = files && files[0]
+      if (!file) return
+      const btn = document.getElementById('btn-bundle-upload')
+      const statusEl = document.getElementById('bundle-upload-status')
+      btn.disabled = true
+      try {
+        const d = await uploadBundleFile(file, (p) => {
+          statusEl.textContent = `上传中… ${p}%`
+        })
+        statusEl.textContent = `已上传：${fmtSize(d.size || 0)}`
+        toast('整站包已上传 ✅')
+        await refreshBundleList()
+        const sel = document.getElementById('bundle-pick')
+        if (sel && d.key) sel.value = d.key
+      } catch (e) {
+        statusEl.textContent = '上传失败'
+        toast(e.message, true)
+      }
+      btn.disabled = false
+    })
+  })
+
+  document.getElementById('btn-bundle-delete').addEventListener('click', async () => {
+    const sel = document.getElementById('bundle-pick')
+    const key = sel && sel.value
+    if (!key) {
+      toast('先选一个包', true)
+      return
+    }
+    if (!(await confirmBox('确定删除这个整站包吗？删除后要重新上传才能再导入。'))) return
+    const btn = document.getElementById('btn-bundle-delete')
+    btn.disabled = true
+    try {
+      await api('/admin/bundle/delete', { method: 'POST', body: { key } })
+      toast('已删除')
+      await refreshBundleList()
+    } catch (e) {
+      toast(e.message, true)
+    }
+    btn.disabled = false
+  })
+
+  document.getElementById('btn-bundle-import').addEventListener('click', async () => {
+    const sel = document.getElementById('bundle-pick')
+    const key = sel && sel.value
+    if (!key) {
+      toast('先上传并选一个整站包', true)
+      return
+    }
+    if (
+      !(await confirmBox(
+        '还原会用包里的内容重建本站：只允许还原到空站（没有文章 / 微博 / 页面），不做覆盖、不做合并，开始后本站现有内容会被清空。确定开始吗？'
+      ))
+    )
+      return
+    const btn = document.getElementById('btn-bundle-import')
+    const prog = document.getElementById('bundle-progress')
+    btn.disabled = true
+    btn.textContent = '还原中…'
+    try {
+      const start = await api('/admin/bundle/import/start', { method: 'POST', body: { key } })
+      const steps = (start.plan && start.plan.steps) || []
+      let rows = 0
+      let images = 0
+      for (let i = 0; i < steps.length; i++) {
+        const s = steps[i]
+        const r = await api('/admin/bundle/import/step', { method: 'POST', body: { key, unit: s.unit, cursor: s.cursor } })
+        rows += r.rows || 0
+        images += r.images || 0
+        prog.textContent = `正在还原：第 ${i + 1}/${steps.length} 步 · 已写入 ${rows} 行数据 / ${images} 张图片`
+      }
+      await api('/admin/bundle/import/finish', { method: 'POST', body: { key } })
+      prog.textContent = `还原完成：${rows} 行数据 · ${images} 张图片（前台页面缓存已清理）。`
+      toast('整站还原完成 ✅')
+      await refreshBundleList()
+    } catch (e) {
+      prog.textContent = '还原失败：' + e.message + '（再点「开始还原」会从头重来）'
+      toast(e.message, true)
+      await refreshBundleList().catch(() => {})
+    }
+    btn.disabled = false
+    btn.textContent = '开始还原'
+  })
+
+  // 演示站该区不可用（服务端 404），静默即可；api() 只在 401 时弹 toast，这里再兜一层
+  refreshBundleList().catch(() => {})
 }
 
 /* ---------------- 上传（带进度） ----------------

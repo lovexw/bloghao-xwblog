@@ -31,6 +31,7 @@ Cloudflare 在这个架构里只做 DNS + CDN，不再运行代码。已在甲�
 |---|---|---|
 | D1 `prepare().bind().first/all/run`、`batch`、`meta.changes/last_row_id` | Node 内置 `node:sqlite` | 行统一转普通对象（node:sqlite 返回 null 原型对象）；batch 用事务实现 |
 | R2 `put/get/head/delete/list`、流式 `body`、`httpEtag`、`writeHttpMetadata` | 磁盘目录 + 旁车 `.meta.json` | 正文流式读出，导出 zip「边流边算 CRC」不变；etag 带引号，304 协商同口径 |
+| R2 `put(key, ReadableStream)`（流式落盘）与 `get(key, { range: { offset, length } \| { suffix } })` | 磁盘 + `fs.createReadStream({start,end})` | 整站包（B26）用：包可达几百 MB，上传流式写盘不整包缓冲；导入按 Range 读 zip 中央目录（在文件末尾） |
 | `ExecutionContext.waitUntil` | 记日志的 Promise 兜底 | 经 Hono `app.fetch(req, env, ctx)` 第三参注入 |
 | wrangler assets（`public/`） | server.ts 内置静态文件层 | 文件命中才返回，其余进应用 |
 | `triggers.crons` | 进程内 setInterval | 分钟级扫定时发布；UTC 16:30 触发备份窗口 |

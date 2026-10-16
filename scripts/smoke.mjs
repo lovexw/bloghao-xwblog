@@ -1413,6 +1413,103 @@ try {
     console.log(`  ${h3 === 'miss' ? '✓' : '✗'} 页缓存：清理后回源（x-page-cache: ${h3}）`)
   }
 
+  // ── 整站包链路（B26：一键导出整站 / 一键还原到空站，src/sitebundle.ts）──
+  // 守三件最容易被改坏的事：① 导出必须回真 zip（PK 魔数）；② /api/admin/bundle/upload 走的是
+  // 「整站包档位」（100MB）而不是 2MB 普通档——>2MB 的包必须放行；③ **空站守卫**：冒烟库里
+  // 有夹具内容，导入必须被明确拒绝（永不覆盖、永不合并），且没有 start 会话时 step 也不可绕过。
+  console.log('\n▸ 整站包链路（B26）')
+  {
+    const auth = { headers: { Cookie: cookie } }
+    const jsonHeaders = { 'Content-Type': 'application/json', Cookie: cookie }
+
+    // 未登录：与 /admin/* 同口径一律 401（导入是重操作，绝不能落在鉴权之外）
+    const anonList = await raw('GET', '/api/admin/bundle/list')
+    const anonExport = await raw('GET', '/api/admin/bundle/export')
+    const anonOk = anonList.status === 401 && anonExport.status === 401
+    results.push(['整站包：未登录一律 401', anonOk])
+    console.log(`  ${anonOk ? '✓' : '✗'} 整站包：未登录一律 401（list ${anonList.status} / export ${anonExport.status}）`)
+
+    // 导出：流式 zip（PK 魔数 + 体积合理）
+    const exRes = await raw('GET', '/api/admin/bundle/export', auth)
+    const exBytes = new Uint8Array(await exRes.arrayBuffer())
+    const zipOk =
+      exRes.status === 200 &&
+      exBytes.length > 200 &&
+      exBytes[0] === 0x50 &&
+      exBytes[1] === 0x4b &&
+      exBytes[2] === 0x03 &&
+      exBytes[3] === 0x04
+    results.push(['整站包：导出返回合法 zip（PK 魔数）', zipOk])
+    console.log(`  ${zipOk ? '✓' : '✗'} 整站包：导出返回合法 zip（status ${exRes.status} / ${exBytes.length} 字节）`)
+
+    // 上传（原始 body，服务端流式落 R2）：>2MB 必须放行（证明走的是整站包档位，不是普通 2MB 档）
+    const bigBundle = new Uint8Array(3 * 1024 * 1024)
+    bigBundle.set([0x50, 0x4b, 0x03, 0x04])
+    const bigUp = await raw('POST', '/api/admin/bundle/upload', {
+      headers: { 'Content-Type': 'application/zip', Cookie: cookie },
+      body: bigBundle,
+    })
+    const bigUpBody = await bigUp.json().catch(() => null)
+    const bigOk = bigUp.status === 200 && !!(bigUpBody && bigUpBody.key)
+    results.push(['整站包：上传 3MB 放行（>2MB 不再 413）', bigOk])
+    console.log(`  ${bigOk ? '✓' : '✗'} 整站包：上传 3MB 放行（status ${bigUp.status}）`)
+
+    // 真包上传：拿刚导出的字节再传一遍，用来验「空站守卫」（假包会先在 zip 解析处失败）
+    const realUp = await raw('POST', '/api/admin/bundle/upload', {
+      headers: { 'Content-Type': 'application/zip', Cookie: cookie },
+      body: exBytes,
+    })
+    const realUpBody = await realUp.json().catch(() => null)
+    const realKey = realUpBody && realUpBody.key
+
+    // 列表回显（含导入状态记账位）
+    const listRes = await raw('GET', '/api/admin/bundle/list', auth)
+    const listBody = await listRes.json().catch(() => null)
+    const listed =
+      listRes.status === 200 && !!(listBody && (listBody.bundles || []).some((b) => b.key === realKey) && listBody.import)
+    results.push(['整站包：列表回显已上传的包与导入状态', listed])
+    console.log(`  ${listed ? '✓' : '✗'} 整站包：列表回显（status ${listRes.status}）`)
+
+    // 空站守卫：冒烟库有夹具内容 → 必须明确拒绝（且不清空任何东西）
+    const startRes = await raw('POST', '/api/admin/bundle/import/start', {
+      headers: jsonHeaders,
+      body: JSON.stringify({ key: realKey }),
+    })
+    const startBody = await startRes.json().catch(() => null)
+    const guardOk = startRes.status === 400 && !!(startBody && /只允许还原到空站/.test(startBody.error || ''))
+    results.push(['整站包：非空站导入被拒（永不覆盖、永不合并）', guardOk])
+    console.log(`  ${guardOk ? '✓' : '✗'} 整站包：非空站导入被拒（status ${startRes.status}）`)
+
+    // 没有 start 会话时直接调 step 也要被拒（否则可绕过空站守卫往有内容的站里灌）
+    const stepRes = await raw('POST', '/api/admin/bundle/import/step', {
+      headers: jsonHeaders,
+      body: JSON.stringify({ key: realKey, unit: 'posts', cursor: 0 }),
+    })
+    const stepOk = stepRes.status === 400
+    results.push(['整站包：无会话直接调 step 被拒（守卫不可绕过）', stepOk])
+    console.log(`  ${stepOk ? '✓' : '✗'} 整站包：无会话直接调 step 被拒（status ${stepRes.status}）`)
+
+    // 夹具内容分毫未动（守卫失败的典型表现就是「被清空了」）
+    const stillThere = await raw('GET', bypassUrl('/post/smoke-multi-tag'))
+    const untouched = stillThere.status === 200
+    results.push(['整站包：被拒后站点内容分毫未动', untouched])
+    console.log(`  ${untouched ? '✓' : '✗'} 整站包：被拒后站点内容分毫未动（status ${stillThere.status}）`)
+
+    // 清理：删掉本次上传的两个包，列表随之消失
+    const del = (key) =>
+      raw('POST', '/api/admin/bundle/delete', { headers: jsonHeaders, body: JSON.stringify({ key }) })
+    if (bigUpBody && bigUpBody.key) await del(bigUpBody.key)
+    if (realKey) await del(realKey)
+    const afterList = await raw('GET', '/api/admin/bundle/list', auth)
+    const afterBody = await afterList.json().catch(() => null)
+    const cleaned = !!(
+      afterBody &&
+      !(afterBody.bundles || []).some((b) => b.key === realKey || b.key === (bigUpBody && bigUpBody.key))
+    )
+    results.push(['整站包：删除后列表不再回显', cleaned])
+    console.log(`  ${cleaned ? '✓' : '✗'} 整站包：删除后列表不再回显`)
+  }
+
 } finally {
   if (dev && dev.exitCode === null) dev.kill('SIGTERM')
 }

@@ -53,7 +53,7 @@
   <section class="hero">
     <div class="hero-bg" aria-hidden="true"></div>
     <div class="wrap hero-inner">
-      <span class="hero-badge reveal">微信有公众号，你有博客号 ✌️ · <a href="./docs/changelog.html">v2.4</a> · MIT 开源</span>
+      <span class="hero-badge reveal">微信有公众号，你有博客号 ✌️ · <a href="./docs/changelog.html">v2.5.1</a> · MIT 开源</span>
       <h1 class="reveal">博客号，博客好。</h1>
       <p class="hero-sub reveal">
         一套完全跑在 Cloudflare（Workers + D1 + R2）上的开源博客系统。<br class="pc-only">
@@ -124,7 +124,7 @@
         <article class="card reveal">
           <div class="card-icon">🧩</div>
           <h3>开放的插件系统</h3>
-          <p><code>window.BlogHao.registerPlugin({...})</code> 一个文件给编辑器加按钮，无需构建、无需重启；内置「公众号采集」，粘贴链接一键转载。</p>
+          <p><code>window.BlogHao.registerPlugin({...})</code> 一个文件给编辑器加按钮，无需构建、无需重启；内置「公众号采集」，粘贴链接一键转载，插件市场还能粘贴地址远程安装。服务端插件（TG 发布 / 评论通知 / 广场同步 / 出站 Webhook / 页脚自定义）在后台勾选即用。</p>
         </article>
         <article class="card reveal">
           <div class="card-icon">🔒</div>
@@ -153,8 +153,8 @@
         </article>
         <article class="card reveal">
           <div class="card-icon">🎚️</div>
-          <h3>主题外观变量（内测）</h3>
-          <p>主色、正文、背景、卡片、链接等 7 个语义色 + 正文字体与字号，后台面板不动代码即可调，保存即全站生效，随时一键恢复默认。</p>
+          <h3>外观变量与皮肤包</h3>
+          <p>主色、正文、背景、卡片、链接等 7 个语义色 + 正文字体 / 字号 / 圆角，后台面板不动代码即可调（实时预览、保存即全站生效、随时恢复默认）；官方皮肤包一点换装，也能粘贴导入自己的配色，或追加一段自定义 CSS。</p>
         </article>
         <article class="card reveal">
           <div class="card-icon">🐳</div>
@@ -261,13 +261,12 @@
     <div class="wrap roadmap reveal">
       <span class="roadmap-tag">📝 最近更新</span>
       <div class="roadmap-items">
-        <span>🎉 <a href="./docs/changelog.html">v2.4.0</a> 已发布 —— 发布前五路全面安全审计、广场微博补漏自愈与三段式信息流</span>
+        <span>🎉 <a href="./docs/changelog.html">v2.5.1</a> 已发布 —— 第二轮全量安全审计、MCP 服务器、注册人机验证、文档中心站内搜索</span>
       </div>
     </div>
     <div class="wrap roadmap reveal">
       <span class="roadmap-tag">🚧 即将上线</span>
       <div class="roadmap-items">
-        <span>🧩 MCP 服务器 —— AI 助手直接帮你发文</span>
         <span>🔔 通知渠道抽象 —— 飞书 / 企业微信 / Bark 触达</span>
         <span>✔️ <a href="./plaza/">广场</a>已上线 —— 你的文章与微博，官网首页之外再亮一次</span>
       </div>

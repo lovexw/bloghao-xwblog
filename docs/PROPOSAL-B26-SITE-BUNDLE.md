@@ -274,3 +274,20 @@ POST /api/admin/bundle/import/finish  { key }
 格式（zip）、来源（上传或 R2）、后台入口（数据导出区下方）均已按 2026-10-16 拍板口径落定。
 
 **站长点头 → 按 §五 实现清单落地；有任何一条想改，先改本文再动代码。**
+
+---
+
+## 十二、落地结果与实现期加固（2026-10-16，回填）
+
+按 §五 清单全部落地。与提案的差异只有三处**加固**（都是实现期发现的守卫缺口，已写进 AGENTS.md「整站包」防线节 + tests/sitebundle.test.ts）：
+
+1. **`runBundleImportStep` / `finishBundleImport` 都必须校验会话**（`bundleImport.state==='running'` 且 key 对得上）。提案只写了「必须先 start」的流程，但没把它做成服务端硬约束——不校验时直接调 `step` 就能绕开空站守卫往有内容的站里灌。冒烟「无会话直接调 step 被拒」守着。
+2. **`markBundleImportFailed` 只允许把 `running` 标成 `failed`**。因为空站判定对 `failed` 残留放行（「重试 = 重来」），若 `done` 能被一次杂散 `step` 调用翻成 `failed`，就等于给出「覆盖有内容站点」的口子。反过来 `failed` 残留是安全的：要到达 `failed` 必须先 `running`，而 `running` 只能从空站开始 —— 即存在 `failed` 残留时，站里那些行**全部是上次自己灌了一半的**。
+3. **图片 key 收集改成 keyset 分页扫**（原提案写法是整表 `SELECT content`）。正文单篇上限 1MB，整表读进 isolate 会打爆 128MB 内存——「内存有界」是硬要求，改成与表导出同一套 `rowid > ?` 分页。
+
+另外两处**实现细节定型**（提案未细到这一层）：
+
+- 包文件名固定 ASCII `xwblog-site-<北京日期>.zip`（无需 RFC 5987 编码），上传落 R2 的 key 追加 6 位随机后缀防同日覆盖。
+- 单表触到 100,000 行上限时，先探一行确认「确实还有数据」才记入 `manifest.truncated`（刚好 10 万行不该误报）。
+
+验证口径（全部本机跑过）：`npm run typecheck` ✓、`npm test` **739/739** ✓、`npm run smoke` **248/249**（唯一失败项是既有的环境性用例「评论属地 dev 样本 cf」——本机 wrangler 注入 `CN/内蒙古` 而断言写死「美国」，与本功能无关）✓、docker-poc 的 `r2disk` 新增面（流式 put + range get）用 Node 直测 9 项全过 ✓（本机无 Docker，`docker-poc/smoke.sh` 未跑，待有 Docker 的机器补一次）。
