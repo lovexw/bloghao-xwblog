@@ -1447,6 +1447,70 @@ try {
     console.log(`  ${h3 === 'miss' ? '✓' : '✗'} 页缓存：清理后回源（x-page-cache: ${h3}）`)
   }
 
+  // ── AI 可获取面链路（B28：/llms.txt、/llms-full.txt、/post/:slug.md 原文镜像）──
+  // 守四件：① .md 镜像 200 且 Content-Type 是 text/markdown、内容与库同源；② llms.txt 索引出条目
+  // 与订阅清单；③ llms-full.txt 出正文原文；④ 密码文 .md 404（与关键词搜索「整体退出」同口径）
+  console.log('\n▸ AI 可获取面链路（B28）')
+  {
+    const mdMark = 'smoke-llms-md-body-77881'
+    const mdCreate = await raw('POST', '/api/admin/posts', {
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ title: '冒烟：AI 镜像文章', content: mdMark, summary: '镜像摘要 77881', status: 'published' }),
+    })
+    const mdCreated = await mdCreate.json().catch(() => null)
+    const mdId = mdCreated && mdCreated.post && mdCreated.post.id
+    const mdSlug = mdCreated && mdCreated.post && mdCreated.post.slug
+    results.push(['AI 面建文', mdCreate.status === 200 && !!mdId])
+    if (mdId) {
+      const mdRes = await raw('GET', `/post/${encodeURIComponent(mdSlug)}.md`)
+      const mdType = (mdRes.headers.get('content-type') || '').includes('text/markdown')
+      const mdBody = await mdRes.text()
+      const mdOk = mdRes.status === 200 && mdType && mdBody.includes(mdMark) && mdBody.includes('镜像摘要 77881')
+      results.push(['AI 面：.md 镜像 200 + text/markdown + 正文同源', mdOk])
+      console.log(`  ${mdOk ? '✓' : '✗'} AI 面：.md 镜像 200 + text/markdown + 正文同源`)
+
+      const llmsRes = await raw('GET', '/llms.txt')
+      const llmsBody = await llmsRes.text()
+      const llmsOk =
+        llmsRes.status === 200 &&
+        (llmsRes.headers.get('content-type') || '').includes('text/markdown') &&
+        llmsBody.includes(`/post/${encodeURIComponent(mdSlug)}`) &&
+        llmsBody.includes('/rss.xml')
+      results.push(['AI 面：llms.txt 索引出条目与机器可读清单', llmsOk])
+      console.log(`  ${llmsOk ? '✓' : '✗'} AI 面：llms.txt 索引出条目与机器可读清单`)
+
+      const fullRes = await raw('GET', '/llms-full.txt')
+      const fullOk = fullRes.status === 200 && (await fullRes.text()).includes(mdMark)
+      results.push(['AI 面：llms-full.txt 出正文', fullOk])
+      console.log(`  ${fullOk ? '✓' : '✗'} AI 面：llms-full.txt 出正文`)
+
+      // 密码文：.md 一律 404（与不存在同响应，不透露存在性）
+      const pwCreate = await raw('POST', '/api/admin/posts', {
+        headers: { 'Content-Type': 'application/json', Cookie: cookie },
+        body: JSON.stringify({ title: '冒烟：AI 镜像加密文', content: 'smoke-llms-pw-body', status: 'published', password: 'smoke-pass-4321' }),
+      })
+      const pwCreated = await pwCreate.json().catch(() => null)
+      const pwId = pwCreated && pwCreated.post && pwCreated.post.id
+      const pwSlug = pwCreated && pwCreated.post && pwCreated.post.slug
+      if (pwId) {
+        const pwMd = await raw('GET', `/post/${encodeURIComponent(pwSlug)}.md`)
+        const pwOk = pwMd.status === 404 && !(await pwMd.text()).includes('smoke-llms-pw-body')
+        results.push(['AI 面：密码文 .md 404 不透露存在性', pwOk])
+        console.log(`  ${pwOk ? '✓' : '✗'} AI 面：密码文 .md 404 不透露存在性`)
+        await raw('DELETE', `/api/admin/posts/${pwId}`, { headers: { Cookie: cookie } })
+        await raw('DELETE', `/api/admin/trash/post/${pwId}`, { headers: { Cookie: cookie } })
+      }
+
+      // 清理：软删后 llms 索引即不含（listPosts 的 deleted_at 过滤同源）
+      await raw('DELETE', `/api/admin/posts/${mdId}`, { headers: { Cookie: cookie } })
+      await raw('DELETE', `/api/admin/trash/post/${mdId}`, { headers: { Cookie: cookie } })
+      const llmsAfter = await (await raw('GET', '/llms.txt')).text()
+      const goneOk = !llmsAfter.includes(encodeURIComponent(mdSlug))
+      results.push(['AI 面：软删后索引不再含该文', goneOk])
+      console.log(`  ${goneOk ? '✓' : '✗'} AI 面：软删后索引不再含该文`)
+    }
+  }
+
   // ── 整站包链路（B26：一键导出整站 / 一键还原到空站，src/sitebundle.ts）──
   // 守三件最容易被改坏的事：① 导出必须回真 zip（PK 魔数）；② /api/admin/bundle/upload 走的是
   // 「整站包档位」（100MB）而不是 2MB 普通档——>2MB 的包必须放行；③ **空站守卫**：冒烟库里

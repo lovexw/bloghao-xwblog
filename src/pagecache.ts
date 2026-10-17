@@ -55,9 +55,10 @@ const CACHEABLE_PAGE_RE =
 /**
  * 可缓存的订阅源与公开只读 API（P0-2 扩面）：URL 规整、匿名千人一面。
  * RSS 别名清单与 index.ts 的 RSS_ALIASES 镜像（订阅器盲猜路径同样高频，一并吃缓存）。
+ * /llms.txt 与 /llms-full.txt（B28 AI 索引导读）匿名千人一面，AI 爬虫高频试探，一并吃缓存。
  */
 const CACHEABLE_DATA_RE =
-  /^(\/rss\.xml|\/rss|\/rss\/|\/feed|\/feed\/|\/feed\.xml|\/feed\/rss\.xml|\/feed\/rss|\/atom|\/atom\/|\/atom\.xml|\/index\.xml|\/feeds\/posts\/default|\/feed\.json|\/sitemap\.xml|\/api\/public\/weibo|\/api\/public\/posts)$/
+  /^(\/rss\.xml|\/rss|\/rss\/|\/feed|\/feed\/|\/feed\.xml|\/feed\/rss\.xml|\/feed\/rss|\/atom|\/atom\/|\/atom\.xml|\/index\.xml|\/feeds\/posts\/default|\/feed\.json|\/sitemap\.xml|\/llms\.txt|\/llms-full\.txt|\/api\/public\/weibo|\/api\/public\/posts)$/
 
 /** 列表排序白名单（render.ts HOME_SORTS 的 key）：random 每次现生成 seed，绝不缓存 */
 const CACHEABLE_SORTS = ['latest', 'views', 'likes', 'comments']

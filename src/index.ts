@@ -5,8 +5,9 @@ import { api } from './api'
 import { cleanBotPath, identifyBot, purgeBots, recordBot, shouldRecordBot } from './bots'
 import { siteClosedResponse } from './closed'
 import { clientIp, getCookie, getSessionUser, rateLimit } from './auth'
-import { ensureSchema, getPostBySlug, getSettings, listCategories, listPosts, listSitemapCategoryLastmod, listSitemapPages, listSitemapPosts, listWeiboLastmod } from './db'
+import { ensureSchema, getPostBySlug, getSettings, listCategories, listPages, listPosts, listSitemapCategoryLastmod, listSitemapPages, listSitemapPosts, listWeiboLastmod } from './db'
 import { isEn, recordEditionFailure } from './i18n'
+import { buildLlmsFullTxt, buildLlmsStub, buildLlmsTxt } from './llms'
 import { mcpRoutes } from './mcp'
 import { goPageHtml, isTrustedOutHost } from './outlink'
 import { imageCacheMatch, imageCachePut, pageCacheMiddleware } from './pagecache'
@@ -275,6 +276,29 @@ app.get('/robots.txt', async (c) => {
   const settings = await getSettings(c.env.DB)
   return c.text(buildRobotsTxt(settings, new URL(c.req.url).origin, isDemo(c.env)))
 })
+
+/* ---------------- AI 索引导读（llms.txt / llms-full.txt，B28）----------------
+ * 新兴 AI 抓取导读约定（llmstxt.org；Cloudflare 阻止响应的内置放行路径）。文章清单走 listPosts
+ * 的同一份公开口径（status=published + 站点可见窗口 + 软删过滤），防泄漏清单在 src/llms.ts 头注；
+ * 演示站 / siteNoindex 出桩（与 robots.txt 整站 Disallow 同口径）；两路径已进 pagecache 数据白名单 */
+const llmsHandler = (full: boolean): PublicHandler => async (c) => {
+  const settings = await getSettings(c.env.DB)
+  const siteUrl = siteBase(settings, new URL(c.req.url).origin)
+  c.header('Content-Type', 'text/markdown; charset=utf-8')
+  c.header('Cache-Control', 'public, max-age=600')
+  if (isDemo(c.env) || settings.siteNoindex === '1') return c.body(buildLlmsStub(settings, siteUrl))
+  const [feed, pages] = await Promise.all([
+    listPosts(c.env.DB, { status: 'published', limit: full ? 50 : 100, afterTs: siteVisibleCutoff(settings) }),
+    listPages(c.env.DB, { status: 'published' }),
+  ])
+  return c.body(
+    full
+      ? buildLlmsFullTxt(settings, feed.items, siteUrl)
+      : buildLlmsTxt(settings, feed.items, pages.map((p) => ({ slug: p.slug, title: p.title })), siteUrl)
+  )
+}
+app.get('/llms.txt', llmsHandler(false))
+app.get('/llms-full.txt', llmsHandler(true))
 
 /* ---------------- 编辑器远程插件下发（B8 插件半边，安装端点在 api.ts） ----------------
  * /plugins/installed.json 与 /plugin-files/:id 都要求管理员会话（编辑器带着 Cookie 加载），

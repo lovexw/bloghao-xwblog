@@ -94,7 +94,7 @@ export function page(o: ThemePageOptions): string {
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(desc)}">
-${o.noindex || en ? '<meta name="robots" content="noindex">' : ''}
+${o.noindex || en ? '<meta name="robots" content="noindex">' : '<meta name="robots" content="max-snippet:-1, max-image-preview:large, max-video-preview:-1">'}
 ${o.settings.statsEnabled === '0' ? '<meta name="xw-stats" content="off">' : ''}
 ${base ? `<link rel="canonical" href="${esc(base + o.path)}">` : ''}
 <meta property="og:title" content="${esc(o.title || siteName)}">
@@ -109,6 +109,7 @@ ${jsonLdHtml}
 ${o.settings.faviconUrl ? `<link rel="icon" href="${esc(absUrl(base, o.settings.faviconUrl))}">` : `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`}
 ${base ? `<link rel="alternate" type="application/rss+xml" title="${esc(siteName)}" href="${esc(base)}/rss.xml">` : ''}
 ${base ? `<link rel="alternate" type="application/feed+json" title="${esc(siteName)}" href="${esc(base)}/feed.json">` : ''}
+${base && o.path.startsWith('/post/') ? `<link rel="alternate" type="text/markdown" title="${esc(o.title || siteName)}" href="${esc(base + o.path)}.md">` : ''}
 <style>${o.css}</style>
 ${appearanceHeadStyle(o.settings)}
 ${customCssHeadStyle(o.settings)}
