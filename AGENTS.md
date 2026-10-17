@@ -145,6 +145,12 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - 后台回显：`seoDisplaySettings()` 把存库的结构化 JSON 还原成「可粘贴形态」再给输入框（与 PUT 接受格式同形）；新增同类「粘贴 → 解析 → 重放」设置项照此成对实现，别把 JSON 直接丢给输入框
 - **收录可见性守卫（2026-10-17，站长口径：整个生态——bloghao.com 的每个二级域名——都要能被 AI 与搜索引擎抓到）**：新域名默认就该可抓（`siteNoindex` 默认 '0'、robots/sitemap 自动生成、`aiPolicy` 默认 allow），**开通入口不准加「默认不收录」这类静默档**。三处把状态显性化，新增「开通 / 初始化」入口照此接线、改判定口径三处同改：① 博客后台 `/admin/stats` 出 `crawl {noindex, closed, demo}`，概览页据此常驻橙色提醒条（`demo=true` 时前台不提示——**演示站刻意整站 noindex 是唯一例外**，公示了 demo 账号、每 2 小时清库重灌）；② docker-poc 控制面（`docker-poc/control.ts`）租户列表每行出「收录状态」、分站详情给「去哪关」指路（读各租户库 `siteNoindex`/`siteClosed`，settings 表缺失一律当可抓取，不给新站误报）；③ `add-tenant.sh` 开通就绪后跑 `crawl_selfcheck`（robots.txt 整站 Disallow = 红字告警、sitemap 取不到 = 提示，演示站跳过）。历史教训：`blog.bloghao.com` 就是被「禁止搜索引擎收录」漏关了 nobody 知道
 
+**旧 slug 301（tests/oldslug.test.ts、smoke「旧 slug 301」，B22，2026-10-17）**
+
+- posts.old_slugs 单列 JSON（schema.sql + SCHEMA_COLUMNS 两处同步的老规矩）：**只在 PUT 显式改 slug 时追加旧值**（`utils.ts appendOldSlug`：去重、排除当前 slug、上限 20 防频繁改名无限增长；脏 JSON 当空数组）——新建 / 缺键即保留路径不写
+- 读侧唯一入口 `db.ts findPublishedByOldSlug`：直链 404 **之前**查（pages.ts renderPost），命中**现存已发布 + 站点可见窗口内**的文章才 301 到新 slug——回收站 / 草稿 / 窗口外保持 404（301 与 404 的信息差不许越过「窗口外不可见」，防泄漏清单同款）；LIKE 用 `jsonItemLikePattern` + `ESCAPE '\'` 老规矩
+- 301 只服务直链 `/post/:slug`（.md 镜像分流在前不受影响）；pagecache 不缓存 3xx 天然无缓存面；搜「A→B→A 往返改名」场景看 tests/oldslug.test.ts 的往返用例（中间值保留、当前值不入列）
+
 **后台交互（public/admin/，无自动化测试，靠约定）**
 
 - 后台所有请求走 `api()`：401 会话过期已统一拦截回登录页（勿在别处重复处理，也别动 `state.user` 的判断顺序——登录表单的密码错误提示依赖它）；每个写操作按钮必须 try/catch + toast，请求期间 disabled 防连击

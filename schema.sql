@@ -69,6 +69,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_points_log_dedup ON member_points_log (mem
 CREATE TABLE IF NOT EXISTS posts (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   slug         TEXT    NOT NULL UNIQUE,
+  old_slugs    TEXT    NOT NULL DEFAULT '[]', -- 历史 slug（B22，JSON 数组）：改 slug 后旧地址 301 到新地址，最多保留 20 个
   title        TEXT    NOT NULL,
   content      TEXT    NOT NULL DEFAULT '',
   summary      TEXT    NOT NULL DEFAULT '',

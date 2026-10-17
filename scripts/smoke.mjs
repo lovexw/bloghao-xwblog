@@ -485,6 +485,39 @@ try {
   // ── 文章列表「发布/下架」守卫（2026-10 安全复查 P0 回归）：PUT 缺键即保留 ──
   // 列表页状态切换只发 {status}，服务端必须保留正文/标签/分类——曾经整包 {...post}
   // 提交（列表项无 content 键）导致正文标签分类被清空且假成功
+  console.log('[B22] 旧 slug 301')
+  {
+    // 建一篇 slug=a 的已发布文 → PUT 改 slug=b → 旧地址必须 301 到新地址；软删进回收站后旧地址必须 404
+    const c1 = await raw('POST', '/api/admin/posts', {
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ title: '冒烟：旧 slug 301', slug: 'smoke-oldslug-a', content: '<p>正文</p>', status: 'published' }),
+    })
+    const j1 = await c1.json().catch(() => null)
+    const id1 = j1 && j1.post && j1.post.id
+    let renamed = false
+    if (id1) {
+      const put = await raw('PUT', `/api/admin/posts/${id1}`, {
+        headers: { 'Content-Type': 'application/json', Cookie: cookie },
+        body: JSON.stringify({ slug: 'smoke-oldslug-b' }),
+      })
+      renamed = put.status === 200
+      const old301 = await fetch(`${BASE}/post/smoke-oldslug-a`, { redirect: 'manual', headers: { Cookie: cookie }, signal: AbortSignal.timeout(15_000) })
+      const loc = old301.headers.get('location') || ''
+      results.push(['旧 slug 301：改名后旧地址 301 到新地址', old301.status === 301 && loc.endsWith('/post/smoke-oldslug-b')])
+      console.log(`  ${old301.status === 301 && loc.endsWith('/post/smoke-oldslug-b') ? 'Y' : 'X'} 旧 slug 301（status ${old301.status} loc ${loc}）`)
+      const new200 = await raw('GET', '/post/smoke-oldslug-b')
+      results.push(['旧 slug 301：新地址 200', new200.status === 200])
+      await raw('DELETE', `/api/admin/posts/${id1}`, { headers: { Cookie: cookie } })
+      const gone404 = await fetch(`${BASE}/post/smoke-oldslug-a`, { redirect: 'manual', signal: AbortSignal.timeout(15_000) })
+      results.push(['旧 slug 301：回收站后旧地址 404', gone404.status === 404])
+      console.log(`  ${gone404.status === 404 ? 'Y' : 'X'} 旧 slug 301：回收站后 404（status ${gone404.status}）`)
+    }
+    if (!renamed) {
+      results.push(['旧 slug 301：改名后旧地址 301 到新地址', false])
+      console.log('  X 旧 slug 301：建文/改名失败，链路未跑')
+    }
+  }
+
   console.log('\n▸ 文章状态切换保留正文')
   const pCreate = await raw('POST', '/api/admin/posts', {
     headers: { 'Content-Type': 'application/json', Cookie: cookie },

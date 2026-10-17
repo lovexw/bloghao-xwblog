@@ -218,6 +218,22 @@ export function jsonItemLikePattern(name: string): string {
   return `%${JSON.stringify(name).replace(/[%_\\]/g, (m) => '\\' + m)}%`
 }
 
+/** 旧 slug 追加（B22）：改 slug 时把旧值追加进 old_slugs JSON——去重、排除当前 slug、最多保留 keep 个
+ *  （频繁改名不无限增长，20 个对 SEO 足够）；脏 JSON 当空数组（老库 ALTER 补列前的 undefined 同口径） */
+export function appendOldSlug(currentJson: string | null | undefined, previousSlug: string, newSlug: string, keep = 20): string {
+  let list: string[] = []
+  try {
+    const parsed = JSON.parse(currentJson || '[]')
+    if (Array.isArray(parsed)) list = parsed.filter((x): x is string => typeof x === 'string' && !!x)
+  } catch {
+    list = []
+  }
+  list = list.filter((s) => s !== newSlug && s !== previousSlug)
+  if (previousSlug && previousSlug !== newSlug) list.push(previousSlug)
+  if (list.length > keep) list = list.slice(list.length - keep)
+  return JSON.stringify(list)
+}
+
 /** 搜索 LIKE 模式：\ % _ 三个字符都要转义（声明 ESCAPE '\' 后，\ 本身不转义，
  *  搜「a\b」「尾随\」时模式语义就变了）。与 jsonItemLikePattern 同口径 */
 export function likePattern(q: string): string {

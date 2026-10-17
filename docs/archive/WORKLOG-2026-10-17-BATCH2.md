@@ -17,7 +17,7 @@ emlog / Typecho 导入（B5 第二批）**刻意押后**：两家系统没有 WX
 ## 检查点
 
 - [x] **CP0 · 2026-10-17** 基线 a6c04bc（typecheck ✓ / test 797/797 / smoke 265/265，主站部署中）。备份分支 `backup/20261017-pre-batch` 已推 origin；本工作日志建立。
-- [ ] **CP1 · B22 旧 slug 301**
+- [x] **CP1 · B22 旧 slug 301**——提交见 git log（feat(slug)）；800/800 + smoke 268/268 全绿，已推 origin
 - [ ] **CP2 · B13 管理员安全包**
 - [ ] **CP3 · 后台 PWA**
 - [ ] **CP4 · B3 通知三插件**

@@ -354,6 +354,18 @@ export async function getPostBySlug(db: D1Database, slug: string): Promise<PostR
   return db.prepare('SELECT * FROM posts WHERE slug = ? AND deleted_at IS NULL').bind(slug).first<PostRow>()
 }
 
+/** 旧 slug 反查（B22）：直链 404 前查历史 slug，命中**现存已发布**文章即 301 过去。
+ *  回收站 / 草稿 / 站点可见窗口外一律不命中（与 renderPost 的 404 条件同口径——301 与 404 的
+ *  信息差不许越过「窗口外不可见」这第一道门，防泄漏清单同款）。cutoff 传 0 = 不限窗口 */
+export async function findPublishedByOldSlug(db: D1Database, slug: string, cutoff: number): Promise<{ id: number; slug: string } | null> {
+  const cond = cutoff > 0 ? 'AND COALESCE(published_at, created_at, 0) >= ?' : ''
+  const binds = cutoff > 0 ? [jsonItemLikePattern(slug), cutoff] : [jsonItemLikePattern(slug)]
+  return db
+    .prepare(`SELECT id, slug FROM posts WHERE old_slugs LIKE ? ESCAPE '\\' AND deleted_at IS NULL AND status = 'published' ${cond} ORDER BY COALESCE(published_at, created_at, 0) DESC LIMIT 1`)
+    .bind(...binds)
+    .first<{ id: number; slug: string }>()
+}
+
 export async function getPostById(db: D1Database, id: number): Promise<PostRow | null> {
   // 不含 deleted_at 过滤：后台编辑/恢复按 id 直取，回收站行也可见
   return db.prepare('SELECT * FROM posts WHERE id = ?').bind(id).first<PostRow>()
@@ -1023,6 +1035,8 @@ const SCHEMA_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: 'posts', column: 'password_hash', ddl: "ALTER TABLE posts ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''" },
   // AI 生成标注（编辑器「更多」自愿申报，<人工智能生成合成内容标识办法> 显式标识口径）：0/1，前台文章页 meta 行显示
   { table: 'posts', column: 'ai_generated', ddl: 'ALTER TABLE posts ADD COLUMN ai_generated INTEGER NOT NULL DEFAULT 0' },
+  // 旧 slug 301（B22）：JSON 数组存历史 slug，改 slug 时追加（utils.ts appendOldSlug 去重/上限），直链 404 前查它 301 到新地址
+  { table: 'posts', column: 'old_slugs', ddl: "ALTER TABLE posts ADD COLUMN old_slugs TEXT NOT NULL DEFAULT '[]'" },
   // 会员昵称 30 天一次修改窗口（src/utils.ts nicknameCooldown）：NULL = 从未改过，首次修改不受限
   { table: 'members', column: 'display_name_changed_at', ddl: 'ALTER TABLE members ADD COLUMN display_name_changed_at INTEGER' },
   // 评论头像（C2）：绑定的 QQ 号，仅头像抓取记账位——任何公开出参不携带（头像走站内转存，见 members.avatar）

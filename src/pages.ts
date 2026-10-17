@@ -5,6 +5,7 @@ import {
   getCategoryBySlug,
   getMemberById,
   getPage,
+  findPublishedByOldSlug,
   getPostBySlug,
   getPostCategoryId,
   getSettings,
@@ -563,7 +564,13 @@ export async function renderPost(c: C): Promise<Response> {
   const theme = getTheme(settings.theme)
   const slug = c.req.param('slug') ?? ''
   const row = await getPostBySlug(c.env.DB, slug)
-  if (!row) return renderNotFound(c)
+  if (!row) {
+    // 旧 slug 301（B22）：改过 slug 的文章，旧地址永久跳新地址——判定与 404 同口径
+    // （现存已发布 + 站点可见窗口内），回收站 / 草稿 / 窗口外保持 404 不透露存在性
+    const hit = await findPublishedByOldSlug(c.env.DB, slug, siteVisibleCutoff(settings))
+    if (hit && hit.slug !== slug) return c.redirect(`/post/${hit.slug}`, 301)
+    return renderNotFound(c)
+  }
   const url = new URL(c.req.url)
   const isPreview = url.searchParams.get('preview') === '1'
   if (row.status !== 'published') {

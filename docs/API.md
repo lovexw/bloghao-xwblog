@@ -179,7 +179,7 @@ AI 可获取面（`src/llms.ts`，`text/plain; charset=utf-8`，`public, max-age
 | POST | `/api/admin/posts` | 新建 |
 | GET | `/api/admin/posts/lookup?q=关键词&page=1` | 站内文章选择器（编辑器「插入链接 → 站内文章」）：仅已发布，轻出参 `{items:[{id, slug, title, summary, cover, published_at, hasPassword, minTier}], total, page, totalPages}`，无正文无口令；**注册在 `/:id` 之前**（否则 lookup 被 id 参数吞掉） |
 | GET | `/api/admin/posts/:id` | 详情（含 content、categoryId） |
-| PUT | `/api/admin/posts/:id` | 更新（autosave 用；已发布时间不会被草稿保存抹掉）。**缺键即保留**：Body 里没出现的字段（content/tags/categoryId/title 等）一律沿用旧值——列表页状态切换只发 `{status}` 不会误清正文；显式传空串/空数组/`null` 才是清空 |
+| PUT | `/api/admin/posts/:id` | 更新（autosave 用；已发布时间不会被草稿保存抹掉）。**改 slug 时旧值自动追加进 `old_slugs`**（去重、上限 20，B22）——前台旧地址此后 301 到新地址（仅现存已发布且可见窗口内命中，回收站 / 草稿 / 窗口外保持 404）。**缺键即保留**：Body 里没出现的字段（content/tags/categoryId/title 等）一律沿用旧值——列表页状态切换只发 `{status}` 不会误清正文；显式传空串/空数组/`null` 才是清空 |
 | POST | `/api/admin/posts/:id/pin` | Body `{pinned:true/false}` |
 | DELETE | `/api/admin/posts/:id` | 删除：**移入回收站**（软删，30 天后由 cron 自动彻底清除；评论与分类关联保留，恢复时一并跟回；彻底删除见下方「回收站」） |
 | GET | `/api/admin/tags` | 全站标签聚合（编辑器补全用，见下方「标签」） |

@@ -140,7 +140,7 @@ import { fetchLinkMeta, fetchableUrl } from './linkmeta'
 import { BROWSER_UA, buildCardHtml, coverProxyHostOk, coverReferer, fetchDoubanDetail, probeRelay, resolveCardCover, sanitizeMediaItem, searchMedia, subjectIdFromUrl, validateRelay, type MediaItem } from './douban'
 import { THEMES } from './themes/registry'
 import type { CommentRow, Env, MemberRow, MemberTier, PostRow, SessionUser } from './types'
-import { clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extractWeiboTopics, fmtDateCN, isDemo, isValidQQ, jsonItemLikePattern, LIST_RANGES, listRangeCutoff, nicknameCooldown, normalizeLinkUrl, siteVisibleCutoff, slugify } from './utils'
+import { appendOldSlug, clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extractWeiboTopics, fmtDateCN, isDemo, isValidQQ, jsonItemLikePattern, LIST_RANGES, listRangeCutoff, nicknameCooldown, normalizeLinkUrl, siteVisibleCutoff, slugify } from './utils'
 
 type AppEnv = { Bindings: Env; Variables: { user: SessionUser } }
 
@@ -891,7 +891,10 @@ api.put('/admin/posts/:id', async (c) => {
   if ('tooBig' in p) return jsonError('正文过长（上限约 1MB）')
   // 缺键即保留（编辑器恒发全量；列表页状态切换只发 status——缺 content/tags 等键时不能清空）
   const title = p.has.title ? p.title || '无标题' : existing.title
-  const slug = p.has.slug && p.slug && p.slug !== existing.slug ? await uniqueSlug(c.env.DB, p.slug, id) : existing.slug
+  // slug 变更时把旧值追加进 old_slugs（B22）：旧地址此后永久 301 到新地址；缺键即保留语义下不追加
+  const slugChanged = !!(p.has.slug && p.slug && p.slug !== existing.slug)
+  const slug = slugChanged ? await uniqueSlug(c.env.DB, p.slug, id) : existing.slug
+  const oldSlugs = slugChanged ? appendOldSlug(existing.old_slugs, existing.slug, slug) : existing.old_slugs || '[]'
   const content = p.has.content ? sanitizeHtml(p.content) : existing.content
   // status 先解析（部分更新语义：缺键沿用库里状态），summary 兜底按解析后的状态算，别用 payload 默认值。
   // 密码文的自动摘要同样留空（同 POST 创建口径）：summary 是公开导读面，加密正文不出前 80 字
@@ -920,10 +923,11 @@ api.put('/admin/posts/:id', async (c) => {
   // AI 生成标注：同缺键即保留口径（列表页只发 {status} 的 PUT 不得误清）
   const aiGenerated = p.has.aiGenerated ? p.aiGenerated : (existing.ai_generated ?? 0)
   await c.env.DB.prepare(
-    `UPDATE posts SET slug = ?, title = ?, content = ?, summary = ?, cover = ?, tags = ?, status = ?, pinned = ?, published_at = ?, publish_at = ?, min_tier = ?, password_hash = ?, ai_generated = ?, updated_at = ? WHERE id = ?`
+    `UPDATE posts SET slug = ?, old_slugs = ?, title = ?, content = ?, summary = ?, cover = ?, tags = ?, status = ?, pinned = ?, published_at = ?, publish_at = ?, min_tier = ?, password_hash = ?, ai_generated = ?, updated_at = ? WHERE id = ?`
   )
     .bind(
       slug,
+      oldSlugs,
       title,
       content,
       summary,
