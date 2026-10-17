@@ -64,7 +64,7 @@ import { getTheme, THEMES } from './themes/registry'
 import type { MemberData, RankData } from './themes/registry'
 import type { Env, PostRow, SessionUser, SettingsMap } from './types'
 import { packMatrix, qrMatrix } from './qrcode'
-import { clampInt, esc, excerpt, isDemo, listRangeCutoff, readingMinutes, siteVisibleCutoff, teaserHtml } from './utils'
+import { clampInt, esc, excerpt, isDemo, readingMinutes, siteVisibleCutoff, teaserHtml } from './utils'
 import { analyticsOrigin, breadcrumbJsonLd, isSpeculativeRequest } from './seo'
 import { needsFontSrc } from './skinpack'
 
@@ -249,13 +249,10 @@ async function renderList(
   // 随机排序用 seed 稳住一组顺序：URL 没带就现生成一个，翻页链接会带上它
   const seed =
     sort === 'random' ? clampInt(url.searchParams.get('seed'), 1, 999999999, 0) || 1 + Math.floor(Math.random() * 999999998) : 0
-  // 时间范围（前台游客/会员）：仅干净首页开放（tag/分类/搜索页有各自的范围口径，不叠加）。
-  // 档位白名单 + cutoff 计算都在服务端（utils.listRangeCutoff），URL 传什么都拿不到白名单之外的口径；
-  // 站点可见窗口（settings.contentVisibleRange）是全局上限，两者取更严者——分类/搜索/标签页
-  // 不吃 URL 范围但同样吃站点窗口（朋友圈式 N 天可见对全部公开列表生效）
+  // 站点可见窗口（朋友圈式 N 天可见，settings.contentVisibleRange）：全部公开列表统一收口——
+  // cutoff 由服务端按档位白名单计算（utils.siteVisibleCutoff），URL 传什么都改变不了窗口口径；
+  // 历史上的今天在开窗期间整体隐藏（本质是展示往年内容，与窗口直接冲突）
   const siteCutoff = siteVisibleCutoff(settings)
-  const range = opts.mode === 'home' && !tag ? (url.searchParams.get('range') || '').trim() : ''
-  const afterTs = Math.max(listRangeCutoff(range), siteCutoff)
 
   // 搜索模式不分页，直接取前 50 条；文章搜索走 FTS5（src/fts.ts，短词自动退回 LIKE 同口径）
   const [
@@ -273,7 +270,7 @@ async function renderList(
     wbSearch,
   ] = await Promise.all([
     opts.mode === 'search' && q
-      ? searchPosts(c.env.DB, q, 50, afterTs)
+      ? searchPosts(c.env.DB, q, 50, siteCutoff)
       : listPosts(c.env.DB, {
           status: 'published',
           tag: opts.mode === 'home' ? tag : undefined,
@@ -283,7 +280,7 @@ async function renderList(
           limit: opts.mode === 'search' ? 50 : perPage,
           sort,
           seed,
-          afterTs,
+          afterTs: siteCutoff,
         }),
     navTags(c),
     navCategories(c),
@@ -304,7 +301,7 @@ async function renderList(
     // 会员会话（首页微博流的 memberName 用；未开启时省一次查询，无 Cookie 时是纯内存快路径）
     membersEnabled(settings) ? getMemberUser(c.env.DB, c.req.raw) : Promise.resolve(null),
     // 搜索页微博结果（ROADMAP B4）：长词走 weibo_fts、短词 LIKE 扫微博表，都在 fts.ts 内部定（吃可见窗口）
-    opts.mode === 'search' && q ? searchWeibo(c.env.DB, q, 20, afterTs) : Promise.resolve(null),
+    opts.mode === 'search' && q ? searchWeibo(c.env.DB, q, 20, siteCutoff) : Promise.resolve(null),
   ])
   if (opts.mode === 'category' && !category) return renderNotFound(c)
   // 页码跳转可能输入越界，回到最后一页重新取一次
@@ -317,7 +314,7 @@ async function renderList(
       limit: perPage,
       sort,
       seed,
-      afterTs,
+      afterTs: siteCutoff,
     })
     Object.assign(r, fixed)
   }
@@ -459,8 +456,6 @@ async function renderList(
     sort,
     seed,
     categorySlug: categorySlug || undefined,
-    range: range || undefined,
-    rangeEnabled: opts.mode === 'home' && !tag,
     tags,
     categories,
     pages,
@@ -891,10 +886,8 @@ export async function renderWeibo(c: C, asHome = false): Promise<Response> {
   const url = new URL(c.req.url)
   const perPage = 15
   const topic = (url.searchParams.get('topic') || '').trim().slice(0, 24)
-  // 时间范围（前台游客/会员）：档位白名单 + cutoff 计算都在服务端；与话题筛选叠加。
-  // 站点可见窗口（settings）是全局上限，两者取更严者
-  const range = (url.searchParams.get('range') || '').trim()
-  const rangeAfterTs = Math.max(listRangeCutoff(range), siteVisibleCutoff(settings))
+  // 站点可见窗口（settings.contentVisibleRange）：微博流统一收口，与话题筛选叠加
+  const rangeAfterTs = siteVisibleCutoff(settings)
   const pageParam = clampInt(url.searchParams.get('page'), 1, 1000, 1)
   // ?wb=<id> 深链定位：历史上的今天、首页入口卡、TG 通知都链到 /weibo?wb=x#wb-x，而目标条目常不在第 1
   // 页——服务端先算出所在页直接渲染，浏览器原生锚点才滚动得到；定位失败（已删/非已发布）回退 ?page=
@@ -963,7 +956,6 @@ export async function renderWeibo(c: C, asHome = false): Promise<Response> {
     adminName: user ? (user.display_name || user.username || '').slice(0, 24) : undefined,
     memberName: !user && member ? (member.display_name || member.username || '').slice(0, 24) : undefined,
     topic: topic || undefined,
-    range: range || undefined,
     topics,
   })
   c.header('Cache-Control', 'no-cache')

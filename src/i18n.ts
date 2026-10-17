@@ -112,13 +112,6 @@ const ZH_EN: Record<string, string> = {
   '最多阅读': 'Most read',
   '最多点赞': 'Most liked',
   '最多留言': 'Most commented',
-  // 时间范围条（前台列表 + 微博页）；「全部」已在话题条段登记
-  '时间范围': 'Date range',
-  '范围': 'Range',
-  '3 天': '3 days',
-  '1 个月': '1 month',
-  '半年': '6 months',
-  '1 年': '1 year',
   // 友链申请
   '申请收录': 'Submit your site',
  '想和本站交个朋友？留下你的站点，审核通过后就会出现在上面。':

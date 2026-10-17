@@ -77,16 +77,3 @@ test('重复参数与未知参数一律回源（宁可少数页面吃不到缓�
   assert.equal(q('?utm_source=x'), null)
   assert.equal(q('?sort=views&foo=1'), null)
 })
-
-test('range：合法档位进键区分副本，未知/空值降级「全部」= 与无参同键（listRangeCutoff 白名单镜像）', () => {
-  assert.equal(q('?range=3d'), 'range=3d')
-  assert.equal(q('?range=1m'), 'range=1m')
-  assert.equal(q('?range=6m'), 'range=6m')
-  assert.equal(q('?range=1y'), 'range=1y')
-  assert.equal(q('?range=10y'), '', '手搓档位拿不到白名单外的口径：服务端降级「全部」，与无参同键')
-  assert.equal(q('?range='), '')
-  assert.equal(q('?range=3D'), '', '大小写敏感：服务端白名单只认小写档位')
-  // 范围 × 话题 / 排序叠加：不同范围必不同键（缓存串页 = 真正的绕过面）
-  assert.equal(q('?topic=x&range=3d'), 'range=3d&topic=x')
-  assert.equal(q('?topic=x&range=1y'), 'range=1y&topic=x')
-})

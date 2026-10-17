@@ -38,7 +38,6 @@ import {
   weiboHomeFeed,
   weiboSearchResults,
   weiboPager,
-  weiboRangeBar,
   weiboTopicBar,
   type CategoryLink,
   type NavPage,
@@ -128,7 +127,7 @@ export function home(d: HomeData): string {
   ${d.weibo ? weiboHomeEntry({ ...d.weibo, en }) : ''}
   ${onThisDayCard(d.onThisDay, en)}
   ${searchForm(d.q, en)}
-  ${homeSortBar({ sort: d.sort, seed: d.seed, tag: d.tag, categorySlug: d.categorySlug, q: d.q, range: d.range, rangeEnabled: d.rangeEnabled }, en)}
+  ${homeSortBar({ sort: d.sort, seed: d.seed, tag: d.tag, categorySlug: d.categorySlug, q: d.q }, en)}
   <section class="jrn-list">
     ${items || `<p class="jrn-empty">${d.emptyText || (en ? 'This page is still empty — go write the first entry.' : '这一页还空着，去写下第一篇吧。')}</p>`}
   </section>
@@ -251,7 +250,7 @@ export function guestbook(d: GuestbookData): string {
 export function weibo(d: WeiboData): string {
   const s = d.settings
   const en = isEn(s)
-  const topicBar = weiboTopicBar(d.topics || [], d.topic, en) + weiboRangeBar(d.range, d.topic, en)
+  const topicBar = weiboTopicBar(d.topics || [], d.topic, en)
   const composer = d.adminName ? weiboComposer({ adminName: d.adminName, en }) : ''
   const cards = weiboCards({
     settings: s,
@@ -271,7 +270,7 @@ export function weibo(d: WeiboData): string {
   <section class="jrn-wbtimeline">
     ${cards || `<p class="wb-empty">${d.adminName ? (en ? 'Still empty — jot the first one above.' : '这里还空着，在上面记下第一条吧。') : en ? 'Still empty — check back in a couple of days.' : '这里还空着，过两天再来看看。'}</p>`}
   </section>
-  ${weiboPager(d.page, d.totalPages, d.topic, en, d.range)}
+  ${weiboPager(d.page, d.totalPages, d.topic, en)}
   </main>
   ${foot(s, en ? FOOT_LINKS_EN.article : FOOT_LINKS.article)}
 </div>`
