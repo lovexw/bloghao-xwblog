@@ -195,6 +195,11 @@ test('AI 抓取策略 seek：检索型显式 Allow、训练型独立 Disallow，
   const seekBlock = out.slice(headIdx, allowIdx)
   const trainBlock = out.slice(out.indexOf('# 训练型', allowIdx))
   for (const ua of AI_SEEK_AGENTS) assert.ok(seekBlock.includes(`User-agent: ${ua}`), `检索档缺 ${ua}`)
+  // seek 组是这些爬虫的最具体组——组内规则整体取代 * 组（RFC 9309），/admin 禁令必须组内自带
+  assert.ok(
+    out.slice(headIdx, out.indexOf('# 训练型')).includes('Disallow: /admin'),
+    '检索组缺 Disallow: /admin（只写 Allow: / 会把基座组的后台禁令对 AI 检索爬虫整个作废）'
+  )
   for (const ua of AI_TRAIN_AGENTS) assert.ok(trainBlock.includes(`User-agent: ${ua}`), `训练档缺 ${ua}`)
   assert.ok(trainBlock.trimEnd().endsWith('Disallow: /'), '训练段以 Disallow: / 收尾')
   assert.ok(!out.includes('User-agent: Googlebot\n'), 'Googlebot 不进 AI 组（拒 Google-Extended 不影响搜索收录）')

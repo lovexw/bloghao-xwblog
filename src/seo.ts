@@ -308,6 +308,9 @@ function aiRobotsBlock(policy: AiPolicy): string {
     '# 检索引用型：在 AI 回答中引用本站时欢迎抓取',
     ...uniq(AI_SEEK_AGENTS).map((u) => `User-agent: ${u}`),
     'Allow: /',
+    // 组内必须自带 /admin 禁令：爬虫命中同名组后整体忽略 * 组（RFC 9309 最具体组胜出），
+    // 只写 Allow: / 等于把基座组的 Disallow: /admin 对这些爬虫整个作废
+    'Disallow: /admin',
     '',
     '# 训练型：不允许用于模型训练 / 语料库',
     ...uniq(AI_TRAIN_AGENTS).map((u) => `User-agent: ${u}`),
