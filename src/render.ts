@@ -1269,7 +1269,10 @@ export function weiboComposer(o: { adminName: string; en?: boolean }): string {
 </form>`
 }
 
-/** 微博页翻页：上一页 / 下一页（页数少，无需页码跳转）；按话题筛选时翻页要带上 topic */
+/** 微博页翻页：上一页 / 下一页 + 页码跳转表单（与文章列表 pagerHtml 同款）；
+ *  按话题筛选时翻页与跳转都要带上 topic。
+ *  跳转表单 action 固定指向 /weibo：纯微博模式下本页渲染在 '/'，而翻页链接本就仍指 /weibo
+ *  （同一内容，见 pages.ts renderWeibo 注释），保持一致。 */
 export function weiboPager(page: number, totalPages: number, topic?: string, en = false): string {
   if (totalPages <= 1) return ''
   const href = (p: number) => `/weibo?page=${p}${topic ? `&topic=${encodeURIComponent(topic)}` : ''}`
@@ -1283,7 +1286,16 @@ export function weiboPager(page: number, totalPages: number, topic?: string, en 
     page < totalPages
       ? `<a class="wb-pager-btn" href="${href(page + 1)}">${nextLabel}</a>`
       : `<span class="wb-pager-btn is-disabled">${nextLabel}</span>`
-  return `<nav class="wb-pager">${prev}<span class="wb-pager-info">${page} / ${totalPages}</span>${next}</nav>`
+  // 页码跳转：纯 HTML GET 表单（CSP 禁内联脚本），隐藏域带回 topic；
+  // 结构 / class 与文章列表 pagerHtml 的 .pager-jump 完全相同——七主题已共用一套样式，无需新增 CSS
+  const jump = `<form class="pager-jump" action="/weibo" method="get">${
+    topic ? `<input type="hidden" name="topic" value="${esc(topic)}">` : ''
+  }<span class="pager-jump-text">${en ? 'Page' : '跳至'}</span><input class="pager-input" type="number" name="page" min="1" max="${totalPages}" value="${page}" aria-label="${tr(en, '页码')}">${
+    en
+      ? `<span class="pager-jump-text">of ${totalPages}</span><button class="pager-go" type="submit">Go</button>`
+      : `<span class="pager-jump-text">页</span><span class="pager-jump-text">/ 共 ${totalPages} 页</span><button class="pager-go" type="submit">跳转</button>`
+  }</form>`
+  return `<nav class="wb-pager">${prev}<span class="wb-pager-info">${page} / ${totalPages}</span>${next}</nav>${jump}`
 }
 
 export interface PagerContext {
