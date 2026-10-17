@@ -538,9 +538,10 @@ const CC_NAME = {
   AU: '澳大利亚', RU: '俄罗斯', IN: '印度', NL: '荷兰', BR: '巴西', IE: '爱尔兰',
 }
 const STATS_DAYS = [7, 30, 90]
-/* 爬虫分类（src/bots.ts BOT_KIND_NAME 的前端镜像：ai/se/feed/seo/arch） */
-const BOT_KIND_CN = { ai: 'AI 抓取', se: '搜索引擎', feed: '订阅器', seo: 'SEO 工具', arch: '网页存档' }
-const BOT_KIND_CLS = { ai: 'bk-ai', se: 'bk-se', feed: 'bk-feed', seo: 'bk-seo', arch: 'bk-arch' }
+/* 爬虫分类（src/bots.ts BOT_KIND_NAME 的前端镜像：ai=训练 / ai-seek=检索引用 / se / feed / seo / arch） */
+const BOT_KIND_CN = { ai: 'AI 训练抓取', 'ai-seek': 'AI 检索引用', se: '搜索引擎', feed: '订阅器', seo: 'SEO 工具', arch: '网页存档' }
+const BOT_KIND_CLS = { ai: 'bk-ai', 'ai-seek': 'bk-aiseek', se: 'bk-se', feed: 'bk-feed', seo: 'bk-seo', arch: 'bk-arch' }
+const AI_SEEK_COLOR = '#5b4bb0'
 
 /** 横条排行（来源 / 设备 / 浏览器 / 国家） */
 function hbarRows(items, nameFn, valueFn) {
@@ -629,7 +630,7 @@ function hourChart(hourly) {
   return `<svg class="chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="今日小时分布">${grid}${marks}</svg>`
 }
 
-/** 爬虫抓取趋势（按天柱状）：与 hourChart 同构，AI 抓取那部分叠深色 */
+/** 爬虫抓取趋势（按天柱状）：与 hourChart 同构，自底向上叠三层——其他爬虫 / AI 检索引用 / AI 训练 */
 function botChart(series) {
   const W = 720, H = 140, padL = 36, padR = 8, padT = 10, padB = 20
   const n = series.length
@@ -645,10 +646,23 @@ function botChart(series) {
     const x = padL + i * step
     if (d.pv > 0) {
       const h = Math.max(1, (d.pv / maxV) * ih)
-      const ah = d.ai > 0 ? Math.max(1, Math.min(h, (d.ai / maxV) * ih)) : 0
-      marks += `<rect x="${(x + (step - barW) / 2).toFixed(1)}" y="${(padT + ih - h).toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="1.5" fill="var(--sub)" opacity="0.45"/>`
-      if (ah > 0) {
-        marks += `<rect x="${(x + (step - barW) / 2).toFixed(1)}" y="${(padT + ih - ah).toFixed(1)}" width="${barW.toFixed(1)}" height="${ah.toFixed(1)}" rx="1.5" fill="var(--accent)" opacity="0.85"/>`
+      const seg = (v) => Math.max(0, Math.min(h, (v / maxV) * ih))
+      const hTrain = seg(d.ai || 0)
+      const hSeek = seg(d.aiSeek || 0)
+      const hOther = Math.max(0, h - hTrain - hSeek)
+      const bx = (x + (step - barW) / 2).toFixed(1)
+      let y = padT + ih // 自底向上堆叠
+      if (hOther > 0) {
+        y -= hOther
+        marks += `<rect x="${bx}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${hOther.toFixed(1)}" rx="1.5" fill="var(--sub)" opacity="0.45"/>`
+      }
+      if (hSeek > 0) {
+        y -= hSeek
+        marks += `<rect x="${bx}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${hSeek.toFixed(1)}" fill="${AI_SEEK_COLOR}" opacity="0.85"/>`
+      }
+      if (hTrain > 0) {
+        y -= hTrain
+        marks += `<rect x="${bx}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${hTrain.toFixed(1)}" rx="1.5" fill="var(--accent)" opacity="0.85"/>`
       }
     }
     if (i % tickEvery === 0 || i === n - 1) {
@@ -667,8 +681,9 @@ function botChart(series) {
   const hovers = series
     .map((d, i) => {
       const x = padL + i * step
-      const se = d.pv - d.ai
-      return `<rect x="${x.toFixed(1)}" y="${padT}" width="${step.toFixed(1)}" height="${ih}" fill="transparent"><title>${d.day}：共 ${d.pv}（AI ${d.ai} · 搜索引擎 ${se}）</title></rect>`
+      const seek = d.aiSeek || 0
+      const other = Math.max(0, d.pv - (d.ai || 0) - seek)
+      return `<rect x="${x.toFixed(1)}" y="${padT}" width="${step.toFixed(1)}" height="${ih}" fill="transparent"><title>${d.day}：共 ${d.pv}（AI 训练 ${d.ai || 0} · AI 检索引用 ${seek} · 其他 ${other}）</title></rect>`
     })
     .join('')
   return `<svg class="chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="爬虫抓取趋势">${grid}${marks}${hovers}</svg>`
@@ -731,7 +746,7 @@ async function viewStats() {
     )
     .join('')
   const botChartBody = b.total
-    ? `<div class="chart-legend"><span><i class="lg-bar lg-ai"></i>AI 抓取</span><span><i class="lg-bar lg-se"></i>其他爬虫</span></div>${botChart(b.series)}`
+    ? `<div class="chart-legend"><span><i class="lg-bar lg-ai"></i>AI 训练抓取</span><span><i class="lg-bar lg-aiseek"></i>AI 检索引用</span><span><i class="lg-bar lg-se"></i>其他爬虫</span></div>${botChart(b.series)}`
     : '<div class="empty-box empty-sm">还没有识别到爬虫。抓取记录由服务端自动生成（爬虫不执行 JS，与上面的访客数据互不影响）。</div>'
   const botPanel = `
     <div class="panel" id="bot-panel">
@@ -3318,6 +3333,13 @@ async function viewSettings() {
           <label>robots.txt 追加段（附在内置规则之后：额外 Sitemap、屏蔽目录等；演示站固定整站 Disallow，不看这段）</label>
           <textarea class="textarea" id="st-robotsExtra" rows="3" placeholder="Disallow: /drafts/">${esc(s.robotsExtra || '')}</textarea>
         </div>
+        <div class="form-item">
+          <label>AI 抓取策略（声明「AI 能不能抓、抓了能不能拿去训练」，写进 robots.txt；同时输出 Content-signal 声明。不影响搜索引擎收录——那由「全站 noindex」控制）</label>
+          <div class="sec-desc" style="margin:-2px 0 8px;">保存后可在 <a href="/robots.txt" target="_blank" rel="noopener">/robots.txt</a> 自检；robots 是「表达偏好」的君子协定，真正拦截需托管平台的 AI 爬虫管控</div>
+          <label class="mode-row"><input type="radio" name="st-aiPolicy" value="allow"><span class="mode-text"><b>全部允许（默认）</b><i>不额外声明，一切 AI 爬虫照常抓取，与历史行为一致</i></span></label>
+          <label class="mode-row"><input type="radio" name="st-aiPolicy" value="seek"><span class="mode-text"><b>只许检索引用，不许训练（推荐）</b><i>放行 OAI-SearchBot / PerplexityBot / Claude 检索 等「回答里带来源链接、替你引流」的爬虫，拒绝 GPTBot / CCBot / Bytespider 等训练类，并声明 ai-train=no</i></span></label>
+          <label class="mode-row"><input type="radio" name="st-aiPolicy" value="deny"><span class="mode-text"><b>全部拒绝</b><i>所有 AI 爬虫（训练 + 检索）一律拒绝，并声明 ai-input=no、ai-train=no</i></span></label>
+        </div>
       </div>
     </div>
 
@@ -3647,6 +3669,10 @@ async function viewSettings() {
   const savedEdition = s.edition === 'en' ? 'en' : 'zh'
   document.querySelector(`input[name="st-edition"][value="${savedEdition}"]`).checked = true
 
+  // AI 抓取策略单选回填（三档白名单，脏值兜底为默认档 allow；键见 src/db.ts / src/seo.ts）
+  const savedAiPolicy = ['seek', 'deny'].includes(s.aiPolicy) ? s.aiPolicy : 'allow'
+  document.querySelector(`input[name="st-aiPolicy"][value="${savedAiPolicy}"]`).checked = true
+
   document.getElementById('btn-save').addEventListener('click', async (e) => {
     const g = (id) => document.getElementById(id)
     const btn = e.currentTarget
@@ -3691,6 +3717,7 @@ async function viewSettings() {
       verifyMetas: g('st-verifyMetas').value.trim(),
       analyticsScript: g('st-analyticsScript').value.trim(),
       robotsExtra: g('st-robotsExtra').value,
+      aiPolicy: (document.querySelector('input[name="st-aiPolicy"]:checked') || { value: 'allow' }).value,
     }
     // 关站是全站 503 的大动作：开启瞬间必须明确确认（取消时不动按钮状态）
     if (body.siteClosed === '1' && !wasClosed) {

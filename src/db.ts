@@ -61,6 +61,12 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   verifyMetas: '',
   analyticsScript: '',
   robotsExtra: '',
+  // AI 抓取策略（2026-10-17，机制 src/seo.ts + src/bots.ts）：训练型拒绝 / 检索引用型放行的声明，
+  // 写进 robots.txt（AI 爬虫独立 User-agent 组 + Content-signal 行）。
+  //  'allow' 全部允许（默认，输出与历史逐字节一致，老站无此键行为不变）
+  //  'seek'  只许检索引用、不许训练（推荐）
+  //  'deny'  所有 AI 爬虫一律拒绝
+  aiPolicy: 'allow',
   // 外部发布（见 src/external.ts）：空 Token  则 开放接口关闭
   externalToken: '',
   telegramBotToken: '',

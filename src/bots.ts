@@ -19,43 +19,58 @@ export const BOT_KEEP_DAYS = 180
 
 /* ---------------- 识别规则（单表驱动，顺序即优先级） ----------------
  * re 匹配 UA 片段；kind 决定分组：
- *   ai   —— AI 训练/对话抓取（OpenAI/Anthropic/字节/Meta…）
+ *   ai      —— AI **训练 / 语料**抓取（GPTBot/CCBot/字节/Meta…：抓下来喂模型，来源常不署名）
+ *   ai-seek —— AI **检索引用**抓取（OAI-SearchBot/PerplexityBot/Claude 检索…：用户提问时实时读，
+ *              回答里带来源链接——站长要的正是这条；与训练型商业含义相反，故分两档）
  *   se   —— 搜索引擎（参与收录排名，站长关心）
  *   feed —— RSS/订阅器（读的是 feed，不是页面）
  *   seo  —— SEO/营销爬虫（第三方分析服务，通常站长没主动请过）
  *   arch —— 网页存档（Internet Archive 等，存快照不参与排名）
  * 未命中的 UA 一律不落库——bot_log 只收识别出的爬虫，浏览器流量永远进 visit_log，
- * 两条数据流天然互斥；伪装 UA 的人工访问会被归进爬虫（拿它没办法，UA 本来就可伪造）。 */
+ * 两条数据流天然互斥；伪装 UA 的人工访问会被归进爬虫（拿它没办法，UA 本来就可伪造）。
+ *
+ * 历史口径：'ai-seek' 是 2026-10-17 从 'ai' 里拆出来的（此前 OAI-SearchBot/PerplexityBot 等
+ * 也记成 'ai'）。bot_log 是采样下界 + 180 天轮换的日志，旧行不重分类，一律按训练型展示。 */
 
-export type BotKind = 'ai' | 'se' | 'feed' | 'seo' | 'arch'
+export type BotKind = 'ai' | 'ai-seek' | 'se' | 'feed' | 'seo' | 'arch'
 
 export interface BotRule {
   re: RegExp
   name: string
   kind: BotKind
+  /** 该规则在 robots.txt 里声明的 UA 令牌（仅 AI 两类需要填）。显示名与令牌常不同
+   *  （如「字节爬虫」→ Bytespider、「Meta AI」→ meta-externalagent），且一条规则可覆盖
+   *  多个令牌（Meta AI = meta-externalagent + FacebookBot）。
+   *  AI_TRAIN_AGENTS / AI_SEEK_AGENTS 由本字段派生——新增 AI 爬虫只加一条规则并填上令牌，
+   *  robots 策略（src/seo.ts）自动跟进，别再手抄第二份名单。 */
+  robots?: string[]
 }
 
 export const BOT_RULES: BotRule[] = [
-  /* ---- AI 抓取（自称 bot/user 的各家 AI 爬虫）---- */
-  { re: /GPTBot/i, name: 'GPTBot', kind: 'ai' }, // OpenAI 训练抓取
-  { re: /OAI-SearchBot/i, name: 'OAI-SearchBot', kind: 'ai' }, // OpenAI 联网搜索
-  { re: /ChatGPT-User/i, name: 'ChatGPT', kind: 'ai' }, // 用户实时联网引用
-  { re: /ClaudeBot|Claude-Web|Claude-SearchBot/i, name: 'ClaudeBot', kind: 'ai' }, // Anthropic
-  { re: /PerplexityBot|Perplexity-User/i, name: 'PerplexityBot', kind: 'ai' },
-  { re: /Google-Extended/i, name: 'Google-Extended', kind: 'ai' }, // Gemini 训练
-  { re: /Applebot-Extended/i, name: 'Applebot-Extended', kind: 'ai' }, // Apple Intelligence
-  { re: /Bytespider/i, name: '字节爬虫', kind: 'ai' }, // 字节（豆包/训练），以量大激进著称
-  { re: /Amazonbot/i, name: 'Amazonbot', kind: 'ai' }, // Alexa/训练
-  { re: /meta-externalagent|FacebookBot/i, name: 'Meta AI', kind: 'ai' }, // Facebook AI 训练
-  { re: /CCBot/i, name: 'Common Crawl', kind: 'ai' }, // 语料库源头，多数 AI 训练集都含它
-  { re: /omgili|Webz\.io/i, name: 'Webz.io', kind: 'ai' },
-  { re: /Diffbot/i, name: 'Diffbot', kind: 'ai' },
-  { re: /YouBot/i, name: 'YouBot', kind: 'ai' },
-  { re: /cohere-ai/i, name: 'Cohere', kind: 'ai' },
-  { re: /MistralAI/i, name: 'Mistral AI', kind: 'ai' },
-  { re: /TikTokSpider/i, name: 'TikTok', kind: 'ai' },
-  { re: /DuckAssistBot/i, name: 'DuckDuckGo AI', kind: 'ai' },
-  { re: /ImagesiftBot/i, name: 'ImageSift', kind: 'ai' }, // Hive 图像数据
+  /* ---- AI 检索引用（用户提问时实时抓取，回答里带来源链接）---- */
+  { re: /OAI-SearchBot/i, name: 'OAI-SearchBot', kind: 'ai-seek', robots: ['OAI-SearchBot'] }, // OpenAI 联网搜索索引
+  { re: /ChatGPT-User/i, name: 'ChatGPT', kind: 'ai-seek', robots: ['ChatGPT-User'] }, // 用户实时联网引用
+  { re: /Claude-SearchBot/i, name: 'Claude 检索', kind: 'ai-seek', robots: ['Claude-SearchBot'] }, // Claude 搜索索引
+  { re: /Claude-User/i, name: 'Claude 抓取', kind: 'ai-seek', robots: ['Claude-User'] }, // Claude 用户触发实时抓取
+  { re: /Perplexity-User/i, name: 'Perplexity-User', kind: 'ai-seek', robots: ['Perplexity-User'] },
+  { re: /PerplexityBot/i, name: 'PerplexityBot', kind: 'ai-seek', robots: ['PerplexityBot'] },
+  { re: /YouBot/i, name: 'YouBot', kind: 'ai-seek', robots: ['YouBot'] }, // You.com（AI 答案引擎，回答署名来源）
+  { re: /DuckAssistBot/i, name: 'DuckDuckGo AI', kind: 'ai-seek', robots: ['DuckAssistBot'] }, // DDG 的 AI 摘要（搜索产品功能）
+  /* ---- AI 训练 / 语料（抓下来喂模型；Google-Extended / Applebot-Extended 不影响搜索收录）---- */
+  { re: /GPTBot/i, name: 'GPTBot', kind: 'ai', robots: ['GPTBot'] }, // OpenAI 训练抓取
+  { re: /ClaudeBot|Claude-Web/i, name: 'ClaudeBot', kind: 'ai', robots: ['ClaudeBot', 'Claude-Web'] }, // Anthropic 训练（Claude-Web 是旧名）
+  { re: /Google-Extended/i, name: 'Google-Extended', kind: 'ai', robots: ['Google-Extended'] }, // Gemini 训练
+  { re: /Applebot-Extended/i, name: 'Applebot-Extended', kind: 'ai', robots: ['Applebot-Extended'] }, // Apple Intelligence
+  { re: /Bytespider/i, name: '字节爬虫', kind: 'ai', robots: ['Bytespider'] }, // 字节（豆包/训练），以量大激进著称
+  { re: /Amazonbot/i, name: 'Amazonbot', kind: 'ai', robots: ['Amazonbot'] }, // Alexa/训练
+  { re: /meta-externalagent|FacebookBot/i, name: 'Meta AI', kind: 'ai', robots: ['meta-externalagent', 'FacebookBot'] }, // Facebook AI 训练
+  { re: /CCBot/i, name: 'Common Crawl', kind: 'ai', robots: ['CCBot'] }, // 语料库源头，多数 AI 训练集都含它
+  { re: /omgili|Webz\.io/i, name: 'Webz.io', kind: 'ai', robots: ['omgili', 'Webz.io'] }, // 数据经纪商
+  { re: /Diffbot/i, name: 'Diffbot', kind: 'ai', robots: ['Diffbot'] }, // 数据提取商
+  { re: /cohere-ai/i, name: 'Cohere', kind: 'ai', robots: ['cohere-ai'] },
+  { re: /MistralAI/i, name: 'Mistral AI', kind: 'ai', robots: ['MistralAI'] },
+  { re: /TikTokSpider/i, name: 'TikTok', kind: 'ai', robots: ['TikTokSpider'] },
+  { re: /ImagesiftBot/i, name: 'ImageSift', kind: 'ai', robots: ['ImagesiftBot'] }, // Hive 图像数据
   /* ---- 搜索引擎 ---- */
   { re: /Googlebot(?!-Image)/i, name: 'Google', kind: 'se' },
   { re: /bingbot|adidxbot/i, name: '必应', kind: 'se' },
@@ -91,12 +106,19 @@ export const BOT_RULES: BotRule[] = [
 ]
 
 export const BOT_KIND_NAME: Record<BotKind, string> = {
-  ai: 'AI 抓取',
+  ai: 'AI 训练抓取',
+  'ai-seek': 'AI 检索引用',
   se: '搜索引擎',
   feed: '订阅器',
   seo: 'SEO 工具',
   arch: '网页存档',
 }
+
+/** AI 两类爬虫的 robots.txt UA 令牌（由 BOT_RULES.robots 派生，单一事实源）。
+ *  训练型 → robots 里独立 Disallow 组；检索引用型 → 显式 Allow（声明「欢迎引用」）。
+ *  新增 AI 爬虫只改 BOT_RULES 一处；tests/bots.test.ts 守「每个令牌都能被识别回同 kind」。 */
+export const AI_TRAIN_AGENTS: string[] = BOT_RULES.filter((r) => r.kind === 'ai').flatMap((r) => r.robots ?? [])
+export const AI_SEEK_AGENTS: string[] = BOT_RULES.filter((r) => r.kind === 'ai-seek').flatMap((r) => r.robots ?? [])
 
 /** UA → 爬虫识别。未命中返回 null（浏览器流量/未知脚本，调用方不落库）。 */
 export function identifyBot(ua: string): { name: string; kind: BotKind } | null {
@@ -183,7 +205,7 @@ export interface BotStats {
   byKind: { name: string; pv: number }[] // kind 分组（kind 原值，前端映射中文名）
   byBot: { name: string; kind: string; pv: number; activeDays: number }[] // 按爬虫名，activeDays = 有抓取的天数
   topPaths: { path: string; pv: number }[]
-  series: { day: string; pv: number; ai: number; se: number }[] // 逐日，缺天补零
+  series: { day: string; pv: number; ai: number; aiSeek: number; se: number }[] // 逐日，缺天补零
   latest: { ts: number; name: string; kind: string; path: string }[] // 最近 8 条
 }
 
@@ -220,11 +242,12 @@ export async function getBotStats(db: D1Database, days: number): Promise<BotStat
         `SELECT day,
            COUNT(*) AS pv,
            SUM(CASE WHEN kind = 'ai' THEN 1 ELSE 0 END) AS ai,
+           SUM(CASE WHEN kind = 'ai-seek' THEN 1 ELSE 0 END) AS aiSeek,
            SUM(CASE WHEN kind = 'se' THEN 1 ELSE 0 END) AS se
          FROM bot_log WHERE ${inRange} GROUP BY day ORDER BY day`
       )
       .bind(startDay, today)
-      .all<{ day: string; pv: number; ai: number; se: number }>(),
+      .all<{ day: string; pv: number; ai: number; aiSeek: number; se: number }>(),
     db
       .prepare(`SELECT ts, name, kind, path FROM bot_log WHERE ${inRange} ORDER BY ts DESC LIMIT 8`)
       .bind(startDay, today)
@@ -236,7 +259,7 @@ export async function getBotStats(db: D1Database, days: number): Promise<BotStat
   for (let i = days - 1; i >= 0; i--) {
     const day = fmtDate(now - i * 86_400_000)
     const r = seriesMap.get(day)
-    series.push({ day, pv: r?.pv ?? 0, ai: r?.ai ?? 0, se: r?.se ?? 0 })
+    series.push({ day, pv: r?.pv ?? 0, ai: r?.ai ?? 0, aiSeek: r?.aiSeek ?? 0, se: r?.se ?? 0 })
   }
   return {
     days,

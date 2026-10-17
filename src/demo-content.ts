@@ -695,6 +695,7 @@ export function buildVisitRows(now: number, rng: () => number, slugs?: { slug: s
 /* ---------------- 爬虫 / AI 抓取种子（src/bots.ts bot_log） ---------------- */
 
 // name/kind 与 src/bots.ts BOT_RULES 的识别名一致（演示数据要像真被这些 UA 抓过）
+// 2026-10-17：AI 拆成训练（ai）与检索引用（ai-seek）两档，两种都要有种子
 const BOT_SEEDS: [string, string, number][] = [
   ['Google', 'se', 24],
   ['百度', 'se', 20],
@@ -702,7 +703,8 @@ const BOT_SEEDS: [string, string, number][] = [
   ['字节爬虫', 'ai', 14],
   ['GPTBot', 'ai', 8],
   ['ClaudeBot', 'ai', 6],
-  ['PerplexityBot', 'ai', 4],
+  ['OAI-SearchBot', 'ai-seek', 5],
+  ['PerplexityBot', 'ai-seek', 4],
   ['Ahrefs', 'seo', 6],
   ['Feedly', 'feed', 5],
   ['Internet Archive', 'arch', 2],
@@ -724,8 +726,8 @@ export function buildBotRows(now: number, rng: () => number, published: { slug: 
   const days = 60
   for (let d = days - 1; d >= 0; d--) {
     const [botName, botKind, basePv] = BOT_SEEDS[d % BOT_SEEDS.length]
-    // AI 抓取随天数缓慢走高（AI 时代背景），搜索引擎平稳，其他偶发
-    const trend = botKind === 'ai' ? 0.5 + 0.5 * ((days - 1 - d) / (days - 1)) : 1
+    // AI 抓取（训练 + 检索两档）随天数缓慢走高（AI 时代背景），搜索引擎平稳，其他偶发
+    const trend = botKind.startsWith('ai') ? 0.5 + 0.5 * ((days - 1 - d) / (days - 1)) : 1
     const pv = Math.max(1, Math.round((basePv / 4) * (0.6 + 0.8 * rng()) * trend))
     for (let i = 0; i < pv; i++) {
       const hourBias = pickWeighted(rng, [

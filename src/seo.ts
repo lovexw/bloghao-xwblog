@@ -1,11 +1,13 @@
 /**
  * 站长 SEO 自定义与结构化数据辅助（ROADMAP B20 / B23 / B24，2026-10-13）。
  *
- * 纯函数模块，Node 测试直接导入（tests/seo.test.ts），不依赖 Workers 运行时。三块能力：
+ * 纯函数模块，Node 测试直接导入（tests/seo.test.ts），不依赖 Workers 运行时。四块能力：
  *  ① 站点验证 meta 与统计脚本：后台只收「结构化输入」，这里解析成规范化值存库，渲染时按结构化值
  *     重新拼装输出——绝不做原始 HTML 透传（后台账号被盗时不存在现成的存储型 XSS 注入口）；
- *  ② robots.txt 追加段：规范化纯文本，附在内置段之后（内置 Allow/Disallow/Sitemap 顺序不动）；
- *  ③ Speculation Rules 预取声明、面包屑 JSON-LD 构造、预取请求识别。
+ *  ② robots.txt 组装：内置段 + settings.robotsExtra 追加段 + AI 抓取策略声明段（含 Content-Signal）；
+ *  ③ AI 抓取策略（settings.aiPolicy）：按「训练型拒绝 / 检索引用型放行」把 src/bots.ts 的
+ *     AI 令牌名单写成 robots 声明，默认档与历史输出逐字节一致；
+ *  ④ Speculation Rules 预取声明、面包屑 JSON-LD 构造、预取请求识别。
  *
  * 防线（AGENTS.md「结构速查」/ 回归防线）：
  *  - 验证 meta 只认白名单 name（VERIFY_META_NAMES）且属性值形态受限，输出一律过 esc；
@@ -15,6 +17,7 @@
  *    预取与预渲染请求（Sec-Purpose 头）不计阅读量、不打点（统计诚实性）。
  */
 import { esc } from './utils'
+import { AI_SEEK_AGENTS, AI_TRAIN_AGENTS } from './bots'
 import type { SettingsMap } from './types'
 
 /* ---------------- 一、站点验证 meta（settings.verifyMetas） ---------------- */
@@ -253,21 +256,82 @@ export function cleanRobotsExtra(raw: string): string {
   return (nl > 0 ? cut.slice(0, nl) : cut).trim()
 }
 
-/**
- * 组装 robots.txt：内置段（Allow / Disallow: /admin / Sitemap）+ settings.robotsExtra 追加段。
- * 演示站固定整站 Disallow（种子数据与闭站状态不该进索引），追加段不参与；
- * 全站 noindex 开关（settings.siteNoindex）同理整站 Disallow——空白模板站 / 镜像站不进索引，
- * 页面侧 <meta noindex> 由 pages.ts pageOpts 同口径注入。追加段在这两种状态下不参与。
- * 未配置追加段且未开 noindex 时输出与历史版本逐字节一致。
- */
-export function buildRobotsTxt(settings: SettingsMap, origin: string, demo = false): string {
-  if (demo || settings.siteNoindex === '1') return 'User-agent: *\nDisallow: /\n'
-  const base = `User-agent: *\nAllow: /\nDisallow: /admin\nSitemap: ${origin}/sitemap.xml\n`
-  const extra = cleanRobotsExtra(settings.robotsExtra || '')
-  return extra ? `${base}\n${extra}\n` : base
+/* ---------------- 四、AI 抓取策略（robots 声明 + Content-Signal，2026-10-17） ----------------
+ * 站长立场可声明的一句话：训练型 AI 拒绝、检索引用型 AI 放行——两者商业含义相反
+ * （训练=无偿拿走内容；检索=回答里带来源链接、替引流），必须能分开表态。
+ * AI 爬虫名单唯一事实源是 src/bots.ts 的 BOT_RULES（AI_TRAIN_AGENTS / AI_SEEK_AGENTS 派生），
+ * 本模块只负责「按策略把名单写成 robots 声明」。
+ *
+ * 声明性质：robots.txt 与 Content-Signal 同为「表达偏好」，不构成技术拦截（real-world 拦截
+ * 交给 Cloudflare 侧 AI Crawl Control）。托管在 Cloudflare 的站会由平台读取 Content-Signal
+ * 执行；自托管（docker-poc）只落到声明层，属既定取舍。
+ * 参考：contentsignals.org / Cloudflare「robots.txt setting」文档（Content-signal 字段写在
+ * User-Agent: * 组内）；Google Search Console 可能对 Content-signal 报「Syntax not understood」，
+ * 官方实测对抓取与收录无影响。 */
+
+/** AI 抓取策略三档（与 settings.aiPolicy 对应），写路径白名单（api.ts）与读路径都以此为准 */
+export type AiPolicy = 'allow' | 'seek' | 'deny'
+
+/** 策略取值白名单（写路径校验用；唯一来源，别在 api.ts 再抄一份） */
+export const AI_POLICY_VALUES: readonly AiPolicy[] = ['allow', 'seek', 'deny']
+
+/** settings.aiPolicy → 策略。脏值 / 缺省一律当 'allow'（渲染端容错口径：宁放行不误伤，
+ *  且默认档 robots.txt 输出与历史版本逐字节一致——老站无此键行为不变） */
+export function readAiPolicy(v: unknown): AiPolicy {
+  return v === 'seek' || v === 'deny' ? v : 'allow'
 }
 
-/* ---------------- 四、Speculation Rules 预取声明（B24） ---------------- */
+/** Content-Signal 声明行（写在既有 User-agent: * 组内，不另起组）。
+ *  search 恒 yes——搜索收录归 settings.siteNoindex 管，AI 策略不越界；
+ *  ai-input = RAG / 实时生成式回答取用，ai-train = 模型训练。默认档返回空串（逐字节兼容） */
+function contentSignalLine(policy: AiPolicy): string {
+  if (policy === 'allow') return ''
+  const aiInput = policy === 'seek' ? 'yes' : 'no'
+  return `Content-signal: search=yes, ai-input=${aiInput}, ai-train=no\n`
+}
+
+/** AI 策略的 robots 声明块（默认档返回空串）。令牌去重 + 排序保证「同输入同输出」 */
+function aiRobotsBlock(policy: AiPolicy): string {
+  if (policy === 'allow') return ''
+  const uniq = (a: string[]) => [...new Set(a)].sort()
+  const header = '# 站长的 AI 抓取策略（博客号 BlogHao「设置 → 站点 → AI 抓取策略」）'
+  if (policy === 'deny') {
+    return [
+      header,
+      '# 所有 AI 爬虫（训练 + 检索）一律不允许抓取',
+      ...uniq([...AI_TRAIN_AGENTS, ...AI_SEEK_AGENTS]).map((u) => `User-agent: ${u}`),
+      'Disallow: /',
+    ].join('\n')
+  }
+  return [
+    header,
+    '# 检索引用型：在 AI 回答中引用本站时欢迎抓取',
+    ...uniq(AI_SEEK_AGENTS).map((u) => `User-agent: ${u}`),
+    'Allow: /',
+    '',
+    '# 训练型：不允许用于模型训练 / 语料库',
+    ...uniq(AI_TRAIN_AGENTS).map((u) => `User-agent: ${u}`),
+    'Disallow: /',
+  ].join('\n')
+}
+
+/** robots.txt 组装：内置段（Allow / Disallow: /admin / Sitemap）+ settings.robotsExtra 追加段
+ *  + AI 抓取策略声明段。演示站固定整站 Disallow（种子数据与闭站状态不该进索引），追加段与 AI 段
+ *  都不参与；全站 noindex 开关（settings.siteNoindex）同理整站 Disallow——空白模板站 / 镜像站
+ *  不进索引，页面侧 <meta noindex> 由 pages.ts pageOpts 同口径注入。
+ *  **默认档（aiPolicy 缺省 / 'allow'）与未配置追加段时输出与历史版本逐字节一致**，改它先跑
+ *  tests/seo.test.ts。 */
+export function buildRobotsTxt(settings: SettingsMap, origin: string, demo = false): string {
+  if (demo || settings.siteNoindex === '1') return 'User-agent: *\nDisallow: /\n'
+  const policy = readAiPolicy(settings.aiPolicy)
+  const base = `User-agent: *\n${contentSignalLine(policy)}Allow: /\nDisallow: /admin\nSitemap: ${origin}/sitemap.xml\n`
+  const extra = cleanRobotsExtra(settings.robotsExtra || '')
+  const ai = aiRobotsBlock(policy)
+  const tail = [extra, ai].filter(Boolean).join('\n\n')
+  return tail ? `${base}\n${tail}\n` : base
+}
+
+/* ---------------- 五、Speculation Rules 预取声明（B24） ---------------- */
 
 /**
  * 同源链接的预渲染声明（moderate：悬停约 200ms 即预渲染，pointerdown 前就把下一页拉好；
@@ -313,7 +377,7 @@ export function seoHeadHtml(settings: SettingsMap): string {
     .join('\n')
 }
 
-/* ---------------- 五、面包屑 JSON-LD（B23） ---------------- */
+/* ---------------- 六、面包屑 JSON-LD（B23） ---------------- */
 
 export interface Crumb {
   name: string
@@ -335,7 +399,7 @@ export function breadcrumbJsonLd(crumbs: Crumb[]): Record<string, unknown> {
   }
 }
 
-/* ---------------- 六、分类描述（B23） ---------------- */
+/* ---------------- 七、分类描述（B23） ---------------- */
 
 /** 分类描述长度上限（归档页 meta description 口径，与全站摘要 160 字截断同量级） */
 export const CATEGORY_DESC_MAX = 300
@@ -349,7 +413,7 @@ export function cleanCategoryDescription(raw: unknown): string {
     .slice(0, CATEGORY_DESC_MAX)
 }
 
-/* ---------------- 七、预取 / 预渲染请求识别（B24 统计诚实性） ---------------- */
+/* ---------------- 八、预取 / 预渲染请求识别（B24 统计诚实性） ---------------- */
 
 /**
  * 预取 / 预渲染请求识别：Chrome speculation rules 请求带 `Sec-Purpose: prefetch[;prerender]`

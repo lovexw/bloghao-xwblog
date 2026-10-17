@@ -1318,10 +1318,44 @@ try {
     results.push(['分类描述：清理临时分类', catDel.status === 200])
     console.log(`  ${catDel.status === 200 ? '✓' : '✗'} 分类描述：清理临时分类`)
   }
-  const seoOff = await putSettings({ verifyMetas: '', analyticsScript: '', robotsExtra: '' })
+  // AI 抓取策略（src/seo.ts buildRobotsTxt + src/bots.ts AI 令牌表，2026-10-17）：
+  // 三档声明写进 /robots.txt——检索引用型显式 Allow、训练型独立 Disallow、Content-signal 行；
+  // 脏档位整体 400。默认档（allow）与历史输出逐字节一致，已由 tests/seo.test.ts 守着
+  const aiSeek = await putSettings({ aiPolicy: 'seek' })
+  const seekTxt = await (await raw('GET', '/robots.txt')).text()
+  const seekOk =
+    aiSeek.status === 200 &&
+    seekTxt.includes('Content-signal: search=yes, ai-input=yes, ai-train=no') &&
+    seekTxt.includes('User-agent: OAI-SearchBot') &&
+    seekTxt.includes('User-agent: PerplexityBot') &&
+    seekTxt.includes('User-agent: GPTBot') &&
+    seekTxt.includes('User-agent: CCBot') &&
+    seekTxt.includes('Content-signal: search=yes') &&
+    seekTxt.includes('Disallow: /admin') &&
+    seekTxt.includes('Sitemap:')
+  results.push(['AI 抓取策略：seek 档（检索放行 / 训练拒绝 + Content-signal）', seekOk])
+  console.log(`  ${seekOk ? '✓' : '✗'} AI 抓取策略：seek 档（status ${aiSeek.status}）`)
+  const aiDeny = await putSettings({ aiPolicy: 'deny' })
+  const denyTxt = await (await raw('GET', '/robots.txt')).text()
+  const denyOk =
+    aiDeny.status === 200 &&
+    denyTxt.includes('Content-signal: search=yes, ai-input=no, ai-train=no') &&
+    denyTxt.includes('User-agent: OAI-SearchBot') &&
+    denyTxt.includes('User-agent: GPTBot')
+  results.push(['AI 抓取策略：deny 档（训练 + 检索全部拒绝，ai-input=no）', denyOk])
+  console.log(`  ${denyOk ? '✓' : '✗'} AI 抓取策略：deny 档（status ${aiDeny.status}）`)
+  const aiBad = await putSettings({ aiPolicy: 'yolo' })
+  results.push(['AI 抓取策略：非法档位整体 400（不落库）', aiBad.status === 400])
+  console.log(`  ${aiBad.status === 400 ? '✓' : '✗'} AI 抓取策略：非法档位 400（status ${aiBad.status}）`)
+
+  const seoOff = await putSettings({ verifyMetas: '', analyticsScript: '', robotsExtra: '', aiPolicy: 'allow' })
   results.push(['SEO 链路：还原配置', seoOff.status === 200])
   console.log(`  ${seoOff.status === 200 ? '✓' : '✗'} SEO 链路：还原配置`)
   await check('GET', '/robots.txt', 200, undefined, { notContains: 'smoke-drafts' })
+  const restoredTxt = await (await raw('GET', '/robots.txt')).text()
+  const restoredAiOk = !restoredTxt.includes('Content-signal') && !restoredTxt.includes('AI 抓取策略')
+  results.push(['AI 抓取策略：还原 allow 档后回到内置段（无 AI 声明）', restoredAiOk])
+  console.log(`  ${restoredAiOk ? '✓' : '✗'} AI 抓取策略：还原 allow 档`)
 
   // ── SEO 收录口径链路（2026-10 SEO 审计）：sitemap 收录面收敛、标签页 noindex + canonical 自指、
   //    全站 noindex 开关（settings.siteNoindex）。与 src/rss.ts buildSitemap / pages.ts renderList /

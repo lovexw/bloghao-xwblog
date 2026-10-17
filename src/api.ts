@@ -1,6 +1,6 @@
 import { type Context, Hono } from 'hono'
 import { runBackup } from './backup'
-import { analyticsScriptHtml, cleanAnalyticsScript, cleanCategoryDescription, cleanRobotsExtra, cleanVerifyMetas, verifyMetaTagsHtml } from './seo'
+import { analyticsScriptHtml, cleanAnalyticsScript, cleanCategoryDescription, cleanRobotsExtra, cleanVerifyMetas, verifyMetaTagsHtml, AI_POLICY_VALUES, type AiPolicy } from './seo'
 import {
   clearMemberSessionCookie,
   clearSessionCookie,
@@ -2098,6 +2098,14 @@ api.put('/admin/settings', async (c) => {
     if (key === 'robotsExtra') {
       // robots.txt 追加段（B20）：剥控制字符 + 限长后存库，渲染时附在内置段之后
       patch[key] = cleanRobotsExtra(v)
+      continue
+    }
+    if (key === 'aiPolicy') {
+      // AI 抓取策略（训练型拒绝 / 检索引用型放行的 robots 声明）：三值白名单，脏值 400
+      // 而不是静默降级（与 contentVisibleRange 同口径——站长得知道「保存了没生效」是输入问题）；
+      // 渲染端 readAiPolicy 另有一层容错兜底（脏值一律当 allow）
+      if (!AI_POLICY_VALUES.includes(v as AiPolicy)) return jsonError('AI 抓取策略档位不正确')
+      patch[key] = v
       continue
     }
     if (key === 'edition') {

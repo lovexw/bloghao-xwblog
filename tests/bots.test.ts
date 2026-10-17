@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import {
+  AI_SEEK_AGENTS,
+  AI_TRAIN_AGENTS,
   BOT_KEEP_DAYS,
   BOT_RULES,
   cleanBotPath,
@@ -61,17 +63,23 @@ function freshDb(): { d1: D1Database; raw: DatabaseSync } {
 
 test('identifyBot 识别主流 AI 抓取', () => {
   const cases: [string, string, BotKind][] = [
+    // 训练 / 语料（抓下来喂模型）
     ['Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; GPTBot/1.2; +https://openai.com/gptbot', 'GPTBot', 'ai'],
-    ['Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; OAI-SearchBot/1.0; +https://openai.com/searchbot', 'OAI-SearchBot', 'ai'],
-    ['Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; ChatGPT-User/1.0; +https://openai.com/bot', 'ChatGPT', 'ai'],
-    ['Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.0.0 Safari/537.36 ClaudeBot/1.0', 'ClaudeBot', 'ai'],
-    ['Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)', 'PerplexityBot', 'ai'],
+    ['Mozilla/5.0 (KHTML, like Gecko) Version/4.0 Chrome/126.0.0.0 Safari/537.36 ClaudeBot/1.0', 'ClaudeBot', 'ai'],
     ['Mozilla/5.0 (compatible; Google-Extended/1.0)', 'Google-Extended', 'ai'],
     ['Mozilla/5.0 (compatible; Applebot-Extended/1.0; +http://www.apple.com/go/applebot-extended)', 'Applebot-Extended', 'ai'],
     ['Mozilla/5.0 (Linux; Android 5.0) AppleWebKit/537.36 (KHTML, like Gecko) Mobile Safari/537.36 (compatible; Bytespider; spider-feedback@bytedance.com)', '字节爬虫', 'ai'],
     ['Mozilla/5.0 (compatible; meta-externalagent/1.1 (+https://developers.facebook.com/docs/sharing/webmasters/crawler))', 'Meta AI', 'ai'],
     ['CCBot/2.0 (https://commoncrawl.org/faq/)', 'Common Crawl', 'ai'],
-    ['Mozilla/5.0 (compatible; DuckAssistBot/1.0; +http://duckduckgo.com/duckassistbot.html)', 'DuckDuckGo AI', 'ai'],
+    // 检索引用（用户提问时实时读，回答里带来源链接）
+    ['Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; OAI-SearchBot/1.0; +https://openai.com/searchbot', 'OAI-SearchBot', 'ai-seek'],
+    ['Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; ChatGPT-User/1.0; +https://openai.com/bot', 'ChatGPT', 'ai-seek'],
+    ['Mozilla/5.0 (compatible; Claude-SearchBot/1.0; +http://www.anthropic.com/claude-searchbot)', 'Claude 检索', 'ai-seek'],
+    ['Mozilla/5.0 (compatible; Claude-User/1.0; +http://www.anthropic.com/claude-user)', 'Claude 抓取', 'ai-seek'],
+    ['Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)', 'PerplexityBot', 'ai-seek'],
+    ['Mozilla/5.0 (compatible; Perplexity-User/1.0; +https://perplexity.ai/perplexity-user)', 'Perplexity-User', 'ai-seek'],
+    ['Mozilla/5.0 (compatible; YouBot/1.0; +https://about.you.com/youbot/)', 'YouBot', 'ai-seek'],
+    ['Mozilla/5.0 (compatible; DuckAssistBot/1.0; +http://duckduckgo.com/duckassistbot.html)', 'DuckDuckGo AI', 'ai-seek'],
   ]
   for (const [ua, name, kind] of cases) {
     const hit = identifyBot(ua)
@@ -79,6 +87,13 @@ test('identifyBot 识别主流 AI 抓取', () => {
     assert.equal(hit.name, name)
     assert.equal(hit.kind, kind)
   }
+})
+
+test('ClaudeBot / Claude-SearchBot / Claude-User 三分：训练与检索不混（拆前会误伤引用路）', () => {
+  assert.equal(identifyBot('ClaudeBot/1.0')?.kind, 'ai')
+  assert.equal(identifyBot('Claude-Web/1.0')?.kind, 'ai')
+  assert.equal(identifyBot('Claude-SearchBot/1.0')?.kind, 'ai-seek')
+  assert.equal(identifyBot('Claude-User/1.0')?.kind, 'ai-seek')
 })
 
 test('identifyBot 识别搜索引擎', () => {
@@ -123,11 +138,38 @@ test('识别顺序：Google-Extended 优先于 Googlebot 系，Applebot-Extended
 })
 
 test('BOT_RULES 规则表自洽：kind 都是合法枚举、name 非空', () => {
-  const kinds = new Set<BotKind>(['ai', 'se', 'feed', 'seo', 'arch'])
+  const kinds = new Set<BotKind>(['ai', 'ai-seek', 'se', 'feed', 'seo', 'arch'])
   for (const r of BOT_RULES) {
     assert.ok(kinds.has(r.kind), `非法 kind: ${r.kind}`)
     assert.ok(r.name.length > 0 && r.name.length <= 20, `name 越界: ${r.name}`)
     assert.ok(r.re.test('X'.repeat(0) + r.name) === false || true) // 正则合法性由上面用例覆盖
+  }
+})
+
+test('AI 令牌表与识别规则同源：每条 AI 令牌都能被识别回同 kind，两档无交集', () => {
+  // AI_TRAIN_AGENTS / AI_SEEK_AGENTS 是 robots 策略（src/seo.ts）的唯一输入，
+  // 每个令牌必须真能匹配回它的规则——否则策略会声明一个识别不到的 UA（形同虚设）
+  for (const ua of AI_TRAIN_AGENTS) {
+    assert.equal(identifyBot(`${ua}/1.0`)?.kind, 'ai', `训练型令牌未被识别为训练: ${ua}`)
+  }
+  for (const ua of AI_SEEK_AGENTS) {
+    assert.equal(identifyBot(`${ua}/1.0`)?.kind, 'ai-seek', `检索型令牌未被识别为检索: ${ua}`)
+  }
+  const train = new Set(AI_TRAIN_AGENTS)
+  for (const ua of AI_SEEK_AGENTS) assert.ok(!train.has(ua), `令牌同时出现在两档: ${ua}`)
+  assert.equal(new Set(AI_TRAIN_AGENTS).size, AI_TRAIN_AGENTS.length, '训练型令牌有重复')
+  assert.equal(new Set(AI_SEEK_AGENTS).size, AI_SEEK_AGENTS.length, '检索型令牌有重复')
+  // 每条 AI 类规则都必须声明 robots 令牌（新增 AI 爬虫忘填令牌时这里报红）
+  for (const r of BOT_RULES) {
+    if (r.kind === 'ai' || r.kind === 'ai-seek') assert.ok(r.robots?.length, `AI 规则缺 robots 令牌: ${r.name}`)
+  }
+  // 关键一对：Googlebot 放行 / Google-Extended 拒绝（拒后者不影响搜索收录）
+  assert.ok(!AI_TRAIN_AGENTS.includes('Googlebot'))
+  assert.ok(AI_TRAIN_AGENTS.includes('Google-Extended'))
+  assert.ok(!AI_SEEK_AGENTS.includes('Google-Extended'))
+  // 检索档必须含「回答里带来源链接」的主流三家
+  for (const ua of ['OAI-SearchBot', 'PerplexityBot', 'Claude-SearchBot']) {
+    assert.ok(AI_SEEK_AGENTS.includes(ua), `检索档缺 ${ua}`)
   }
 })
 
@@ -177,10 +219,11 @@ test('recordBot + getBotStats 全链路：分组、逐日补零、活跃天数�
   const { d1 } = freshDb()
   const now = Date.now()
   const dayMs = 86_400_000
-  // 今天 3 条 + 昨天 2 条 + 32 天前 1 条（30 天窗口外）
+  // 今天 4 条 + 昨天 2 条 + 32 天前 1 条（30 天窗口外）；AI 两档各记一条
   await recordBot(d1, { name: 'GPTBot', kind: 'ai', path: '/post/hello', country: 'US' })
   await recordBot(d1, { name: 'GPTBot', kind: 'ai', path: '/post/world', country: 'US' })
   await recordBot(d1, { name: '字节爬虫', kind: 'ai', path: '/', country: 'SG' })
+  await recordBot(d1, { name: 'PerplexityBot', kind: 'ai-seek', path: '/post/hello', country: 'US' })
   await recordBot(d1, { name: 'Google', kind: 'se', path: '/post/hello', country: 'US' })
   await recordBot(d1, { name: 'Google', kind: 'se', path: '/rss.xml', country: 'IE' })
   await d1
@@ -190,24 +233,30 @@ test('recordBot + getBotStats 全链路：分组、逐日补零、活跃天数�
 
   const s = await getBotStats(d1, 30)
   assert.equal(s.days, 30)
-  assert.equal(s.total, 5) // 32 天前那条在窗口外
-  assert.ok(s.todayTotal >= 3)
+  assert.equal(s.total, 6) // 32 天前那条在窗口外
+  assert.ok(s.todayTotal >= 4)
   const ai = s.byKind.find((k) => k.name === 'ai')
+  const aiSeek = s.byKind.find((k) => k.name === 'ai-seek')
   const se = s.byKind.find((k) => k.name === 'se')
   assert.equal(ai?.pv, 3)
+  assert.equal(aiSeek?.pv, 1)
   assert.equal(se?.pv, 2)
   const gpt = s.byBot.find((b) => b.name === 'GPTBot')
   assert.equal(gpt?.pv, 2)
   assert.equal(gpt?.kind, 'ai')
   assert.equal(gpt?.activeDays, 1)
+  const pplx = s.byBot.find((b) => b.name === 'PerplexityBot')
+  assert.equal(pplx?.kind, 'ai-seek')
   const google = s.byBot.find((b) => b.name === 'Google')
   assert.equal(google?.activeDays, 1)
   const paths = s.topPaths.map((p) => p.path)
   assert.ok(paths.includes('/post/hello'))
   assert.equal(s.series.length, 30)
-  assert.equal(s.series[s.series.length - 1].pv >= 3, true)
+  assert.equal(s.series[s.series.length - 1].pv >= 4, true)
+  assert.equal(s.series[s.series.length - 1].ai, 3)
+  assert.equal(s.series[s.series.length - 1].aiSeek, 1)
   assert.equal(s.series[0].pv, 0) // 30 天前那天无数据，补零
-  assert.equal(s.latest.length, 5)
+  assert.equal(s.latest.length, 6)
   assert.ok(s.latest[0].ts >= s.latest[s.latest.length - 1].ts) // 倒序
 })
 
@@ -220,7 +269,7 @@ test('getBotStats 空库返回零值骨架（series 补零、数组为空不炸�
   assert.deepEqual(s.byBot, [])
   assert.deepEqual(s.topPaths, [])
   assert.equal(s.series.length, 7)
-  assert.ok(s.series.every((d) => d.pv === 0 && d.ai === 0 && d.se === 0))
+  assert.ok(s.series.every((d) => d.pv === 0 && d.ai === 0 && d.aiSeek === 0 && d.se === 0))
   assert.deepEqual(s.latest, [])
 })
 

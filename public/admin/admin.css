@@ -865,6 +865,7 @@ a.pl-row:hover .pl-go { color: var(--accent); }
 .chart-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
 .chart-legend .lg-bar { background: var(--accent); opacity: 0.85; }
 .chart-legend .lg-ai { background: var(--accent); }
+.chart-legend .lg-aiseek { background: #5b4bb0; opacity: 0.85; }
 .chart-legend .lg-se { background: var(--sub); opacity: 0.45; }
 .chart-legend .lg-line { width: 14px; height: 2px; border-radius: 1px; background: var(--sub); }
 .hbar-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
@@ -910,6 +911,7 @@ a.stat-row:hover .stat-row-title { color: var(--accent); }
   border-radius: 999px; padding: 4px 8px; white-space: nowrap;
 }
 .bk-ai { background: rgba(178, 58, 41, 0.08); color: var(--accent); }
+.bk-aiseek { background: rgba(91, 75, 176, 0.1); color: #5b4bb0; }
 .bk-se { background: rgba(46, 125, 50, 0.1); color: #2e7d32; }
 .bk-feed { background: rgba(30, 100, 160, 0.1); color: #1e64a0; }
 .bk-seo { background: rgba(150, 110, 20, 0.12); color: #8a6410; }

@@ -12,10 +12,14 @@ import {
   isSpeculativeRequest,
   parseAnalyticsScript,
   parseVerifyMetas,
+  readAiPolicy,
   speculationRulesHtml,
   SPECULATION_RULES,
   verifyMetaTagsHtml,
+  AI_POLICY_VALUES,
+  type AiPolicy,
 } from '../src/seo.ts'
+import { AI_SEEK_AGENTS, AI_TRAIN_AGENTS } from '../src/bots.ts'
 import { page } from '../src/render.ts'
 import { DEFAULT_SETTINGS } from '../src/db.ts'
 
@@ -162,6 +166,62 @@ test('robots.txt 组装：未配置与历史版本逐字节一致，配置后追
     'User-agent: *\nDisallow: /\n'
   )
   assert.equal(buildRobotsTxt({ ...S, siteNoindex: '0' }, 'https://blog.example.com'), builtin)
+})
+
+/* ---------------- 三之二、AI 抓取策略（robots 声明 + Content-Signal，2026-10-17） ---------------- */
+
+test('AI 抓取策略：默认档 / 脏值 / 缺省一律 allow，输出与历史逐字节一致且不出 Content-signal', () => {
+  const builtin = 'User-agent: *\nAllow: /\nDisallow: /admin\nSitemap: https://blog.example.com/sitemap.xml\n'
+  for (const v of ['allow', '', undefined, 'yolo', null]) {
+    assert.equal(readAiPolicy(v), 'allow')
+    assert.equal(buildRobotsTxt({ ...S, aiPolicy: v as string }, 'https://blog.example.com'), builtin)
+  }
+  assert.equal(readAiPolicy('seek'), 'seek')
+  assert.equal(readAiPolicy('deny'), 'deny')
+  assert.deepEqual([...AI_POLICY_VALUES], ['allow', 'seek', 'deny'])
+})
+
+test('AI 抓取策略 seek：检索型显式 Allow、训练型独立 Disallow，Content-signal 声明 ai-train=no', () => {
+  const out = buildRobotsTxt({ ...S, aiPolicy: 'seek' }, 'https://blog.example.com')
+  // Content-signal 写进既有的 User-agent: * 组内（不另起组），内置段其余部分照旧
+  assert.ok(
+    out.startsWith(
+      'User-agent: *\nContent-signal: search=yes, ai-input=yes, ai-train=no\nAllow: /\nDisallow: /admin\nSitemap: https://blog.example.com/sitemap.xml\n'
+    )
+  )
+  assert.equal((out.match(/User-agent: \*/g) || []).length, 1, '不得出现第二个 User-agent: * 组')
+  const headIdx = out.indexOf('# 站长的 AI 抓取策略')
+  const allowIdx = out.indexOf('Allow: /', headIdx)
+  const seekBlock = out.slice(headIdx, allowIdx)
+  const trainBlock = out.slice(out.indexOf('# 训练型', allowIdx))
+  for (const ua of AI_SEEK_AGENTS) assert.ok(seekBlock.includes(`User-agent: ${ua}`), `检索档缺 ${ua}`)
+  for (const ua of AI_TRAIN_AGENTS) assert.ok(trainBlock.includes(`User-agent: ${ua}`), `训练档缺 ${ua}`)
+  assert.ok(trainBlock.trimEnd().endsWith('Disallow: /'), '训练段以 Disallow: / 收尾')
+  assert.ok(!out.includes('User-agent: Googlebot\n'), 'Googlebot 不进 AI 组（拒 Google-Extended 不影响搜索收录）')
+})
+
+test('AI 抓取策略 deny：训练 + 检索合并成一个 Disallow 组，声明 ai-input=no', () => {
+  const out = buildRobotsTxt({ ...S, aiPolicy: 'deny' }, 'https://blog.example.com')
+  assert.ok(out.includes('Content-signal: search=yes, ai-input=no, ai-train=no'))
+  for (const ua of [...AI_TRAIN_AGENTS, ...AI_SEEK_AGENTS]) assert.ok(out.includes(`User-agent: ${ua}`), `拒绝档缺 ${ua}`)
+  const headIdx = out.indexOf('# 站长的 AI 抓取策略')
+  assert.ok(!out.slice(headIdx).includes('Allow: /'), '拒绝档不得在 AI 段放行任何 UA')
+  // 演示站 / 全站 noindex：整站 Disallow，AI 段不参与（守卫不因策略档位松动）
+  assert.equal(buildRobotsTxt({ ...S, aiPolicy: 'seek' }, 'https://demo.example.com', true), 'User-agent: *\nDisallow: /\n')
+  assert.equal(
+    buildRobotsTxt({ ...S, aiPolicy: 'seek', siteNoindex: '1' }, 'https://blog.example.com'),
+    'User-agent: *\nDisallow: /\n'
+  )
+})
+
+test('AI 抓取策略：robotsExtra 追加段仍排在 AI 段之前（追加段语义不变）', () => {
+  const out = buildRobotsTxt({ ...S, aiPolicy: 'seek', robotsExtra: 'Disallow: /drafts/' }, 'https://blog.example.com')
+  assert.ok(out.indexOf('Disallow: /drafts/') < out.indexOf('# 站长的 AI 抓取策略'))
+  // 同输入同输出（令牌排序稳定）
+  assert.equal(
+    buildRobotsTxt({ ...S, aiPolicy: 'seek' }, 'https://blog.example.com'),
+    buildRobotsTxt({ ...S, aiPolicy: 'seek' }, 'https://blog.example.com')
+  )
 })
 
 /* ---------------- 四、Speculation Rules ---------------- */
