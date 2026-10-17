@@ -38,6 +38,7 @@ import {
   weiboHomeFeed,
   weiboSearchResults,
   weiboPager,
+  weiboRangeBar,
   weiboTopicBar,
 } from '../render'
 import css from './wechat.css'
@@ -153,7 +154,7 @@ export function home(d: HomeData): string {
   ${d.weibo ? weiboHomeEntry({ ...d.weibo, en }) : ''}
   ${onThisDayCard(d.onThisDay, en)}
   ${searchForm(d.q, en)}
-  ${homeSortBar({ sort: d.sort, seed: d.seed, tag: d.tag, categorySlug: d.categorySlug, q: d.q }, en)}
+  ${homeSortBar({ sort: d.sort, seed: d.seed, tag: d.tag, categorySlug: d.categorySlug, q: d.q, range: d.range, rangeEnabled: d.rangeEnabled }, en)}
   <main class="wx-feed">
     ${items || `<p class="wx-empty">${d.emptyText || (en ? 'No posts yet — write your first one in the admin.' : '还没有文章，快去后台写下第一篇吧。')}</p>`}
   </main>
@@ -306,7 +307,7 @@ export function guestbook(d: GuestbookData): string {
 export function weibo(d: WeiboData): string {
   const s = d.settings
   const en = isEn(s)
-  const topicBar = weiboTopicBar(d.topics || [], d.topic, en)
+  const topicBar = weiboTopicBar(d.topics || [], d.topic, en) + weiboRangeBar(d.range, d.topic, en)
   const composer = d.adminName ? weiboComposer({ adminName: d.adminName, en }) : ''
   const cards = weiboCards({
     settings: s,
@@ -327,7 +328,7 @@ export function weibo(d: WeiboData): string {
   <main class="wb-list">
     ${cards || `<p class="wb-empty">${d.adminName ? (en ? 'No notes yet — post the first one above.' : '还没有微博，在上面发第一条吧。') : en ? 'No notes yet.' : '还没发过微博，去后台随手写一条吧。'}</p>`}
   </main>
-  ${weiboPager(d.page, d.totalPages, d.topic, en)}
+  ${weiboPager(d.page, d.totalPages, d.topic, en, d.range)}
   ${foot(s, footLinksFor(s, en).archive)}
 </div>`
 }

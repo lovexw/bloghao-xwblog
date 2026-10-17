@@ -1269,10 +1269,29 @@ export function weiboComposer(o: { adminName: string; en?: boolean }): string {
 </form>`
 }
 
-/** 微博页翻页：上一页 / 下一页（页数少，无需页码跳转）；按话题筛选时翻页要带上 topic */
-export function weiboPager(page: number, totalPages: number, topic?: string, en = false): string {
+/** 微博页时间范围条：与排序条同一套档位口径（utils.listRangeCutoff 白名单），话题筛选保留叠加。
+ *  复用 .fs-bar/.fs-chip（七主题 CSS 均无作用域限制），微博页零新增样式 */
+export function weiboRangeBar(active?: string, topic?: string, en = false): string {
+  const qs = (range: string) => {
+    const p = new URLSearchParams()
+    if (topic) p.set('topic', topic)
+    if (range) p.set('range', range)
+    return p.toString()
+  }
+  const chips = HOME_RANGES.map(
+    (r) =>
+      `<a class="fs-chip${(r.key || '') === (active || '') ? ' is-active' : ''}" href="${esc(
+        '/weibo' + (qs(r.key) ? `?${qs(r.key)}` : '')
+      )}">${tr(en, r.label)}</a>`
+  ).join('')
+  return `<nav class="fs-bar" aria-label="${tr(en, '时间范围')}"><span class="fs-label">${tr(en, '范围')}</span>${chips}</nav>`
+}
+
+/** 微博页翻页：上一页 / 下一页（页数少，无需页码跳转）；按话题/范围筛选时翻页都要带上 */
+export function weiboPager(page: number, totalPages: number, topic?: string, en = false, range?: string): string {
   if (totalPages <= 1) return ''
-  const href = (p: number) => `/weibo?page=${p}${topic ? `&topic=${encodeURIComponent(topic)}` : ''}`
+  const href = (p: number) =>
+    `/weibo?page=${p}${topic ? `&topic=${encodeURIComponent(topic)}` : ''}${range ? `&range=${encodeURIComponent(range)}` : ''}`
   const prevLabel = en ? '← Newer' : '← 新一条'
   const nextLabel = en ? 'Older →' : '更早的 →'
   const prev =
@@ -1477,21 +1496,36 @@ export const HOME_SORTS: { key: PostSort; label: string }[] = [
   { key: 'random', label: '随机' },
 ]
 
+/** 列表页时间范围可选项（前台游客/会员 + 后台列表共用同一份口径，utils.LIST_RANGES 是唯一窗口事实源）。
+ *  '' = 全部；档位 key 与 utils.listRangeCutoff 的白名单一字不差 */
+export const HOME_RANGES: { key: string; label: string }[] = [
+  { key: '', label: '全部' },
+  { key: '3d', label: '3 天' },
+  { key: '1m', label: '1 个月' },
+  { key: '6m', label: '半年' },
+  { key: '1y', label: '1 年' },
+]
+
 export interface ListPageContext {
   sort?: PostSort
   seed?: number
   tag?: string
   categorySlug?: string
   q?: string
+  /** 当前时间范围档位（3d/1m/6m/1y，空 = 全部）：进查询串、翻页与排序切换都要保留 */
+  range?: string
+  /** 是否渲染范围 chips（仅干净首页 = true；分类/搜索/标签页有各自的范围口径，不叠加） */
+  rangeEnabled?: boolean
 }
 
-/** 列表地址共用的查询串：tag/q/sort/seed 四件套 */
+/** 列表地址共用的查询串：tag/q/sort/seed + range 五件套 */
 function listQuery(o: ListPageContext): string {
   const params = new URLSearchParams()
   if (o.tag) params.set('tag', o.tag)
   if (o.q) params.set('q', o.q)
   if (o.sort && o.sort !== 'latest') params.set('sort', o.sort)
   if (o.sort === 'random' && o.seed) params.set('seed', String(o.seed))
+  if (o.range) params.set('range', o.range)
   return params.toString()
 }
 
@@ -1503,7 +1537,9 @@ export function listPageUrl(o: ListPageContext): string {
   return '/' + (qs ? `?${qs}` : '')
 }
 
-/** 排序筛选条：一排 chips，当前排序高亮；点「随机」永远洗新一组 */
+/** 排序筛选条：一排 chips，当前排序高亮；点「随机」永远洗新一组。
+ *  rangeEnabled（仅干净首页）时同一行尾追加时间范围组：档位白名单在服务端（utils.listRangeCutoff），
+ *  这里只产出档位链接，选中的范围由 pages.ts 服务端过滤——改 URL 参数绕不出白名单口径 */
 export function homeSortBar(o: ListPageContext, en = false): string {
   const chips = HOME_SORTS.map(
     (s) =>
@@ -1511,7 +1547,16 @@ export function homeSortBar(o: ListPageContext, en = false): string {
         listPageUrl({ ...o, sort: s.key, seed: undefined })
       )}">${tr(en, s.label)}</a>`
   ).join('')
-  return `<nav class="fs-bar" aria-label="${tr(en, '文章排序')}"><span class="fs-label">${tr(en, '排序')}</span>${chips}</nav>`
+  const rangeChips = o.rangeEnabled
+    ? `<span class="fs-label">${tr(en, '范围')}</span>` +
+      HOME_RANGES.map(
+        (r) =>
+          `<a class="fs-chip${(r.key || '') === (o.range || '') ? ' is-active' : ''}" href="${esc(
+            listPageUrl({ ...o, range: r.key })
+          )}">${tr(en, r.label)}</a>`
+      ).join('')
+    : ''
+  return `<nav class="fs-bar" aria-label="${tr(en, '文章排序')}"><span class="fs-label">${tr(en, '排序')}</span>${chips}${rangeChips}</nav>`
 }
 
 /** 翻页链接前缀（形如 "/?tag=x&sort=random&seed=5&"），随机时带 seed 稳住顺序 */

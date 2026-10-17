@@ -41,6 +41,10 @@ export interface HomeData {
   seed?: number
   /** 当前分类页的 slug（分类页排序条/翻页回链用） */
   categorySlug?: string
+  /** 当前时间范围档位（3d/1m/6m/1y，空 = 全部）：排序条范围组高亮与翻页保留用 */
+  range?: string
+  /** 是否渲染时间范围 chips（仅干净首页 = true；分类/搜索/标签页不叠加范围） */
+  rangeEnabled?: boolean
   /** 顶部导航「分类话题」菜单的标签（带使用计数，已按热度排序） */
   tags: TagCount[]
   /** 顶部导航数据与高亮：'home' | 'weibo' | 分类 slug | 'tag:标签名' | 'search' */
@@ -95,6 +99,8 @@ export interface WeiboData {
   memberName?: string
   /** 当前筛选的话题（?topic=），为空为全部 */
   topic?: string
+  /** 当前时间范围档位（?range=，3d/1m/6m/1y，空 = 全部）：范围条高亮与翻页保留用 */
+  range?: string
   /** 已发布微博的话题聚合（话题条数据），为空不渲染话题条 */
   topics?: { name: string; count: number }[]
 }

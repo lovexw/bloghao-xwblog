@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import type { D1Database } from '@cloudflare/workers-types'
 import { listPosts, listWeibo } from '../src/db.ts'
+import { homeSortBar, weiboPager, weiboRangeBar } from '../src/render.ts'
 import { listRangeCutoff, LIST_RANGES } from '../src/utils.ts'
 
 // ── 后台列表时间范围筛选（文章 / 微博共用）──
@@ -144,4 +145,41 @@ test('listWeibo：范围 × 状态筛选叠加（后台「草稿」页签 + 3 �
   const { db, now } = seedRangeDb()
   const r = await listWeibo(db, { status: 'draft', afterTs: now - 3 * 86_400_000 })
   assert.deepEqual(r.items.map((w) => w.content), ['新草稿微博'])
+})
+
+// ── 前台渲染层（render.ts 共享条）：游客/会员可见的范围条与链接串参 ──
+
+test('homeSortBar：rangeEnabled 渲染范围组（档位齐全、高亮正确、链接保留排序），未启用不渲染', () => {
+  const html = homeSortBar({ sort: 'views', range: '3d', rangeEnabled: true }, false)
+  assert.ok(html.includes('>范围<'))
+  for (const label of ['全部', '3 天', '1 个月', '半年', '1 年']) assert.ok(html.includes(`>${label}</a>`), label)
+  // href 经 esc() 输出，& 渲染为 &amp;——断言按真实渲染形态
+  assert.ok(html.includes('href="/?sort=views&amp;range=3d"'), '切换排序保留当前范围')
+  assert.ok(html.includes('href="/?sort=views"'), '选「全部」= 无 range 参数')
+  assert.equal(html.match(/is-active/g)?.length, 2, '排序与范围各高亮一项')
+  const plain = homeSortBar({ sort: 'latest' }, false)
+  assert.ok(!plain.includes('>范围<'), '分类/搜索/标签页不叠加范围')
+  assert.ok(!plain.includes('range='))
+})
+
+test('weiboRangeBar：档位链接保留话题叠加，当前档位高亮', () => {
+  const topic = encodeURIComponent('晚餐日记')
+  const html = weiboRangeBar('6m', '晚餐日记', false)
+  assert.ok(html.includes(`href="/weibo?topic=${topic}&amp;range=6m"`))
+  assert.ok(html.includes(`href="/weibo?topic=${topic}"`), '「全部」= 无 range 参数')
+  assert.ok(html.includes('is-active'))
+  const noTopic = weiboRangeBar('3d', undefined, false)
+  assert.ok(noTopic.includes('href="/weibo?range=3d"'))
+  assert.ok(noTopic.includes('href="/weibo"'))
+})
+
+test('weiboPager：翻页链接同时带话题与范围', () => {
+  const topic = encodeURIComponent('话题')
+  const html = weiboPager(2, 5, '话题', false, '3d')
+  // 微博翻页 href 不经 esc()（既有口径，值侧 encodeURIComponent 兜底），& 原样输出
+  assert.ok(html.includes(`href="/weibo?page=1&topic=${topic}&range=3d"`))
+  assert.ok(html.includes(`href="/weibo?page=3&topic=${topic}&range=3d"`))
+  const noRange = weiboPager(2, 5, undefined, false)
+  assert.ok(noRange.includes('href="/weibo?page=1"'))
+  assert.ok(!noRange.includes('range='))
 })

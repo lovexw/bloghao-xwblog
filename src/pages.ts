@@ -64,7 +64,7 @@ import { getTheme, THEMES } from './themes/registry'
 import type { MemberData, RankData } from './themes/registry'
 import type { Env, PostRow, SessionUser, SettingsMap } from './types'
 import { packMatrix, qrMatrix } from './qrcode'
-import { clampInt, esc, excerpt, isDemo, readingMinutes, teaserHtml } from './utils'
+import { clampInt, esc, excerpt, isDemo, listRangeCutoff, readingMinutes, teaserHtml } from './utils'
 import { analyticsOrigin, breadcrumbJsonLd, isSpeculativeRequest } from './seo'
 import { needsFontSrc } from './skinpack'
 
@@ -249,6 +249,10 @@ async function renderList(
   // 随机排序用 seed 稳住一组顺序：URL 没带就现生成一个，翻页链接会带上它
   const seed =
     sort === 'random' ? clampInt(url.searchParams.get('seed'), 1, 999999999, 0) || 1 + Math.floor(Math.random() * 999999998) : 0
+  // 时间范围（前台游客/会员）：仅干净首页开放（tag/分类/搜索页有各自的范围口径，不叠加）。
+  // 档位白名单 + cutoff 计算都在服务端（utils.listRangeCutoff），URL 传什么都拿不到白名单之外的口径
+  const range = opts.mode === 'home' && !tag ? (url.searchParams.get('range') || '').trim() : ''
+  const afterTs = listRangeCutoff(range)
 
   // 搜索模式不分页，直接取前 50 条；文章搜索走 FTS5（src/fts.ts，短词自动退回 LIKE 同口径）
   const [
@@ -276,6 +280,7 @@ async function renderList(
           limit: opts.mode === 'search' ? 50 : perPage,
           sort,
           seed,
+          afterTs,
         }),
     navTags(c),
     navCategories(c),
@@ -308,6 +313,7 @@ async function renderList(
       limit: perPage,
       sort,
       seed,
+      afterTs,
     })
     Object.assign(r, fixed)
   }
@@ -449,6 +455,8 @@ async function renderList(
     sort,
     seed,
     categorySlug: categorySlug || undefined,
+    range: range || undefined,
+    rangeEnabled: opts.mode === 'home' && !tag,
     tags,
     categories,
     pages,
@@ -872,6 +880,9 @@ export async function renderWeibo(c: C, asHome = false): Promise<Response> {
   const url = new URL(c.req.url)
   const perPage = 15
   const topic = (url.searchParams.get('topic') || '').trim().slice(0, 24)
+  // 时间范围（前台游客/会员）：档位白名单 + cutoff 计算都在服务端；与话题筛选叠加
+  const range = (url.searchParams.get('range') || '').trim()
+  const rangeAfterTs = listRangeCutoff(range)
   const pageParam = clampInt(url.searchParams.get('page'), 1, 1000, 1)
   // ?wb=<id> 深链定位：历史上的今天、首页入口卡、TG 通知都链到 /weibo?wb=x#wb-x，而目标条目常不在第 1
   // 页——服务端先算出所在页直接渲染，浏览器原生锚点才滚动得到；定位失败（已删/非已发布）回退 ?page=
@@ -888,6 +899,7 @@ export async function renderWeibo(c: C, asHome = false): Promise<Response> {
       limit: perPage,
       topic: topic || undefined,
       pinnedFirst: true,
+      afterTs: rangeAfterTs,
     }),
     navCategories(c),
     // 话题条只在按话题筛选时显示，未筛选时不必查话题统计
@@ -901,7 +913,14 @@ export async function renderWeibo(c: C, asHome = false): Promise<Response> {
   if (r.page > r.totalPages && r.total > 0) {
     Object.assign(
       r,
-      await listWeibo(c.env.DB, { status: 'published', page: r.totalPages, limit: perPage, topic: topic || undefined, pinnedFirst: true })
+      await listWeibo(c.env.DB, {
+        status: 'published',
+        page: r.totalPages,
+        limit: perPage,
+        topic: topic || undefined,
+        pinnedFirst: true,
+        afterTs: rangeAfterTs,
+      })
     )
   }
   const cmtCounts = await weiboCommentCountMap(
@@ -932,6 +951,7 @@ export async function renderWeibo(c: C, asHome = false): Promise<Response> {
     adminName: user ? (user.display_name || user.username || '').slice(0, 24) : undefined,
     memberName: !user && member ? (member.display_name || member.username || '').slice(0, 24) : undefined,
     topic: topic || undefined,
+    range: range || undefined,
     topics,
   })
   c.header('Cache-Control', 'no-cache')

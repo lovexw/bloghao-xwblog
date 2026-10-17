@@ -36,6 +36,7 @@ import {
   weiboHomeFeed,
   weiboSearchResults,
   weiboPager,
+  weiboRangeBar,
   weiboTopicBar,
 } from '../render'
 import css from './paper.css'
@@ -133,7 +134,7 @@ export function home(d: HomeData): string {
   ${d.weibo ? weiboHomeEntry({ ...d.weibo, en }) : ''}
   ${onThisDayCard(d.onThisDay, en)}
   ${searchForm(d.q, en)}
-  ${homeSortBar({ sort: d.sort, seed: d.seed, tag: d.tag, categorySlug: d.categorySlug, q: d.q }, en)}
+  ${homeSortBar({ sort: d.sort, seed: d.seed, tag: d.tag, categorySlug: d.categorySlug, q: d.q, range: d.range, rangeEnabled: d.rangeEnabled }, en)}
   <main class="pp-list">
     ${items || `<p class="pp-empty">${d.emptyText || (en ? 'The page is blank — a good time to start writing.' : '纸上还无字，正是落笔时。')}</p>`}
   </main>
@@ -232,7 +233,7 @@ export function guestbook(d: GuestbookData): string {
 export function weibo(d: WeiboData): string {
   const s = d.settings
   const en = isEn(s)
-  const topicBar = weiboTopicBar(d.topics || [], d.topic, en)
+  const topicBar = weiboTopicBar(d.topics || [], d.topic, en) + weiboRangeBar(d.range, d.topic, en)
   const composer = d.adminName ? weiboComposer({ adminName: d.adminName, en }) : ''
   const cards = weiboCards({
     settings: s,
@@ -253,7 +254,7 @@ export function weibo(d: WeiboData): string {
   <main class="wb-list">
     ${cards || `<p class="wb-empty">${d.adminName ? (en ? 'No notes yet — post the first one above.' : '纸上还无微博，就在上面落第一笔。') : en ? 'No notes yet — a good time to start writing.' : '纸上还无微博，正是落笔时。'}</p>`}
   </main>
-  ${weiboPager(d.page, d.totalPages, d.topic, en)}
+  ${weiboPager(d.page, d.totalPages, d.topic, en, d.range)}
   ${foot(s, en ? footLinksEn(s).weibo : FOOT_LINKS.weibo)}
 </div>`
 }

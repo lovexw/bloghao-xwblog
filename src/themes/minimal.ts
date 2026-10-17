@@ -36,6 +36,7 @@ import {
   weiboHomeFeed,
   weiboSearchResults,
   weiboPager,
+  weiboRangeBar,
   weiboTopicBar,
 } from '../render'
 import css from './minimal.css'
@@ -102,7 +103,7 @@ export function home(d: HomeData): string {
   ${d.weibo ? weiboHomeEntry({ ...d.weibo, en }) : ''}
   ${onThisDayCard(d.onThisDay, en)}
   ${searchForm(d.q, en)}
-  ${homeSortBar({ sort: d.sort, seed: d.seed, tag: d.tag, categorySlug: d.categorySlug, q: d.q }, en)}
+  ${homeSortBar({ sort: d.sort, seed: d.seed, tag: d.tag, categorySlug: d.categorySlug, q: d.q, range: d.range, rangeEnabled: d.rangeEnabled }, en)}
   <main class="mn-list">
     ${items || `<p class="mn-empty">${d.emptyText || 'Nothing here yet. Start writing.'}</p>`}
   </main>
@@ -205,7 +206,7 @@ export function guestbook(d: GuestbookData): string {
 export function weibo(d: WeiboData): string {
   const s = d.settings
   const en = isEn(s)
-  const topicBar = weiboTopicBar(d.topics || [], d.topic, en)
+  const topicBar = weiboTopicBar(d.topics || [], d.topic, en) + weiboRangeBar(d.range, d.topic, en)
   const composer = d.adminName ? weiboComposer({ adminName: d.adminName, en }) : ''
   const cards = weiboCards({
     settings: s,
@@ -226,7 +227,7 @@ export function weibo(d: WeiboData): string {
   <main class="wb-list">
     ${cards || `<p class="wb-empty">${d.adminName ? 'Nothing here yet — post the first one above.' : 'Nothing here yet.'}</p>`}
   </main>
-  ${weiboPager(d.page, d.totalPages, d.topic, en)}
+  ${weiboPager(d.page, d.totalPages, d.topic, en, d.range)}
   ${foot(s, en ? FOOT_LINKS_EN.home : FOOT_LINKS.home)}
 </div>`
 }

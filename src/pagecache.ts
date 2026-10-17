@@ -3,7 +3,7 @@ import { MEMBER_SESSION_COOKIE, SESSION_COOKIE } from './auth'
 import { getSettings, PAGE_CACHE_EPOCH_KEY, saveSettings } from './db'
 import { PP_COOKIE } from './protect'
 import type { Env, SessionUser } from './types'
-import { isDemo } from './utils'
+import { isDemo, LIST_RANGES } from './utils'
 
 /* ---------------- 页面边缘缓存（公开面 · 匿名访客 30 分钟副本） ----------------
  * 单文件自洽模块（同 protect.ts / closed.ts 三件套口径），Node 测试可直接导入。
@@ -91,6 +91,10 @@ function normalizeCacheParam(key: string, raw: string): string | null {
     case 'sort':
       if (raw === 'random') return null // 随机排序的 seed 是现生成的，同 URL 两次结果不同
       return CACHEABLE_SORTS.includes(raw) ? raw : '' // 未知值服务端回落 latest = 没传
+    case 'range':
+      // 前台时间范围（renderList/renderWeibo）：utils.LIST_RANGES 白名单镜像——
+      // 合法档位进键区分缓存副本；未知值服务端降级「全部」= 没传，从键里省略（同键复用，不撑键空间）
+      return Object.prototype.hasOwnProperty.call(LIST_RANGES, raw) ? raw : ''
     case 'tag': {
       const v = raw.trim() // 服务端不截断 tag，超长值进键会撑爆键空间——直接回源
       if (!v) return ''
