@@ -430,12 +430,23 @@ async function viewHome() {
       </div>`
     )
     .join('')
+  // 收录守卫：整站 noindex / 闭站会把本域名整体切出搜索引擎与 AI 的索引面——
+  // 概览页常驻提醒，防手滑开了长期不自知（演示站本就刻意 noindex，不提示）
+  const crawlWarn = (() => {
+    if (!s.crawl || s.crawl.demo) return ''
+    const items = []
+    if (s.crawl.closed) items.push('<b>站点处于闭站状态</b>：访客只能看到闭站页，搜索引擎与 AI 都抓不到内容')
+    if (s.crawl.noindex) items.push('<b>全站 noindex 开着</b>：本域名已被搜索引擎与 AI 排除（页面 noindex + robots.txt 整站 Disallow）')
+    if (!items.length) return ''
+    return `<div style="background:var(--warn,#b45309);color:#fff;font-size:13px;line-height:1.75;padding:10px 16px;border-radius:10px;margin-bottom:14px;">⚠️ ${items.join('；')}。<a href="#/settings" style="color:#fff;text-decoration:underline;">设置 → 站点</a> 里可关闭。</div>`
+  })()
   await shellView(
     'home',
     `<div class="page-head">
       <div><div class="page-title">概览</div><div class="page-sub">小院今天的情况</div></div>
       <a class="btn btn-primary" href="#/editor/new">✍️ 写文章</a>
     </div>
+    ${crawlWarn}
     ${onboardCardHtml(s)}
     <div class="stat-grid">
       <div class="stat-card"><div class="stat-label">已发布文章</div><div class="stat-value">${s.posts}</div></div>

@@ -1389,16 +1389,25 @@ try {
     results.push(['标签页 noindex + canonical 自指 /tag/短链', tagOk])
     console.log(`  ${tagOk ? '✓' : '✗'} 标签页 noindex + canonical 自指（status ${tagPage.status}）`)
 
+    // 收录可见性守卫（2026-10-17）：/admin/stats 的 crawl 三态是后台概览告警条的唯一数据源，
+    // 与 buildRobotsTxt 的整站 Disallow 同口径（演示站 demo=true 时前台不告警，故这里只断布尔形状）
+    const crawl0 = await (await raw('GET', '/api/admin/stats', { headers: { Cookie: cookie } })).json()
+    const crawlShapeOk = !!crawl0.crawl && crawl0.crawl.noindex === false && crawl0.crawl.closed === false
+    results.push(['收录守卫：stats 出 crawl 三态（默认全可抓）', crawlShapeOk])
+    console.log(`  ${crawlShapeOk ? '✓' : '✗'} 收录守卫：stats 出 crawl 三态`)
+
     // 全站 noindex 开关：页面出 noindex meta、robots.txt 整站 Disallow；关闭后恢复
     const nxOn = await putSettings({ siteNoindex: '1' })
     const nxHome = await raw('GET', bypassUrl('/'))
     const nxHtml = await nxHome.text()
     const nxRobotsTxt = await (await raw('GET', '/robots.txt')).text()
+    const nxStats = await (await raw('GET', '/api/admin/stats', { headers: { Cookie: cookie } })).json()
     const nxOk =
       nxOn.status === 200 &&
       nxHtml.includes('<meta name="robots" content="noindex">') &&
-      nxRobotsTxt === 'User-agent: *\nDisallow: /\n'
-    results.push(['全站 noindex：页面 meta + robots.txt 整站 Disallow', nxOk])
+      nxRobotsTxt === 'User-agent: *\nDisallow: /\n' &&
+      nxStats.crawl?.noindex === true
+    results.push(['全站 noindex：页面 meta + robots.txt 整站 Disallow + 概览告警数据源翻真', nxOk])
     console.log(`  ${nxOk ? '✓' : '✗'} 全站 noindex：页面 meta + robots.txt（status ${nxOn.status}）`)
 
     const nxOff = await putSettings({ siteNoindex: '0' })

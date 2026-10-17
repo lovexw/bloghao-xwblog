@@ -551,6 +551,14 @@ api.get('/admin/stats', async (c) => {
       at: Number(settings.lastBackupAt) || 0,
       bytes: Number(settings.lastBackupBytes) || 0,
     },
+    // 收录守卫（2026-10-17）：整站 noindex / 闭站会把本域名整体切出搜索引擎与 AI 的索引面，
+    // 概览页据此常驻提醒（防手滑开了长期不自知——blog.bloghao.com 就是这么漏的）。
+    // 演示站本就刻意 noindex，单独给 demo 标志让前台不误报。
+    crawl: {
+      noindex: settings.siteNoindex === '1',
+      closed: settings.siteClosed === '1',
+      demo: isDemo(c.env),
+    },
     recent: (recent.results ?? []).map((r) => ({
       id: r.id,
       title: r.title,

@@ -514,6 +514,9 @@ interface TenantStats {
   lastContentAt: number
   admin: { username: string; createdAt: number } | null
   siteTitle: string
+  /** 收录守卫：整站 noindex / 闭站开着时，搜索引擎与 AI 都抓不到该域名（演示站刻意如此，正常） */
+  noindex: boolean
+  closed: boolean
 }
 
 async function tenantStats(host: string): Promise<TenantStats | null> {
@@ -549,6 +552,16 @@ async function tenantStats(host: string): Promise<TenantStats | null> {
       | { username: string; created_at: number }
       | undefined
     const siteTitle = db.prepare("SELECT value FROM settings WHERE key = 'siteTitle'").get() as { value?: unknown } | undefined
+    // 收录守卫（与 /admin/stats 的 crawl 同口径）：settings 表还没长出来 / 键缺失一律当「可抓取」，
+    // 不给新站误报红字
+    const setting = (key: string): string => {
+      try {
+        const r = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value?: unknown } | undefined
+        return r?.value == null ? '' : String(r.value)
+      } catch {
+        return ''
+      }
+    }
     return {
       posts: one(`SELECT COUNT(*) AS n FROM posts WHERE deleted_at IS NULL AND status = 'published'`),
       drafts: one(`SELECT COUNT(*) AS n FROM posts WHERE deleted_at IS NULL AND status = 'draft'`),
@@ -563,6 +576,8 @@ async function tenantStats(host: string): Promise<TenantStats | null> {
       lastContentAt: Number(last?.n) || 0,
       admin: admin ? { username: String(admin.username), createdAt: Number(admin.created_at) || 0 } : null,
       siteTitle: String(siteTitle?.value || ''),
+      noindex: setting('siteNoindex') === '1',
+      closed: setting('siteClosed') === '1',
     }
   } catch {
     return null
@@ -576,7 +591,7 @@ async function tenantStats(host: string): Promise<TenantStats | null> {
 }
 
 /** 仪表盘「数据」列：一句话看懂该博主有没有在用（软删与草稿不夸大口径） */
-function statsCellHtml(st: TenantStats | null): string {
+function statsCellHtml(st: TenantStats | null, isDemo = false): string {
   if (!st) return '<td class="tenant-meta">暂无数据<br><span class="muted">库尚未生成</span></td>'
   const bits = [
     `${st.posts} 文`,
@@ -588,7 +603,26 @@ function statsCellHtml(st: TenantStats | null): string {
   const never = st.posts + st.weibo === 0
   return `<td class="tenant-meta">${esc(bits.join(' · '))}<br>最近更新 ${esc(never ? '未发布过' : ago(st.lastContentAt))}${
     st.commentsPending ? `<br><span style="color:var(--accent-dark)">${st.commentsPending} 条评论待审</span>` : ''
-  }</td>`
+  }<br>${crawlNoteHtml(st, isDemo)}</td>`
+}
+
+/** 收录守卫（2026-10-17）：整站 noindex / 闭站会把这个域名整体切出搜索引擎与 AI 的视野。
+ *  面板上直出，等于每开一个二级域名都能一眼看到「它到底能不能被抓到」——
+ *  站长口径：整个生态（bloghao.com 的每个二级域名）都要能被 AI 与搜索引擎抓到。
+ *  演示站刻意不进索引属于正常设计，不报红。 */
+function crawlNoteHtml(st: TenantStats, isDemo = false): string {
+  if (isDemo) return '<span class="muted">演示站 · 刻意不进索引</span>'
+  if (st.closed) return '<span style="color:#c0392b">⛔ 已闭站 · 抓不到</span>'
+  if (st.noindex) return '<span style="color:#c0392b">⛔ 不收录 · 抓不到</span>'
+  return '<span class="muted">✓ 可被抓取</span>'
+}
+
+/** 分站详情页的收录一句话版（多带一句「去哪关」的指路） */
+function crawlDetailHtml(st: TenantStats, isDemo: boolean): string {
+  if (isDemo) return '<span class="muted">演示站 · 刻意不进索引（每 2 小时清库重灌，进索引只会变垃圾，属正常）</span>'
+  if (st.closed) return '<span style="color:#c0392b">⛔ 已闭站</span> —— 访客只能看到闭站页，搜索引擎与 AI 都抓不到；去该站后台「设置 → 站点 → 关闭站点」恢复'
+  if (st.noindex) return '<span style="color:#c0392b">⛔ 全站 noindex 开着</span> —— 该域名已退出搜索引擎与 AI 索引；去该站后台「设置 → 站点 → 禁止搜索引擎收录」关掉'
+  return '✓ 可被搜索引擎与 AI 抓取（robots.txt / sitemap.xml 自动生成，无需配置）'
 }
 
 /** 分站详情页正文：完整数据 + 最近内容 + 前台/后台入口 */
@@ -678,6 +712,7 @@ ${
       ? `<b>${esc(ago(st.lastContentAt))}</b>（${esc(bjDateTime(st.lastContentAt))}）`
       : '还没有公开发布过内容'
   }；管理员账号 ${st.admin ? `<code>${esc(st.admin.username)}</code>（${esc(bjDate(st.admin.createdAt))} 创建）` : '<b>尚未创建</b>（博主首次进后台会引导设置）'}。</p>
+  <p class="tenant-meta">收录状态：${crawlDetailHtml(st, !!cfg.demo)}</p>
 </div>
 
 <div class="card card-flat fade fade-2">
@@ -1054,7 +1089,7 @@ function dashboardBody(
       const st = statsMap?.get(host) ?? null
       return `<tr>
   <td class="mono"><a href="/tenant?host=${encodeURIComponent(host)}" style="color:var(--ink);text-decoration:none;font-weight:600">${esc(host)}</a></td>
-  ${statsCellHtml(st)}
+  ${statsCellHtml(st, !!cfg.demo)}
   <td class="tenant-meta hide-sm">${esc(meta)}</td>
   <td>${pill}</td>
   <td class="actions">${actions}</td>
@@ -1384,7 +1419,10 @@ export async function controlApp(deps: ControlDeps): Promise<void> {
     let flash = `✓!✓ <b>${esc(host)}</b> 开通成功！两个地址请发给博主：<br>
     前台 <code style="font-size:15px"><a href="${esc(s)}://${esc(host)}/" target="_blank" rel="noopener">${esc(s)}://${esc(host)}/</a></code><br>
     后台管理 <code style="font-size:15px"><a href="${esc(s)}://${esc(host)}/admin/" target="_blank" rel="noopener">${esc(s)}://${esc(host)}/admin/</a></code><br>
-    <span class="muted">博主首次打开后台会引导创建管理员账号；证书首次访问自动签发，开箱即写。日常运营情况可在「租户」列表点「详情」查看。</span>`
+    <span class="muted">博主首次打开后台会引导创建管理员账号；证书首次访问自动签发，开箱即写。日常运营情况可在「租户」列表点「详情」查看。</span><br>
+    ${demo
+      ? '<span class="muted">演示站刻意不进搜索引擎索引（列表「收录」列会标为演示站，属正常）。</span>'
+      : '<span class="muted">收录默认已就绪（robots.txt / sitemap.xml 自动生成，搜索引擎与 AI 直接可抓）；日后若在后台开了「禁止搜索引擎收录」，列表「收录」列会立刻标红。</span>'}`
     if (cfEnabled()) {
       const ip = process.env.SERVER_IP || ''
       const err = ip ? await dnsCreate(host, ip) : '已设置 CF_API_TOKEN 但未设 SERVER_IP（面板用它建 A 记录），请手动加 DNS'
