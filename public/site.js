@@ -75,6 +75,19 @@
     '已复制': 'Copied',
     '复制失败': 'Copy failed',
     '复制本节链接': 'Copy link to this section',
+    '更多操作': 'More',
+    '复制链接': 'Copy link',
+    '已复制链接': 'Link copied',
+    '复制链接失败': 'Failed to copy the link',
+    '字号': 'Text size',
+    '小': 'Small',
+    '标准': 'Standard',
+    '大': 'Large',
+    '特大': 'Extra large',
+    '保存图片': 'Save image',
+    '已保存，若未开始下载请长按图片另存': 'Saved — if nothing downloaded, long-press the image to save it',
+    '复制图片地址': 'Copy image address',
+    '已复制图片地址': 'Image address copied',
   }
   function T(zh) {
     return EN ? EN_STR[zh] || zh : zh
@@ -2015,8 +2028,374 @@
       })
   })
 
+  /* ---------------- 微信同款读者交互件：底部操作面板 + 轻提示 + 正文缩放 + 右上角「…」 ----------------
+   * 全部客户端注入（归宿①，不给七主题加样式负担）；样式一次性注入 <style>（CSP style-src 允许内联）。
+   * 三类消费者：正文页右上角「…」聚合菜单、灯箱长按菜单、正文缩放（C11 阅读偏好）。
+   * 面板配色中性白/深（微信 action sheet 同款），按主题底色亮度自动选深浅，不引主题变量名。 */
+  var XW_UI_CSS = [
+    '.xw-toast{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:100002;',
+    'max-width:74vw;padding:10px 18px;border-radius:8px;background:rgba(0,0,0,.78);color:#fff;',
+    'font-size:14px;line-height:1.5;text-align:center;opacity:0;pointer-events:none;transition:opacity .2s ease;',
+    'font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}',
+    '.xw-toast.is-on{opacity:1}',
+    '.xw-sheet-ov{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.45);opacity:0;transition:opacity .2s ease}',
+    '.xw-sheet-ov.is-on{opacity:1}',
+    '.xw-sheet{position:fixed;left:0;right:0;bottom:0;z-index:100001;padding:0 10px calc(10px + env(safe-area-inset-bottom));',
+    'transform:translateY(102%);transition:transform .26s cubic-bezier(.22,.61,.36,1);',
+    'font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}',
+    '.xw-sheet.is-open{transform:translateY(0)}',
+    '.xw-sheet-card{background:#fff;border-radius:14px;overflow:hidden}',
+    '.xw-sheet-cancel{display:flex;align-items:center;justify-content:center;margin-top:8px;padding:15px;',
+    'background:#fff;border-radius:14px;font-size:16px;color:#1a1a1a;cursor:pointer;-webkit-tap-highlight-color:transparent}',
+    '.xw-sheet-row{display:flex;align-items:center;gap:12px;padding:15px 18px;font-size:16px;color:#1a1a1a;',
+    'cursor:pointer;outline:none;-webkit-tap-highlight-color:transparent}',
+    '.xw-sheet-row+.xw-sheet-row{border-top:1px solid #ededed}',
+    '.xw-sheet-row:active,.xw-sheet-cancel:active{background:#f5f5f5}',
+    '.xw-sheet-ic{display:inline-flex;flex:0 0 22px;color:#576b95}',
+    '.xw-fs-seg{display:flex;gap:8px;margin-left:auto}',
+    '.xw-fs-btn{min-width:48px;padding:6px 10px;margin:0;border:none;border-radius:8px;background:#f2f2f2;color:#333;',
+    'font-size:14px;line-height:1.4;cursor:pointer;-webkit-tap-highlight-color:transparent}',
+    '.xw-fs-btn.is-on{background:#07c160;color:#fff}',
+    '.xw-sheet[data-dark="1"] .xw-sheet-card,.xw-sheet[data-dark="1"] .xw-sheet-cancel{background:#1f1f1f}',
+    '.xw-sheet[data-dark="1"] .xw-sheet-row,.xw-sheet[data-dark="1"] .xw-sheet-cancel{color:#e6e6e6}',
+    '.xw-sheet[data-dark="1"] .xw-sheet-row+.xw-sheet-row{border-top-color:#2c2c2c}',
+    '.xw-sheet[data-dark="1"] .xw-sheet-row:active,.xw-sheet[data-dark="1"] .xw-sheet-cancel:active{background:#2a2a2a}',
+    '.xw-sheet[data-dark="1"] .xw-sheet-ic{color:#7d90b8}',
+    '.xw-sheet[data-dark="1"] .xw-fs-btn{background:#2c2c2c;color:#ddd}',
+    '.xw-sheet[data-dark="1"] .xw-fs-btn.is-on{background:#07c160;color:#fff}',
+    '.xw-more-fab{position:fixed;top:calc(10px + env(safe-area-inset-top));right:14px;z-index:70;display:none;',
+    'width:38px;height:38px;align-items:center;justify-content:center;margin:0;padding:0;border:none;border-radius:50%;',
+    'background:rgba(40,38,34,.72);color:#fff;-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);',
+    'cursor:pointer;-webkit-tap-highlight-color:transparent;box-shadow:0 2px 10px rgba(0,0,0,.14)}',
+    '.xw-more-fab.is-on{display:flex}',
+    '@media (prefers-reduced-motion:reduce){.xw-sheet,.xw-sheet-ov,.xw-toast{transition:none}}',
+  ].join('')
+
+  // 面板行图标（currentColor 随面板配色）
+  var XW_ICONS = {
+    share:
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4m0 0L8 8m4-4 4 4"/><path d="M7.5 11H7a3 3 0 0 0-3 3v3a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-3a3 3 0 0 0-3-3h-.5"/></svg>',
+    link:
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>',
+    font: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 19 8 6l5 13"/><path d="M4.8 14.5h6.4"/><path d="M15.5 19h5"/></svg>',
+    download:
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0 4-4m-4 4-4-4"/><path d="M5 19h14"/></svg>',
+  }
+
+  ;(function () {
+    if (document.getElementById('xw-ui-css')) return
+    var st = document.createElement('style')
+    st.id = 'xw-ui-css'
+    st.textContent = XW_UI_CSS
+    document.head.appendChild(st)
+  })()
+
+  /* 轻提示：居中黑底圆角，微信 Toast 同款，自动消失（同一时刻只留一个） */
+  var xwToastTimer = null
+  function xwToast(msg) {
+    var el = document.getElementById('xw-toast')
+    if (!el) {
+      el = document.createElement('div')
+      el.id = 'xw-toast'
+      el.className = 'xw-toast'
+      el.setAttribute('role', 'status')
+      document.body.appendChild(el)
+    }
+    el.textContent = msg
+    el.classList.add('is-on')
+    clearTimeout(xwToastTimer)
+    xwToastTimer = setTimeout(function () {
+      el.classList.remove('is-on')
+    }, 1700)
+  }
+
+  /* 复制文本：剪贴板 API 优先，不可用回落 execCommand（与代码块复制同兜底语义） */
+  function xwLegacyCopy(text) {
+    var ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0;'
+    document.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    var ok = false
+    try {
+      ok = document.execCommand('copy')
+    } catch (e) {}
+    document.body.removeChild(ta)
+    return ok
+  }
+  function xwCopyText(text, ok, fail) {
+    var done = function () {
+      if (ok) ok()
+    }
+    var bad = function () {
+      if (fail) fail()
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () {
+        if (xwLegacyCopy(text)) done()
+        else bad()
+      })
+    } else if (xwLegacyCopy(text)) {
+      done()
+    } else {
+      bad()
+    }
+  }
+
+  /* 底部操作面板（微信 action sheet 同款）：xwOpenSheet(行元素数组, 是否深色) */
+  var xwSheetOnKey = null
+  function xwCloseSheet() {
+    var ov = document.getElementById('xw-sheet-ov')
+    var panel = document.getElementById('xw-sheet')
+    if (!ov && !panel) return
+    if (xwSheetOnKey) {
+      document.removeEventListener('keydown', xwSheetOnKey, true)
+      xwSheetOnKey = null
+    }
+    if (ov) ov.classList.remove('is-on')
+    if (panel) panel.classList.remove('is-open')
+    // 等过渡结束再摘 DOM；用闭包变量判在场，防期间又开了一个面板
+    setTimeout(function () {
+      if (ov && ov.parentNode) ov.parentNode.removeChild(ov)
+      if (panel && panel.parentNode) panel.parentNode.removeChild(panel)
+    }, 280)
+  }
+  function xwOpenSheet(rows, dark) {
+    xwCloseSheet()
+    var ov = document.createElement('div')
+    ov.id = 'xw-sheet-ov'
+    ov.className = 'xw-sheet-ov'
+    ov.addEventListener('click', xwCloseSheet)
+    var panel = document.createElement('div')
+    panel.id = 'xw-sheet'
+    panel.className = 'xw-sheet'
+    panel.setAttribute('role', 'dialog')
+    panel.setAttribute('aria-modal', 'true')
+    if (dark) panel.setAttribute('data-dark', '1')
+    var card = document.createElement('div')
+    card.className = 'xw-sheet-card'
+    for (var i = 0; i < rows.length; i++) card.appendChild(rows[i])
+    var cancel = document.createElement('div')
+    cancel.className = 'xw-sheet-cancel'
+    cancel.setAttribute('role', 'button')
+    cancel.setAttribute('tabindex', '0')
+    cancel.textContent = T('取消')
+    cancel.addEventListener('click', xwCloseSheet)
+    panel.appendChild(card)
+    panel.appendChild(cancel)
+    // 不锁 body 滚动：灯箱打开时它已锁，这里再锁会与灯箱互相抵消（关面板时误解锁）
+    document.body.appendChild(ov)
+    document.body.appendChild(panel)
+    xwSheetOnKey = function (e) {
+      if (e.key === 'Escape') {
+        xwCloseSheet()
+        e.preventDefault()
+      }
+    }
+    document.addEventListener('keydown', xwSheetOnKey, true)
+    var show = function () {
+      ov.classList.add('is-on')
+      panel.classList.add('is-open')
+    }
+    if (window.requestAnimationFrame) requestAnimationFrame(show)
+    else setTimeout(show, 16)
+  }
+  /* 面板行：icon + label（+ 可选的尾部节点，如字号分段控件）；onPick 为 null 则只展示不可点 */
+  function xwSheetRow(icon, label, onPick, trailing) {
+    var r = document.createElement('div')
+    r.className = 'xw-sheet-row'
+    if (onPick) {
+      r.setAttribute('role', 'button')
+      r.setAttribute('tabindex', '0')
+    }
+    r.innerHTML = '<span class="xw-sheet-ic">' + icon + '</span><span class="xw-sheet-lb">' + esc(label) + '</span>'
+    if (trailing) r.appendChild(trailing)
+    if (onPick) {
+      r.addEventListener('click', onPick)
+      r.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onPick()
+        }
+      })
+    }
+    return r
+  }
+
+  /* ---------------- 正文缩放（C11）+ 正文页右上角「…」聚合菜单（微信同款） ----------------
+   * 字号只作用于正文容器（.rich）；缩放走 zoom——一次覆盖标题/正文/代码/表格，无需七主题逐套字号，
+   * 不支持的浏览器降级为只缩放正文字号。记忆走 storeGet/storeSet（禁裸 localStorage）。
+   * 「…」只在窄屏 + 导航滚出视野后浮现（顶部右下角不压导航），点开底部面板：分享 / 复制链接 / 字号。 */
+  ;(function () {
+    var FS_KEY = 'xw:reader:fs:v1'
+    var FS_LABELS = ['小', '标准', '大', '特大']
+    var FS_MULT = [0.9, 1, 1.15, 1.3]
+    var FS_DEFAULT = 1 // 标准
+
+    function fsZoomOk() {
+      return !!(window.CSS && window.CSS.supports && window.CSS.supports('zoom', '1.15'))
+    }
+    function fsApply(i) {
+      var mult = FS_MULT[i]
+      var nodes = document.querySelectorAll('.rich')
+      for (var k = 0; k < nodes.length; k++) {
+        var n = nodes[k]
+        if (fsZoomOk()) {
+          n.style.zoom = mult === 1 ? '' : String(mult)
+        } else {
+          // 降级：只缩放正文容器字号（首遍读基线，避免二次放大叠加）
+          if (n.__xwBaseFs == null) n.__xwBaseFs = parseFloat(window.getComputedStyle(n).fontSize) || 17
+          n.style.fontSize = (n.__xwBaseFs * mult).toFixed(2) + 'px'
+        }
+      }
+    }
+    function fsGet() {
+      var v = parseInt(storeGet(FS_KEY), 10)
+      return v >= 0 && v < FS_MULT.length ? v : FS_DEFAULT
+    }
+    function fsSet(i) {
+      storeSet(FS_KEY, String(i))
+      fsApply(i)
+    }
+
+    if (!document.querySelector('.rich')) return // 列表 / 微博页无正文，不启用
+    fsApply(fsGet())
+
+    // 主题底色亮度 → 面板深浅（各主题变量名不同，用计算色判定，不引变量）
+    function cssLum(c) {
+      var m = /rgba?\(([^)]+)\)/.exec(c || '')
+      if (!m) return null
+      var p = m[1].split(',')
+      if (p.length < 3) return null
+      if (p.length > 3 && parseFloat(p[3]) === 0) return null
+      var r = parseFloat(p[0])
+      var g = parseFloat(p[1])
+      var b = parseFloat(p[2])
+      if (isNaN(r) || isNaN(g) || isNaN(b)) return null
+      return (r * 299 + g * 587 + b * 114) / 1000
+    }
+    function themeDark() {
+      var v = cssLum(window.getComputedStyle(document.body).backgroundColor)
+      if (v == null) v = cssLum(window.getComputedStyle(document.documentElement).backgroundColor)
+      return v != null && v < 128
+    }
+
+    function fsRow() {
+      var seg = document.createElement('div')
+      seg.className = 'xw-fs-seg'
+      var cur = fsGet()
+      var btns = []
+      for (var i = 0; i < FS_LABELS.length; i++) {
+        ;(function (i) {
+          var b = document.createElement('button')
+          b.type = 'button'
+          b.className = 'xw-fs-btn' + (i === cur ? ' is-on' : '')
+          b.textContent = T(FS_LABELS[i])
+          b.addEventListener('click', function () {
+            fsSet(i)
+            for (var k = 0; k < btns.length; k++) {
+              if (k === i) btns[k].classList.add('is-on')
+              else btns[k].classList.remove('is-on')
+            }
+          })
+          seg.appendChild(b)
+          btns.push(b)
+        })(i)
+      }
+      return xwSheetRow(XW_ICONS.font, T('字号'), null, seg)
+    }
+
+    function copyLink() {
+      xwCopyText(
+        location.href,
+        function () {
+          xwToast(T('已复制链接'))
+        },
+        function () {
+          xwToast(T('复制链接失败'))
+        }
+      )
+    }
+    function doShare() {
+      var sb = document.querySelector('.share-btn')
+      if (sb) {
+        sb.click() // 复用文章分享面板（复制链接 / 系统分享 / 卡片图 + 二维码）
+        return
+      }
+      if (navigator.share) {
+        try {
+          var pr = navigator.share({ title: document.title, url: location.href })
+          if (pr && pr.catch) pr.catch(function () {})
+          return
+        } catch (e) {}
+      }
+      copyLink()
+    }
+
+    function openMore() {
+      xwOpenSheet(
+        [
+          xwSheetRow(XW_ICONS.share, T('分享'), function () {
+            xwCloseSheet()
+            doShare()
+          }),
+          xwSheetRow(XW_ICONS.link, T('复制链接'), function () {
+            xwCloseSheet()
+            copyLink()
+          }),
+          fsRow(),
+        ],
+        themeDark()
+      )
+    }
+
+    var mq = window.matchMedia ? window.matchMedia('(max-width: 900px)') : null
+    var fab = document.createElement('button')
+    fab.type = 'button'
+    fab.id = 'xw-more'
+    fab.className = 'xw-more-fab'
+    fab.setAttribute('aria-label', T('更多操作'))
+    fab.title = T('更多操作')
+    fab.innerHTML =
+      '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg>'
+    fab.addEventListener('click', openMore)
+    document.body.appendChild(fab)
+
+    var nav = document.querySelector('[data-xw-nav-sticky]') || document.querySelector('nav')
+    var shown = false
+    var recheck = null
+    function navHidden() {
+      if (!nav) return true
+      // 吸顶导航收起时带 .xw-nav-hide（且收起有过渡，rect 在过渡中仍是旧值，故同时看类名）
+      if (nav.classList && nav.classList.contains('xw-nav-hide')) return true
+      return nav.getBoundingClientRect().bottom <= 8
+    }
+    function update() {
+      var on = false
+      if (!mq || mq.matches) {
+        var y = window.pageYOffset || document.documentElement.scrollTop || 0
+        if (y > 120) on = navHidden()
+      }
+      if (on === shown) return
+      shown = on
+      if (on) fab.classList.add('is-on')
+      else fab.classList.remove('is-on')
+    }
+    function onScroll() {
+      update()
+      // 导航收起有过渡，过渡结束后复核一次（否则只在滚动瞬间测到旧 rect，FAB 永远不浮现）
+      clearTimeout(recheck)
+      recheck = setTimeout(update, 280)
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('resize', update)
+    update()
+  })()
+
   /* ---------------- 图片灯箱：正文图 + 微博配图，点击全屏查看 ----------------
-   * 手势：单指/滚轮缩放（双指捏合）、拖动平移、双击放大复原、左右滑动切换同组图片。
+   * 手势：单指/滚轮缩放（双指捏合）、拖动平移、双击放大复原、左右滑动切换同组图片、
+   * 未放大时下拉关闭；长按弹「保存图片 / 复制图片地址」（微信图片查看器同款）。
    * 纯 JS + 内联 style（CSP style-src 允许内联），无外部依赖。 */
   ;(function () {
     var lb = null
@@ -2030,6 +2409,9 @@
     var pinchDist = 0
     var pointers = new Map()
     var lastTap = 0
+    var dragY = 0 // 未放大时下拉关闭的位移
+    var pressTimer = null // 长按计时
+    var pressAt = null
 
     function apply() {
       imgEl.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')'
@@ -2038,7 +2420,9 @@
       scale = 1
       tx = 0
       ty = 0
+      dragY = 0
       apply()
+      if (lb) lb.style.background = 'rgba(0,0,0,.92)'
     }
     function show(i) {
       idx = (i + group.length) % group.length
@@ -2049,6 +2433,11 @@
     }
     function close() {
       if (!lb) return
+      if (pressTimer) {
+        clearTimeout(pressTimer)
+        pressTimer = null
+      }
+      pressAt = null
       document.removeEventListener('keydown', onKey, true)
       lb.remove()
       lb = null
@@ -2100,7 +2489,7 @@
       btnClose.textContent = '×'
       btnClose.addEventListener('click', close)
       imgEl = document.createElement('img')
-      imgEl.setAttribute('style', 'max-width:92vw;max-height:88vh;transition:transform .18s ease;will-change:transform;user-select:none;-webkit-user-drag:none;')
+      imgEl.setAttribute('style', 'max-width:92vw;max-height:88vh;transition:transform .18s ease;will-change:transform;user-select:none;-webkit-user-drag:none;-webkit-touch-callout:none;')
       lb.appendChild(imgEl)
       lb.appendChild(counter)
       lb.appendChild(btnClose)
@@ -2150,9 +2539,18 @@
           apply()
           return
         }
-        // 未放大时横向拖超过 60px 即切图（touch 上跟手，抬手判定）
-        var dx = e.clientX - prev.x
-        if (group.length > 1 && Math.abs(dx) > 0) imgEl.style.transform = 'translateX(' + dx / 3 + 'px)'
+        // 未放大时：纵向拖是下拉关闭（跟手 + 背景渐透），横向拖给切图跟手反馈
+        if (startPos) {
+          var tdx = e.clientX - startPos.x
+          var tdy = e.clientY - startPos.y
+          if (Math.abs(tdy) > Math.abs(tdx)) {
+            dragY = tdy
+            imgEl.style.transform = 'translateY(' + tdy + 'px)'
+            lb.style.background = 'rgba(0,0,0,' + Math.max(0.3, 0.92 - Math.abs(tdy) / 520).toFixed(3) + ')'
+          } else if (group.length > 1 && Math.abs(tdx) > 0) {
+            imgEl.style.transform = 'translateX(' + tdx / 3 + 'px)'
+          }
+        }
       })
       var startPos = null
       lb.addEventListener('pointerdown', function (e) {
@@ -2168,6 +2566,12 @@
           var dx = e.clientX - startPos.x
           var dy = e.clientY - startPos.y
           var dt = Date.now() - startPos.t
+          // 下拉关闭（微信图片查看器同款）：够远且纵向为主，抬手即关
+          if (dt < 700 && dy > 100 && Math.abs(dy) > Math.abs(dx)) {
+            startPos = null
+            close()
+            return
+          }
           if (group.length > 1 && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) && dt < 600) {
             show(idx + (dx < 0 ? 1 : -1))
             startPos = null
@@ -2201,6 +2605,54 @@
         },
         { passive: false }
       )
+
+      // 长按（在图上按住 550ms 不动）：弹「保存图片 / 复制图片地址」（微信图片查看器同款长按菜单）
+      function pressCancel() {
+        if (pressTimer) {
+          clearTimeout(pressTimer)
+          pressTimer = null
+        }
+        pressAt = null
+      }
+      lb.addEventListener('pointerdown', function (e) {
+        if (pointers.size !== 1 || e.target !== imgEl) return
+        pressAt = { x: e.clientX, y: e.clientY }
+        if (pressTimer) clearTimeout(pressTimer)
+        pressTimer = setTimeout(function () {
+          pressTimer = null
+          if (!lb || pointers.size !== 1 || scale > 1) return
+          var url = group[idx]
+          if (!url) return
+          xwOpenSheet(
+            [
+              xwSheetRow(XW_ICONS.download, T('保存图片'), function () {
+                xwCloseSheet()
+                var a = document.createElement('a')
+                a.href = url
+                a.download = ''
+                a.rel = 'noopener'
+                document.body.appendChild(a)
+                a.click()
+                document.body.removeChild(a)
+                xwToast(T('已保存，若未开始下载请长按图片另存'))
+              }),
+              xwSheetRow(XW_ICONS.link, T('复制图片地址'), function () {
+                xwCloseSheet()
+                xwCopyText(url, function () {
+                  xwToast(T('已复制图片地址'))
+                })
+              }),
+            ],
+            true
+          )
+        }, 550)
+      })
+      lb.addEventListener('pointermove', function (e) {
+        if (!pressAt) return
+        if (Math.abs(e.clientX - pressAt.x) > 10 || Math.abs(e.clientY - pressAt.y) > 10) pressCancel()
+      })
+      lb.addEventListener('pointerup', pressCancel)
+      lb.addEventListener('pointercancel', pressCancel)
 
       show(idx)
     }
