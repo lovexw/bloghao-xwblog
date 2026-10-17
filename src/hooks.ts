@@ -535,8 +535,247 @@ const outboundWebhook: ServerPlugin = {
   },
 }
 
+/* ============================ 通知渠道三插件（B3：飞书 / 企业微信 / Bark） ============================
+ * 提醒语义（与「发布同步」的广播语义分开）：把**新留言提醒**与**备份完成**推到国内 IM——
+ * TG 之外没有 Bot 门槛的触达路（飞书 / 企微群机器人建群即得，Bark 装 App 即得）。
+ * 出网统一走 fetchPublicResource（POST JSON、只发不收、失败静默），URL 配置落库前经
+ * configValidate 域白名单 + 公网校验（SSRF 面收口，同 outbound-webhook 口径）。
+ * 纯函数层（payload 组装 / 事件过滤）导出供 tests/notify-channels.test.ts 直接导入。 */
+
+const NOTIFY_EVENTS = ['comment_created', 'backup_completed'] as const
+
+/** 事件过滤（同 outboundEventList 口径）：空 = 全部；子集白名单；含非法项按「坏清单拒发」处理 */
+export function notifyEventList(raw: string): 'all' | (typeof NOTIFY_EVENTS)[number][] | 'invalid' {
+  const t = (raw || '').trim()
+  if (!t) return 'all'
+  const parts = t.split(',').map((x) => x.trim()).filter(Boolean)
+  if (!parts.length) return 'all'
+  if (!parts.every((x) => (NOTIFY_EVENTS as readonly string[]).includes(x))) return 'invalid'
+  return [...new Set(parts)] as (typeof NOTIFY_EVENTS)[number][]
+}
+
+function notifyAllowed(raw: string, event: string): boolean {
+  const list = notifyEventList(raw)
+  if (list === 'invalid') return false
+  return list === 'all' || list.includes(event as never)
+}
+
+interface NotifyData {
+  nickname?: string
+  content?: string
+  context?: string
+  url?: string
+  pending?: boolean
+  key?: string
+  bytes?: number
+  tables?: number
+}
+
+/** 文案组装：统一【博客号·事件】头（飞书 / 企微 / Bark 三家共用一份口径） */
+export function notifyText(event: string, p: NotifyData): string {
+  if (event === 'comment_created') {
+    const where = p.context || '留言板'
+    const body = String(p.content || '').slice(0, 100)
+    return `【博客号·新留言】${p.nickname || '访客'}（${p.pending ? '待审核' : '已展示'}）在「${where}」：\n${body}${p.url ? `\n${p.url}` : ''}`
+  }
+  if (event === 'backup_completed') {
+    const kb = Math.max(1, Math.round((p.bytes || 0) / 1024))
+    return `【博客号·备份完成】${p.key || ''}\n${p.tables || 0} 张表 · 约 ${kb} KB（每天北京时间 00:30 自动）`
+  }
+  return `【博客号】${event}`
+}
+
+/** 企微 text.content 上限 2048 字节（UTF-8），超限按字符尾删到合规（留 48 字节余量防边界） */
+export function wecomClip(text: string, maxBytes = 2000): string {
+  if (new TextEncoder().encode(text).length <= maxBytes) return text
+  let out = text
+  while (out.length > 0 && new TextEncoder().encode(out).length > maxBytes) out = out.slice(0, -1)
+  return out
+}
+
+/** 飞书自定义机器人签名（可选安全设置）：sign = base64(HMAC-SHA256(secret, `${ts}\n${secret}`)) */
+export async function feishuSign(secret: string, ts: string): Promise<string> {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret) as never, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${ts}\n${secret}`) as never)
+  let bin = ''
+  for (const b of new Uint8Array(sig)) bin += String.fromCharCode(b)
+  return btoa(bin)
+}
+
+/** 统一发送：只发不收、失败静默（提醒件绝不影响主流程），URL 非法时直接跳过 */
+async function notifySend(ctx: HookContext, url: string, body: unknown): Promise<void> {
+  if (!/^https:\/\//i.test(url) || !fetchableUrl(url)) return
+  await fetchPublicResource(url, {
+    maxBytes: 16 * 1024,
+    timeoutMs: 10_000,
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    expectBody: false,
+  })
+}
+
+/** 飞书群机器人（自定义机器人）：群设置 → 群机器人 → 添加，Webhook 免费即得 */
+const feishuNotify: ServerPlugin = {
+  id: 'feishu-notify',
+  title: '飞书群机器人',
+  description: '新留言提醒与备份完成推送到飞书群——国内触达零门槛：飞书群「设置 → 群机器人」添加自定义机器人即得 Webhook。纯提醒，不影响任何站点流程。',
+  version: '1.0.0',
+  author: '官方',
+  configFields: [
+    {
+      key: 'url',
+      label: '飞书机器人 Webhook',
+      type: 'text',
+      placeholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/xxxx',
+      help: '只接受 open.feishu.cn（国际版 open.larksuite.com）的机器人地址；新留言 / 备份完成各推一条，超时 10 秒',
+    },
+    {
+      key: 'secret',
+      label: '签名校验密钥（可选）',
+      type: 'text',
+      help: '机器人开启「签名校验」后填入同样的密钥，请求自动带飞书签名（防伪造）',
+    },
+    {
+      key: 'events',
+      label: '推送事件（逗号分隔，留空 = 全部）',
+      type: 'text',
+      placeholder: 'comment_created,backup_completed',
+      help: '可选：comment_created（新留言）/ backup_completed（备份完成）',
+    },
+  ],
+  configValidate(cfg) {
+    const url = (cfg.url || '').trim()
+    if (!url || !/^https:\/\//i.test(url) || !fetchableUrl(url)) return 'Webhook 地址无效（需 https 公网地址）'
+    if (!/^https:\/\/(open\.feishu\.cn|open\.larksuite\.cn|open\.larksuite\.com)\//i.test(url)) return '只接受飞书官方机器人域名（open.feishu.cn / open.larksuite.com）'
+    if ((cfg.secret || '').length > 200) return '签名密钥过长（≤ 200 字符）'
+    if (notifyEventList(cfg.events || '') === 'invalid') return `事件列表不正确（可选：${NOTIFY_EVENTS.join(' / ')}）`
+    return null
+  },
+  async onCommentCreated(p, ctx) {
+    const cfg = pluginConfig(ctx.settings, 'feishu-notify')
+    if (!notifyAllowed(cfg.events || '', 'comment_created')) return
+    const text = notifyText('comment_created', p)
+    const secret = (cfg.secret || '').trim()
+    let body: Record<string, unknown> = { msg_type: 'text', content: { text } }
+    if (secret) {
+      const ts = String(Math.floor(Date.now() / 1000))
+      body = { timestamp: ts, sign: await feishuSign(secret, ts), msg_type: 'text', content: { text } }
+    }
+    await notifySend(ctx, (cfg.url || '').trim(), body)
+  },
+  async onBackupCompleted(p, ctx) {
+    const cfg = pluginConfig(ctx.settings, 'feishu-notify')
+    if (!notifyAllowed(cfg.events || '', 'backup_completed')) return
+    const body = { msg_type: 'text', content: { text: notifyText('backup_completed', p) } }
+    await notifySend(ctx, (cfg.url || '').trim(), body)
+  },
+}
+
+/** 企业微信群机器人：群右键 → 添加群机器人，Webhook 免费即得 */
+const wecomNotify: ServerPlugin = {
+  id: 'wecom-notify',
+  title: '企业微信群机器人',
+  description: '新留言提醒与备份完成推送到企业微信群——微信生态内零门槛：企微群右键「添加群机器人」即得 Webhook。纯提醒，不影响任何站点流程。',
+  version: '1.0.0',
+  author: '官方',
+  configFields: [
+    {
+      key: 'url',
+      label: '企业微信机器人 Webhook',
+      type: 'text',
+      placeholder: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx',
+      help: '只接受 qyapi.weixin.qq.com 的机器人地址；文本 ≤ 2048 字节自动截断，超时 10 秒',
+    },
+    {
+      key: 'events',
+      label: '推送事件（逗号分隔，留空 = 全部）',
+      type: 'text',
+      placeholder: 'comment_created,backup_completed',
+      help: '可选：comment_created（新留言）/ backup_completed（备份完成）',
+    },
+  ],
+  configValidate(cfg) {
+    const url = (cfg.url || '').trim()
+    if (!url || !/^https:\/\//i.test(url) || !fetchableUrl(url)) return 'Webhook 地址无效（需 https 公网地址）'
+    if (!/^https:\/\/qyapi\.weixin\.qq\.com\//i.test(url)) return '只接受企业微信官方机器人域名（qyapi.weixin.qq.com）'
+    if (notifyEventList(cfg.events || '') === 'invalid') return `事件列表不正确（可选：${NOTIFY_EVENTS.join(' / ')}）`
+    return null
+  },
+  async onCommentCreated(p, ctx) {
+    const cfg = pluginConfig(ctx.settings, 'wecom-notify')
+    if (!notifyAllowed(cfg.events || '', 'comment_created')) return
+    const body = { msgtype: 'text', text: { content: wecomClip(notifyText('comment_created', p)) } }
+    await notifySend(ctx, (cfg.url || '').trim(), body)
+  },
+  async onBackupCompleted(p, ctx) {
+    const cfg = pluginConfig(ctx.settings, 'wecom-notify')
+    if (!notifyAllowed(cfg.events || '', 'backup_completed')) return
+    const body = { msgtype: 'text', text: { content: wecomClip(notifyText('backup_completed', p)) } }
+    await notifySend(ctx, (cfg.url || '').trim(), body)
+  },
+}
+
+/** Bark 发送：server 可自建，device_key 是 App 首页那串 Key。
+ *  **deviceKey 未配置时直接不发**——server 有官方默认值，缺这道闸会让没配 Bark 的站
+ *  每次留言都向 api.day.app 发空 Key 请求（外部噪音 + 测试计数污染，2026-10-17 实抓） */
+async function barkSend(ctx: HookContext, event: string, p: NotifyData) {
+  const cfg = pluginConfig(ctx.settings, 'bark-notify')
+  if (!notifyAllowed(cfg.events || '', event)) return
+  const deviceKey = (cfg.deviceKey || '').trim()
+  if (!/^[A-Za-z0-9]{10,}$/.test(deviceKey)) return
+  const server = (cfg.server || 'https://api.day.app').trim().replace(/\/+$/, '')
+  const body = { device_key: deviceKey, title: '博客号', body: notifyText(event, p), group: 'bloghao' }
+  await notifySend(ctx, `${server}/push`, body)
+}
+
+/** Bark（iOS 推送）：App Store 装 Bark 即得推送 Key，支持自建服务器 */
+const barkNotify: ServerPlugin = {
+  id: 'bark-notify',
+  title: 'Bark 推送（iOS）',
+  description: '新留言提醒与备份完成推送到 iPhone——iOS 用户零门槛：App Store 安装 Bark 打开即得推送 Key（支持自建服务器）。纯提醒，不影响任何站点流程。',
+  version: '1.0.0',
+  author: '官方',
+  configFields: [
+    {
+      key: 'server',
+      label: 'Bark 服务器',
+      type: 'text',
+      placeholder: 'https://api.day.app',
+      help: '默认官方 https://api.day.app；自建服务器填 https://你的域名（需公网 https）',
+    },
+    {
+      key: 'deviceKey',
+      label: '推送 Key',
+      type: 'text',
+      help: 'Bark App 首页显示的推送 Key（或完整推送 URL 里的那段）',
+    },
+    {
+      key: 'events',
+      label: '推送事件（逗号分隔，留空 = 全部）',
+      type: 'text',
+      placeholder: 'comment_created,backup_completed',
+      help: '可选：comment_created（新留言）/ backup_completed（备份完成）',
+    },
+  ],
+  configValidate(cfg) {
+    const server = (cfg.server || 'https://api.day.app').trim().replace(/\/+$/, '')
+    if (!/^https:\/\//i.test(server) || !fetchableUrl(server)) return '服务器地址无效（需 https 公网地址）'
+    const key = (cfg.deviceKey || '').trim()
+    if (!key || !/^[A-Za-z0-9]{10,}$/.test(key)) return '推送 Key 无效（Bark App 首页的那串字母数字）'
+    if (notifyEventList(cfg.events || '') === 'invalid') return `事件列表不正确（可选：${NOTIFY_EVENTS.join(' / ')}）`
+    return null
+  },
+  async onCommentCreated(p, ctx) {
+    await barkSend(ctx, 'comment_created', p)
+  },
+  async onBackupCompleted(p, ctx) {
+    await barkSend(ctx, 'backup_completed', p)
+  },
+}
+
 /** 注册表：第三方服务端插件在此登记（顺序即后台展示顺序） */
-export const SERVER_PLUGINS: ServerPlugin[] = [tgChannel, commentWebhook, bufferSync, plazaSync, outboundWebhook, footerHtmlPlugin]
+export const SERVER_PLUGINS: ServerPlugin[] = [tgChannel, commentWebhook, bufferSync, plazaSync, outboundWebhook, feishuNotify, wecomNotify, barkNotify, footerHtmlPlugin]
 
 /** 后台「插件」页列表用：只出元数据与配置表单描述，不带处理函数 */
 export function listServerPlugins(): {
