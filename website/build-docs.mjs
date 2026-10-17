@@ -12,6 +12,8 @@
 // 还会重生成全站 /sitemap.xml：页面集合 = 扫描 website/public 的真实 html 文件，
 // lastmod = 各页在 git 里的最后提交日期——改页面后跑本脚本即同步，谷歌收录入口；
 // tests/website-sitemap.test.ts 守着 sitemap 与磁盘页面集合不漂移。
+// ⚠️ marked 按 CommonMark 判定加粗定界符的 flanking：** 紧贴中文标点（如 **「词」** 的开头、
+// ……）** 的结尾）不会被解析成加粗，星号原样漏到页面上——写文档时让 ** 隔开标点或调整措辞。
 
 import { readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises'
 import { execSync } from 'node:child_process'
@@ -687,7 +689,9 @@ function urlMeta(url) {
 
 async function gitLastmod(relpath) {
   try {
-    const d = execSync(`git log -1 --format=%cs -- ${JSON.stringify(relpath)}`, { cwd: root, encoding: 'utf8' }).trim()
+    // relpath 相对 website/public，git 命令 cwd 是仓库根——路径必须拼回前缀才能命中，
+    // 否则静默回落 mtime，全站 lastmod 恒为构建当天
+    const d = execSync(`git log -1 --format=%cs -- ${JSON.stringify(`website/public/${relpath}`)}`, { cwd: root, encoding: 'utf8' }).trim()
     if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d
   } catch { /* 无 git 环境时回落 mtime */ }
   const m = await stat(path.join(publicDir, relpath))
