@@ -72,9 +72,12 @@
 <blockquote>
 <p>升级方式：同步本仓库最新代码后重新部署即可，D1 结构自动增量迁移；个别需要手动动作的条目以「⚠️ 升级注意」标出。开发线的完整迭代细节见各仓库 git log——这里是给部署用户的要点。</p>
 </blockquote>
-<h2 id="unreleased"><a href="https://github.com/bloghao/bloghao/compare/v2.6.0...HEAD" target="_blank" rel="noopener noreferrer">Unreleased</a></h2><p>（尚未发布的内容，日常随手记入，发布时整段移入新版本小节。）</p>
-<h3 id="新增">新增</h3><ul>
+<h2 id="unreleased"><a href="https://github.com/bloghao/bloghao/compare/v2.7.0...HEAD" target="_blank" rel="noopener noreferrer">Unreleased</a></h2><p>（尚未发布的内容，日常随手记入，发布时整段移入新版本小节。）</p>
+<h2 id="270---2026-10-17"><a href="https://github.com/bloghao/bloghao/compare/v2.6.0...v2.7.0" target="_blank" rel="noopener noreferrer">2.7.0</a> - 2026-10-17</h2><h3 id="新增">新增</h3><ul>
 <li><strong>版本与更新（更新中心，B29）</strong>：后台概览页「系统」卡片与 Docker 自托管控制面新增**「检查更新」<strong>——按需向官网取一份机器可读的版本清单，告诉你</strong>当前版本、最新版本，以及从你的版本到现在「更新了什么 / 优化了什么」<strong>（要点与更新日志同源）。你可以按指引</strong>升级**，也可以点**「保持当前版本」<strong>记下选择（出现更新的版本时会再次提示）。<strong>博客号不做自动更新</strong>：更新中心只做「告知 + 记录选择」，真正换版本永远是一次你自己发起的部署动作（Cloudflare 重新部署 / Docker 重建），升级不丢文章、设置与图片。检查只</strong>单向**拉取官网公开清单，不上报任何本站信息；清单校验不过或取不到就静默降级为「暂不可检查」，不打扰使用。完整说明见 <a href="https://github.com/bloghao/bloghao/blob/main/docs/UPDATING.md">docs/UPDATING.md</a></li>
+</ul>
+<h3 id="修复">修复</h3><ul>
+<li><strong>手机后台列表不再挤成竖排字</strong>（2026-10-17）：手机宽度下后台「文章」「评论」「插件」等管理列表的信息区（标题 / 摘要 / 时间）会被右侧操作按钮挤成一行一个字的竖排——flex 基线问题，窄屏下操作按钮现在自动换到下一行，信息区恢复整行显示（与「微博」列表的手机卡片形态一致）；统计页与插件页的「区块标题 + 说明」在窄屏也改为上下两行，标题不再被挤断字</li>
 </ul>
 <h2 id="260---2026-10-17"><a href="https://github.com/bloghao/bloghao/compare/v2.5.1...v2.6.0" target="_blank" rel="noopener noreferrer">2.6.0</a> - 2026-10-17</h2><h3 id="新增-1">新增</h3><ul>
 <li><p><strong>管理员在前台直接删评论</strong>（2026-10-14）：文章评论区 / 留言板 / 微博评论区每条留言旁边都有「删除」键（登录管理员可见，访客 HTML 里不存在；与「回复」并排），点一下二次确认后连这条下面的回复一起删掉（评论没有回收站，不可恢复）——顺手把评论计数就地更新，删完当页立即消失，不用再回后台。写操作复用后台同一个端点（会话鉴权）</p>
@@ -120,7 +123,7 @@
 <li><p><strong>收录可见性守卫</strong>：后台概览页常驻收录状态提醒（开了「禁止搜索引擎收录」或闭站时橙色提示条 + 「去哪关」指路——整站对搜索引擎与 AI 关门却无人察觉的事故不再静默）；docker 自托管控制面的分站列表同样显示收录状态，开通脚本自带收录自检</p>
 </li>
 </ul>
-<h3 id="修复">修复</h3><ul>
+<h3 id="修复-1">修复</h3><ul>
 <li><strong>上传大文件一律失败（超 2MB 全部 413）</strong>：入站体积预检的上传豁免路径少了 <code>/api</code> 前缀（真实路径是 <code>/api/admin/upload</code>），于是上传端点一直按 2MB 的普通限额预检——视频、大图、开放接口配图只要超过 2MB 就地被拒，页面上只显示「上传失败」（前台图片因为上传前会压缩到几百 KB，所以一直没暴露）。现已修正，冒烟新增「上传体积预检链路」守着（3MB 必须放行 / 31MB 必须 413）</li>
 <li><strong>视频偶尔被判「只支持 MP4 / WebM」</strong>：macOS 常把 <code>.mp4</code> 报成 <code>video/quicktime</code>，而客户端此前把「容器品牌无需改写」误当成「不认识的格式」直接拒掉。现在改为<strong>只认文件头</strong>：有 <code>ftyp</code> 就是 ISO-BMFF，品牌是 <code>qt  </code> 的（iPhone 的 .mov）改写成 mp4，其余品牌原样按 mp4 上传；WebM 认 EBML 魔数，其它容器才提示换格式。另外，上传失败时会把服务端原话（如「请求体过大」「文件超过 25MB 限制」）显示出来，不再只有一句笼统的「上传失败」</li>
 <li><strong>视频入口合并</strong>（站长拍板）：不再单设「视频」按钮，图片与视频共用同一个「加图」选择器，只保留「一条微博最多 1 个视频」的约束（多选时视频取第一个、其余当图片；拖拽 / 粘贴同样分流）</li>
@@ -144,7 +147,7 @@
 <h2 id="251---2026-10-12"><a href="https://github.com/bloghao/bloghao/compare/v2.5.0...v2.5.1" target="_blank" rel="noopener noreferrer">2.5.1</a> - 2026-10-12</h2><h3 id="新增-2">新增</h3><ul>
 <li><strong>文档中心站内搜索</strong>：官网文档中心全页面顶部新增搜索框，按标题与正文关键词即时过滤，结果直达具体小节锚点；搜索索引独立文件按需加载，不拖慢首屏。同时修掉「文档页丢样式」——资源引用一律改根绝对路径，<code>/docs</code>（无斜杠）地址访问不再解析错资源；首页补文档中心入口</li>
 </ul>
-<h3 id="修复-1">修复</h3><ul>
+<h3 id="修复-2">修复</h3><ul>
 <li><strong>分享卡片单图完整展示</strong>：微博只有一张配图时，卡片按图片真实比例完整绘制（与前台 <code>.wb-imgs-1</code> 同口径：不裁切、不放大，高度上限 420px，过长的图自动缩成完整缩略图，比例变窄时水平居中）；旧版写死 4:3 格子居中裁切，方形图上下共被裁掉约四分之一，图内文字常被切掉。多图九宫格与图加载失败的占位格维持原样</li>
 </ul>
 <h2 id="250---2026-10-12"><a href="https://github.com/bloghao/bloghao/compare/v2.4.0...v2.5.0" target="_blank" rel="noopener noreferrer">2.5.0</a> - 2026-10-12</h2><p>本版本把「安全」升级为<strong>常态化机制</strong>：发布次日即完成第二轮全量审计（七类攻击面并行猎捕 + 独立复核，27 项发现 21 项修复，报告见 docs/），并顺手补上两块能力版图——<strong>AI 助手接入（MCP）<strong>与</strong>注册人机验证（Turnstile）</strong>；后台概览新增「系统」状态卡与版本号展示，运维状态从此一眼可见。</p>
@@ -174,7 +177,7 @@
 </li>
 <li>回归测试 518 → 553，冒烟 189 项同步全绿；完整报告与逐条终态见 docs/archive/SECURITY-AUDIT-REPORT-2026-10-12.md</li>
 </ul>
-<h3 id="修复-2">修复</h3><ul>
+<h3 id="修复-3">修复</h3><ul>
 <li><strong>wechat 移动端两处</strong>：真 390px 下评论头的作者/会员徽标与回复按钮被挤到框内拆字换行（「作者」拆成两行）——评论头放开 flex 换行、整字不拆；顶栏转横向滚动后「分类话题」下拉被滚动容器剪掉——菜单打开时放开导航裁剪并转导航锚定定位（site.js 切 <code>snav-open</code>，<code>:has</code> 兜底无 JS）</li>
 <li><strong>英文测试版随 v2.4.0 代码补齐</strong>：feed 频道标题走词典、分享卡与配图删除按钮文案收尾</li>
 <li><strong>自托管（docker-poc）</strong>：控制面镜像构建补齐 scheme.ts（新增兄弟模块未进 COPY 清单导致构建必炸）；广场 hub 的 Node 运行器源码入库（此前文档引用而源码漏提交）</li>
@@ -191,7 +194,7 @@
 <li><strong>杂项加固</strong>：链接卡抓取对畸形实体解码的 500 防护；书影音中转响应体流式限长；外部发布落库改「魔数优先」（声明 Content-Type 不可信）；会员锁文的社交卡图只出封面（OG 标记可能位于试读段之后）；采集草稿响应统一过口令剥离出口</li>
 <li><strong>回归测试 487 → 518</strong>：会话 token 全模块（哈希落库 / 查询比对 / 限流）、style 白名单净化、出网重定向逐跳复查、上传魔数与原型链穿透、Markdown 协议拒绝列表、schema 同步不变量——安全核心里此前没有守卫的面全部补齐</li>
 </ul>
-<h3 id="修复-3">修复</h3><ul>
+<h3 id="修复-4">修复</h3><ul>
 <li>广场微博卡在「摘要与标题同文截断」时不再重复渲染（兼容截断省略号）；广场 hub 管理端手动拉取的参数修正（此前触发即 500）</li>
 <li>备份文件名与上传年月目录统一按北京时间取日期（此前走 UTC，北京每月 1 日 0-8 点会归错档）；文章页 canonical / og:url / JSON-LD 的中文 slug 百分号编码，与 RSS / sitemap 同口径</li>
 <li>后台友链 / 页面排序请求期间防连击（此前连点会挪两格）；公众号采集插件补中文输入法回车判定</li>
@@ -241,7 +244,7 @@
 <li><strong>演示站正式域名 demo.bloghao.com</strong>：官网（bloghao.com）导航 / 首屏 / 快速开始 / 页脚的演示入口统一从 workers.dev 临时地址切到 <strong>demo.bloghao.com</strong>，并在快速开始与 README 里提醒「部署前可先去演示站转一圈」（账号 demo / demo1234，数据每 2 小时重置）；<code>wrangler.demo.jsonc</code> 以 <code>routes</code> 声明该自定义域名，<code>npm run deploy:demo</code> 部署时自动完成绑定与证书签发</li>
 <li><strong>默认主题排版优化</strong>：wechat 主题顶栏改 compact 布局（主条收窄五项、会员入口药丸右置），页脚改两段式链接组（排行榜等入口随对应功能开关显隐），移动端边距内收</li>
 </ul>
-<h3 id="修复-4">修复</h3><ul>
+<h3 id="修复-5">修复</h3><ul>
 <li><strong>手机上传图片静默失败</strong>：iOS Safari 上，前台微博发布器「加图」/卡片编辑、后台编辑器插图 / 视频 / 封面、后台媒体库 / 头像 /favicon / OG 卡图等动态创建的文件选择器，能打开选图、也能选中照片，但文件永远回不到页面——上传从未开始、全程无任何提示，点发布就变成纯文字微博。根因是动态 file input 未挂到页面 DOM（iOS 对游离节点不回填 change），已统一改为先隐藏挂载再打开选图器；同时前台发布 / 保存新增「图片还在上传中」守卫，图片没传完不再允许提交</li>
 <li><strong>后台会员接口鉴权与出参加固</strong>：<code>GET/PUT /api/admin/members</code> 曾注册在鉴权中间件之前，未登录可直接读取全部会员（含口令哈希字段）或修改任意会员档位 / 封禁状态——已收回到鉴权之后，列表出参不再包含口令与盐字段</li>
 <li><strong>前台编辑微博保存假报错</strong>：管理员在前台微博卡片上编辑含链接或话题的正文并保存时，实际已保存成功但界面提示失败（客户端重渲染代码的捕获组错位）；话题链接此前也会渲染成页内锚点而非话题筛选链接，均已修复</li>
@@ -253,7 +256,7 @@
 <h3 id="新增-7">新增</h3><ul>
 <li><strong>Docker 自托管</strong>（<code>docker-poc/</code>）：文章存内置 SQLite（WAL），图片存本地磁盘目录或 Cloudflare R2 桶（S3 兼容接口直连、SigV4 零依赖实现，启动自检 + <code>--copy-local-to-r2</code> 幂等迁移存量图片）；单进程按域名托管多个完全独立的博客站（库与上传物物理隔离），定时发布与北京时间 00:30 备份 / 回收站清理随容器运行；<code>XWLBLOG_PORT</code> 换端口、<code>XWLBLOG_BIND</code> 绑回环交给面板反代；数据卷属主由容器入口自动修复后降权运行；已在真实服务器全链路排练通过（验收 45 项，4核8G 舒适跑 100 站）。部署指引见 README「部署 → 方式三」与 <a href="https://github.com/bloghao/bloghao/blob/main/docker-poc/DEPLOY.md">docker-poc/DEPLOY.md</a></li>
 </ul>
-<h3 id="修复-5">修复</h3><ul>
+<h3 id="修复-6">修复</h3><ul>
 <li>回收站上线后首批加固：彻底删除的级联改守卫式子查询并前置于主行删除（主行 0 匹配不再误删存活文章的评论）；恢复端点补 <code>deleted_at</code> 守卫，过期定时文恢复自动转草稿并清掉 <code>publish_at</code>（防恢复即撞发）；媒体体检的清理 / 合并改分批提交（大批量不再整体失败）；上传指纹回填独立限频桶（60/分钟）；纯博客模式的页脚剥掉 <code>/weibo</code> 死链</li>
 </ul>
 <h2 id="200---2026-10-06"><a href="https://github.com/bloghao/bloghao/releases/tag/v2.0.0" target="_blank" rel="noopener noreferrer">2.0.0</a> - 2026-10-06</h2><p>首个按「开发 / 发布双仓」流程打 tag 的基线版本。2.0 在「写文章」的基础上，整合了作者实例沉淀的一整套日常记录与互动能力：</p>
@@ -280,33 +283,35 @@
       <div class="docs-toc-title">本页目录</div>
       <ul class="docs-toc-list">
         <li class="toc-d2"><a href="#unreleased" data-toc="unreleased">Unreleased</a></li>
+        <li class="toc-d2"><a href="#270---2026-10-17" data-toc="270---2026-10-17">2.7.0 - 2026-10-17</a></li>
         <li class="toc-d3"><a href="#新增" data-toc="新增">新增</a></li>
+        <li class="toc-d3"><a href="#修复" data-toc="修复">修复</a></li>
         <li class="toc-d2"><a href="#260---2026-10-17" data-toc="260---2026-10-17">2.6.0 - 2026-10-17</a></li>
         <li class="toc-d3"><a href="#新增-1" data-toc="新增-1">新增</a></li>
-        <li class="toc-d3"><a href="#修复" data-toc="修复">修复</a></li>
+        <li class="toc-d3"><a href="#修复-1" data-toc="修复-1">修复</a></li>
         <li class="toc-d3"><a href="#变更" data-toc="变更">变更</a></li>
         <li class="toc-d3"><a href="#安全" data-toc="安全">安全</a></li>
         <li class="toc-d2"><a href="#251---2026-10-12" data-toc="251---2026-10-12">2.5.1 - 2026-10-12</a></li>
         <li class="toc-d3"><a href="#新增-2" data-toc="新增-2">新增</a></li>
-        <li class="toc-d3"><a href="#修复-1" data-toc="修复-1">修复</a></li>
+        <li class="toc-d3"><a href="#修复-2" data-toc="修复-2">修复</a></li>
         <li class="toc-d2"><a href="#250---2026-10-12" data-toc="250---2026-10-12">2.5.0 - 2026-10-12</a></li>
         <li class="toc-d3"><a href="#新增-3" data-toc="新增-3">新增</a></li>
         <li class="toc-d3"><a href="#变更-1" data-toc="变更-1">变更</a></li>
         <li class="toc-d3"><a href="#安全-1" data-toc="安全-1">安全</a></li>
-        <li class="toc-d3"><a href="#修复-2" data-toc="修复-2">修复</a></li>
+        <li class="toc-d3"><a href="#修复-3" data-toc="修复-3">修复</a></li>
         <li class="toc-d2"><a href="#240---2026-10-11" data-toc="240---2026-10-11">2.4.0 - 2026-10-11</a></li>
         <li class="toc-d3"><a href="#新增-4" data-toc="新增-4">新增</a></li>
         <li class="toc-d3"><a href="#安全-2" data-toc="安全-2">安全</a></li>
-        <li class="toc-d3"><a href="#修复-3" data-toc="修复-3">修复</a></li>
+        <li class="toc-d3"><a href="#修复-4" data-toc="修复-4">修复</a></li>
         <li class="toc-d2"><a href="#230---2026-10-11" data-toc="230---2026-10-11">2.3.0 - 2026-10-11</a></li>
         <li class="toc-d3"><a href="#新增-5" data-toc="新增-5">新增</a></li>
         <li class="toc-d2"><a href="#220---2026-10-10" data-toc="220---2026-10-10">2.2.0 - 2026-10-10</a></li>
         <li class="toc-d3"><a href="#新增-6" data-toc="新增-6">新增</a></li>
         <li class="toc-d3"><a href="#变更-2" data-toc="变更-2">变更</a></li>
-        <li class="toc-d3"><a href="#修复-4" data-toc="修复-4">修复</a></li>
+        <li class="toc-d3"><a href="#修复-5" data-toc="修复-5">修复</a></li>
         <li class="toc-d2"><a href="#210---2026-10-06" data-toc="210---2026-10-06">2.1.0 - 2026-10-06</a></li>
         <li class="toc-d3"><a href="#新增-7" data-toc="新增-7">新增</a></li>
-        <li class="toc-d3"><a href="#修复-5" data-toc="修复-5">修复</a></li>
+        <li class="toc-d3"><a href="#修复-6" data-toc="修复-6">修复</a></li>
         <li class="toc-d2"><a href="#200---2026-10-06" data-toc="200---2026-10-06">2.0.0 - 2026-10-06</a></li>
       </ul>
     </aside>
