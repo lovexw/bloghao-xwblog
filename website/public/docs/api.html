@@ -130,7 +130,7 @@
 <h3 id="get-gouurlssr-页面">GET /go?u=<url>（SSR 页面）</h3><p>外链中间页（机制见 <code>src/outlink.ts</code>）：白名单域名（<code>TRUSTED_OUT_DOMAINS</code>，子域名自动跟随）与本站同源地址 302 直跳；其余第三方 http(s) 地址渲染「即将离开本站」确认页（展示目标域名与完整链接、附免责声明，<code>noindex</code>，无 JS、不自动跳转，故不构成开放重定向）。目标缺失 / 非 http(s) / 超 2048 字符一律 302 回首页。正文外链在渲染层包装进来：文章 / 页面 / 关于我走 <code>sanitizeHtml(html, { origin })</code>，微博文本走 <code>weiboTextHtml</code>（客户端镜像在 site.js）——存库与 RSS / 导出保持原始 URL。</p>
 <h3 id="get-llmstxt-llms-fulltxt机器可读面">GET /llms.txt · /llms-full.txt（机器可读面）</h3><p>AI 可获取面（<code>src/llms.ts</code>，<code>text/plain; charset=utf-8</code>，<code>public, max-age=600</code>，进页面边缘缓存数据白名单，恒为游客视角）：<code>/llms.txt</code> 是站点导读索引（站名 + 描述 + 最新 100 篇条目、独立页面与订阅清单）；<code>/llms-full.txt</code> 附最新 50 篇全文（库存净化 HTML 经 <code>htmlToMd</code> 转成干净 Markdown）。防泄漏与 RSS 同一份口径：会员锁文索引照常出条目、全文只出摘要与引导；访问密码文索引出作者摘要、正文整体退出；演示站 / 全站 noindex / AI 策略 deny 档出桩。</p>
 <h3 id="get-postslugmd单篇-markdown-镜像">GET /post/:slug.md（单篇 Markdown 镜像）</h3><p>文章 Markdown 版本（<code>text/markdown</code>，同上防泄漏与缓存口径；<code>/llms-full.txt</code> 同款转换链路 <code>sanitizeHtml → htmlToMd</code>）。密码文 404（与不存在同响应）、AI 策略 deny 档 404、窗口外草稿软删不出现；文章页 head 带 <code>&lt;link rel=&quot;alternate&quot; type=&quot;text/markdown&quot;&gt;</code> 自动声明。</p>
-<h2 id="认证">认证</h2><h3 id="get-apiauthstate">GET /api/auth/state</h3><p><code>{&quot;needsSetup&quot;: true, &quot;user&quot;: null}</code> —— <code>needsSetup=true</code> 表示尚无任何用户，可调用 setup。</p>
+<h2 id="认证">认证</h2><h3 id="get-apiauthstate">GET /api/auth/state</h3><p><code>{&quot;needsSetup&quot;: true, &quot;user&quot;: null}</code> —— <code>needsSetup=true</code> 表示尚无任何用户，可调用 setup。开启两步验证后多 <code>needsTotp: true</code>（登录表单据此预显「两步验证码」输入框；登录 Body 需带 <code>totp</code> 6 位码，<code>±1</code> 时间窗内有效）。</p>
 <h3 id="post-apiauthsetup-仅首次">POST /api/auth/setup （仅首次）</h3><div class="codeblock" data-lang="json"><pre><code>{ &quot;username&quot;: &quot;demo&quot;, &quot;password&quot;: &quot;至少8位&quot;, &quot;displayName&quot;: &quot;小吴&quot; }</code></pre></div><p>创建管理员 + 欢迎文章，响应 Set-Cookie 会话（30 天）。</p>
 <h3 id="post-apiauthlogin">POST /api/auth/login</h3><p><code>{ &quot;username&quot;, &quot;password&quot; }</code>。同 IP 10 分钟内最多尝试 10 次。</p>
 <h3 id="post-apiauthlogout">POST /api/auth/logout</h3><p>销毁会话。</p>
@@ -186,7 +186,7 @@
 <tr>
 <td>PUT</td>
 <td><code>/api/admin/posts/:id</code></td>
-<td>更新（autosave 用；已发布时间不会被草稿保存抹掉）。<strong>缺键即保留</strong>：Body 里没出现的字段（content/tags/categoryId/title 等）一律沿用旧值——列表页状态切换只发 <code>{status}</code> 不会误清正文；显式传空串/空数组/<code>null</code> 才是清空</td>
+<td>更新（autosave 用；已发布时间不会被草稿保存抹掉）。<strong>改 slug 时旧值自动追加进 <code>old_slugs</code></strong>（去重、上限 20，B22）——前台旧地址此后 301 到新地址（仅现存已发布且可见窗口内命中，回收站 / 草稿 / 窗口外保持 404）。<strong>缺键即保留</strong>：Body 里没出现的字段（content/tags/categoryId/title 等）一律沿用旧值——列表页状态切换只发 <code>{status}</code> 不会误清正文；显式传空串/空数组/<code>null</code> 才是清空</td>
 </tr>
 <tr>
 <td>POST</td>
@@ -533,41 +533,38 @@
 </tr>
 </thead>
 <tbody><tr>
-<td>GET / PUT</td>
-<td><code>/api/admin/settings</code></td>
-<td>可写键：`siteName, siteDescription, siteUrl（http(s) scheme 校验，非法整体 400；留空 = 回退当前访问域名）, siteMode（blog-weibo/weibo-blog/blog/weibo 四选一，脏值回退默认）, footerText, avatarUrl, faviconUrl, ogImageDefault, theme, allowComments, moderateComments, showCommentRegion（评论 IP 属地展示开关，默认 0；采集无条件，见 /api/public/comments）, notifyNewComment, rssFullText, backupEnabled, postsPerPage, about（legacy，已由「页面」承载）, pluginsDisabled, serverPluginsDisabled（服务端插件停用名单）, serverPluginConfig（服务端插件配置 JSON：{插件id:{字段:值}}，顶层键必须是注册插件、字段键必须在其 configFields 登记内、值字符串 ≤ 500，插件 configValidate 语义校验不过整体 400）, appearance（主题外观变量 JSON，非法整体 400）, customCss（皮肤包自定义 CSS，样式安检门净化：@import 与脚本类内容拒绝、url() 只收 https 与站内相对或 data:image</td>
-</tr>
-<tr>
-<td>PUT</td>
-<td><code>/api/admin/password</code></td>
-<td>Body <code>{oldPassword, newPassword}</code>（8-64 位）</td>
+<td>POST</td>
+<td><code>/api/admin/totp/setup</code></td>
+<td>开始绑定两步验证（B13）：生成新 secret 存 <code>totpSecretPending</code>（已开启状态下重新绑定不降级，旧 secret 在 enable 成功前继续生效），返回 <code>{secret, uri(otpauth://), qrSvg(内联 SVG)}</code>——密钥只此一次回显；限频 5 次/分钟/IP</td>
 </tr>
 <tr>
 <td>POST</td>
-<td><code>/api/admin/tools/md</code></td>
-<td>Body <code>{md}</code> → <code>{html}</code>，Markdown 渲染</td>
+<td><code>/api/admin/totp/enable</code></td>
+<td>Body <code>{code}</code>：<code>verifyTotp(pending, code)</code>（±1 窗口、恒时比较）通过后 <code>totpSecret=pending</code>、<code>totpEnabled=&#39;1&#39;</code>、清 pending；未绑定或码不对 400。登录端点此后强制二段校验</td>
 </tr>
 <tr>
 <td>POST</td>
-<td><code>/api/admin/tools/linkmeta</code></td>
-<td>Body <code>{url}</code> → <code>{meta:{title, description, image, siteName}}</code>，编辑器「网址卡片」抓取目标页 og 元数据；只抓 http(s) 公网地址（私有网段/非常规端口拒绝，限长限时），抓不到时字段为空（前端用域名占位组卡）。限频 10 次/分钟/IP</td>
-</tr>
-<tr>
-<td>POST</td>
-<td><code>/api/admin/tools/sanitize</code></td>
-<td>Body <code>{html}</code> → <code>{html}</code>，白名单净化（粘贴用）</td>
-</tr>
-<tr>
-<td>POST</td>
-<td><code>/api/admin/cache/purge</code></td>
-<td>一键清理页面边缘缓存：换 settings <code>pageCacheEpoch</code> 让旧副本整代作废（浏览器侧响应不变）；后台「概览 → 系统」按钮消费</td>
+<td><code>/api/admin/totp/disable</code></td>
+<td>Body <code>{password}</code>：校验登录密码后清 <code>totpSecret</code> / <code>totpEnabled</code> / pending；密码错 400</td>
 </tr>
 <tr>
 <td>GET</td>
-<td><code>/api/admin/update</code></td>
-<td>更新中心检查（后台概览「系统」卡「检查更新」）：单向拉取官网公开清单 <code>bloghao.com/version.json</code>（固定可信端点，6s 超时，10 分钟内存缓存），返回 <code>{checkable, current, latest, notes?, guide?}</code> 与「保持当前版本」判定（<code>kept</code>）——<strong>不上报任何本站信息</strong>；网络异常 / 校验不过一律降级 <code>checkable:false</code>，绝不 500。演示站直接短路 <code>{checkable:false, reason:&#39;demo&#39;}</code>；偏好写入走 settings 的 <code>updateIgnoredVersion</code> 键。机制见 <code>src/update.ts</code> 与 docs/UPDATING.md</td>
+<td><code>/api/admin/sessions</code></td>
+<td>当前管理员的活跃会话 <code>{sessions:[{tokenHash(不可逆，作撤销标识), isCurrent, createdAt, expiresAt}]}</code>（token 落库即 SHA-256，出参无重放风险）</td>
+</tr>
+<tr>
+<td>DELETE</td>
+<td><code>/api/admin/sessions</code></td>
+<td>Body <code>{tokenHash}</code>：撤销该设备会话（限定 user_id；当前会话拒绝自撤 400）——「改密码踢其他设备」之外的按台粒度管理</td>
 </tr>
 </tbody></table></div>
+<p>| GET / PUT | <code>/api/admin/settings</code> | 可写键：<code>siteName, siteDescription, siteUrl（http(s) scheme 校验，非法整体 400；留空 = 回退当前访问域名）, siteMode（blog-weibo/weibo-blog/blog/weibo 四选一，脏值回退默认）, footerText, avatarUrl, faviconUrl, ogImageDefault, theme, allowComments, moderateComments, showCommentRegion（评论 IP 属地展示开关，默认 0；采集无条件，见 /api/public/comments）, notifyNewComment, rssFullText, backupEnabled, postsPerPage, about（legacy，已由「页面」承载）, pluginsDisabled, serverPluginsDisabled（服务端插件停用名单）, serverPluginConfig（服务端插件配置 JSON：{插件id:{字段:值}}，顶层键必须是注册插件、字段键必须在其 configFields 登记内、值字符串 ≤ 500，插件 configValidate 语义校验不过整体 400）, appearance（主题外观变量 JSON，非法整体 400）, customCss（皮肤包自定义 CSS，样式安检门净化：@import 与脚本类内容拒绝、url() 只收 https 与站内相对或 data:image|font、花括号配平、≤ 8000 字符，非法整体 400）, siteGrayscale, siteClosed, siteClosedMessage, siteNoindex（全站 noindex 开关）, membersEnabled（会员体系总开关）, onboarding/onboardingManual（新手引导记账位：</code>onboarding<code>由</code>/api/auth/setup<code>首装成功时播种</code>&#39;1&#39;<code>，后台概览页据此显示引导清单卡，置 </code>&#39;0&#39;<code> 即完成/跳过且不再显示；</code>onboardingManual<code> 记录「使用手册」已打开；设置页「保存全部」不含这两键）, rankTopN（/rank 展示条数 1-50）, turnstileSiteKey/turnstileSecret（注册人机验证，两键成对启用否则整体 400）, edition（zh/en，重新开启 en 即重置回退状态）, tgChannelChatId, commentWebhookUrl（公网 http(s) 校验）, footerHtmlCode（≤5000 字，管理员信任级 HTML）, bufferAccessToken/bufferChannelId（微博同步 Buffer）, plazaEndpoint（公网 https 校验）/plazaToken（广场同步）, externalToken, telegramBotToken, telegramAllowFrom, telegramWebhookSecret, verifyMetas（站点验证 meta：一行一个 meta 标签，name 走白名单、取值形态受限，非法整体 400）, analyticsScript（统计脚本：https 脚本地址或 script 片段，内联脚本体与白名单外属性拒绝）, robotsExtra（robots.txt 追加段，剥控制字符、限 2000 字符）, aiPolicy（AI 抓取策略三档：</code>allow<code>默认 /</code>seek<code>只许检索引用不许训练 /</code>deny<code>全部拒绝；写进 robots.txt 的 AI 声明段 +</code>Content-signal<code>行，**默认档输出与历史逐字节一致**；三值白名单脏值整体 400，渲染端</code>readAiPolicy<code> 脏值兜底当 allow）, contentVisibleRange（站点可见窗口：</code>&#39;&#39;<code>全部可见默认 /</code>3d<code>/</code>1m<code>/</code>6m<code>/</code>1y<code>，白名单外整体 400——窗口外内容对游客与会员彻底不可见，防泄漏清单见 AGENTS.md「站点可见窗口」节）, updateIgnoredVersion（更新中心「保持当前版本」记账位：</code>x.y.z<code> 形态，脏值清空；出现更高版本自动失效重新提示）</code>；<code>theme</code> 必须是已注册主题 id；<code>avatarUrl</code>/<code>faviconUrl</code>/<code>ogImageDefault</code> 只接受站内 <code>/images/</code> 与 <code>http(s)</code> 外链；<code>pluginsDisabled</code>/<code>serverPluginsDisabled</code> 为逗号分隔的插件 id（仅字母/数字/<code>_</code>/<code>-</code>）；<code>siteGrayscale</code>/<code>siteClosed</code>/<code>siteNoindex</code>/布尔开关为 <code>1</code>/<code>0</code>（闭站时公开页面与公开 API 一律 503，白名单见 src/closed.ts，已登录管理员不受影响）；<code>siteClosedMessage</code> ≤1000 字；<code>externalToken</code>/<code>telegramBotToken</code>/<code>telegramWebhookSecret</code>/<code>commentWebhookUrl</code>/<code>bufferAccessToken</code>/<code>plazaToken</code>/<code>turnstileSecret</code> 为敏感项，GET 与 PUT 的响应一律打码（<code>••••••••</code>），明文只在生成时返回一次，PUT 收到打码占位符视为保持原值；<code>verifyMetas</code> / <code>analyticsScript</code> 存库为结构化 JSON，GET 与 PUT 响应回显成「可粘贴形态」（与提交格式同形，可原样改回再存），渲染时按结构化值重放——统计脚本域自动进 CSP（<code>script-src</code> + <code>connect-src</code>），验证 meta 与预取声明（Speculation Rules）注入 head；<code>robotsExtra</code> 附在内置 robots 段之后（<code>GET /robots.txt</code>，演示站与全站 noindex 固定整站 Disallow） |
+| PUT | <code>/api/admin/password</code> | Body <code>{oldPassword, newPassword}</code>（8-64 位） |
+| POST | <code>/api/admin/tools/md</code> | Body <code>{md}</code> → <code>{html}</code>，Markdown 渲染 |
+| POST | <code>/api/admin/tools/linkmeta</code> | Body <code>{url}</code> → <code>{meta:{title, description, image, siteName}}</code>，编辑器「网址卡片」抓取目标页 og 元数据；只抓 http(s) 公网地址（私有网段/非常规端口拒绝，限长限时），抓不到时字段为空（前端用域名占位组卡）。限频 10 次/分钟/IP |
+| POST | <code>/api/admin/tools/sanitize</code> | Body <code>{html}</code> → <code>{html}</code>，白名单净化（粘贴用） |
+| POST | <code>/api/admin/cache/purge</code> | 一键清理页面边缘缓存：换 settings <code>pageCacheEpoch</code> 让旧副本整代作废（浏览器侧响应不变）；后台「概览 → 系统」按钮消费 |
+| GET | <code>/api/admin/update</code> | 更新中心检查（后台概览「系统」卡「检查更新」）：单向拉取官网公开清单 <code>bloghao.com/version.json</code>（固定可信端点，6s 超时，10 分钟内存缓存），返回 <code>{checkable, current, latest, notes?, guide?}</code> 与「保持当前版本」判定（<code>kept</code>）——<strong>不上报任何本站信息</strong>；网络异常 / 校验不过一律降级 <code>checkable:false</code>，绝不 500。演示站直接短路 <code>{checkable:false, reason:&#39;demo&#39;}</code>；偏好写入走 settings 的 <code>updateIgnoredVersion</code> 键。机制见 <code>src/update.ts</code> 与 docs/UPDATING.md |</p>
 <h3 id="插件编辑器插件远程安装-服务端插件b8">插件（编辑器插件远程安装 + 服务端插件，B8）</h3><div class="table-wrap"><table>
 <thead>
 <tr>
