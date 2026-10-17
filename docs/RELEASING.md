@@ -64,6 +64,7 @@ grep -rn "<关键词>" . --exclude-dir=node_modules   # 剔除后搜残留引用
 ### 4. 回填版本档案（属于本次发布提交的一部分）
 
 - 根目录 CHANGELOG.md：Unreleased 区整段移入新版本小节，写日期与版本号，更新底部 compare 链接
+- **跑 `npm run build:release`**：从 CHANGELOG 重新生成 `website/public/version.json`——这是官网部署的**机器可读版本清单**，也是各分站 / 自托管用户「更新中心」看到的「更新了什么」唯一事实源（见 `docs/UPDATING.md`、`src/update.ts`）。**必须与 CHANGELOG 改动同一次提交**，否则更新中心要么看不到新版本、要么要点与 CHANGELOG 不一致
 - docs/VERSIONS.md 版本大事记（官网「版本更新说明」页源文件）：新版本补一节要点并同步「版本速览」表
 - `package.json`：`version` bump 到本次版本号
 

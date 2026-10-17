@@ -136,6 +136,17 @@ settings 有 colo 级共享快照层。一切**写 settings 的路径**，写完
 | 加一种评论/留言形态 | 抄一整段流程 | 复用 `api.ts` 的 `publicComment` 公共核心，只写细路由 + opts |
 | 新增对外出口（RSS/接口/导出） | 直接输出全部字段 | 过防泄漏清单（付费墙 / 密码文 / 锁文），摘要截断、锁文只出试读 |
 | 改主题 / 编辑器样式 | 只改一侧 | `.ed-editor`（编辑器）与 `.rich`（文章页）要**镜像同改** |
+| 给分站加「更新」按钮 | 做成自动拉代码 / 自动迁移 | 更新中心**只告知 + 记录选择**，升级是一次显式部署动作（`docs/UPDATING.md`）；永不加自动更新 |
+| 改版本清单结构 | 只改生成脚本 / 只改校验器 | **三处同步**：`scripts/build-release.mjs`、`src/update.ts validateUpdateManifest`、`tests/update.test.ts` 契约守卫 |
+| 发布回填 CHANGELOG 之后 | 忘了重生成 `version.json` | 跑 `npm run build:release` 并随发布提交——否则更新中心看不到新版本要点 |
+
+**关于「版本与更新」（B29，2026-10-17）**：站里有一个**更新中心**（后台概览「系统」卡 / 自托管控制面），让分站与自托管用户自己决定「更新到最新版」还是「保持当前版本」。三条别碰的定位：
+
+1. **永不做自动更新**——只告知「更新了什么 / 优化了什么」+ 记录用户的选择，真正换版本永远是一次部署动作（Cloudflare 重新部署 / Docker 重建）。这是产品定位（站是用户自己的），别顺手加自动拉代码 / 自动迁移。
+2. **清单事实源是官网 `https://bloghao.com/version.json`**（`src/update.ts` 的 `UPDATE_MANIFEST_URL`，固定可信端点；不是用户可控地址），由 `npm run build:release` 从 CHANGELOG 生成——CHANGELOG 是给人看的、`version.json` 是给机器看的，两者同源。
+3. **清单按不可信输入处理**——校验不过 / 拿不到就优雅降级为「暂不可检查」，绝不报错、绝不阻塞后台、绝不上报本站信息。
+
+改相关代码先读 `docs/UPDATING.md` 与 AGENTS.md「更新中心」防线节。
 
 ---
 

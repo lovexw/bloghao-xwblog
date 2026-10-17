@@ -129,6 +129,11 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   // 「打开使用手册」的点击记账。两键都进 BOOL_SETTINGS 归一化，后台设置页保存全部不含它们
   onboarding: '',
   onboardingManual: '',
+  // 更新中心（自选更新，机制 src/update.ts）：分站 / 自托管用户自己决定「更新到最新版」还是
+  // 「保持当前版本」。updateIgnoredVersion = 用户点过「保持当前版本」时记下的版本号（只认
+  // x.y.z，脏值清空），出现更高的新版本时该记录自动失效（又会提示更新）。检查更新只读官网
+  // 发布的机器可读清单，不做任何自动更新——真正换版本仍由一次部署动作完成（见 docs/UPDATING.md）
+  updateIgnoredVersion: '',
 }
 
 /** 敏感设置键：GET / PUT 响应一律打码（api.ts），整站包导出整体跳过（sitebundle.ts）。

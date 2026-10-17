@@ -35,6 +35,7 @@ const V = '?v=20261014d'
 const DOCS = [
   { slug: 'deploy', file: 'DEPLOY.md', icon: '🚀', title: '部署教程', desc: '从注册 Cloudflare 到部署 Worker、绑定自定义域名、自动部署、备份与恢复，含 Docker 自托管。' },
   { slug: 'cloudflare', file: 'CLOUDFLARE-BASICS.md', icon: '☁️', title: 'Cloudflare 基础', desc: 'Workers、D1、R2、定时任务、域名与 Turnstile：看懂这套博客跑在 Cloudflare 上的每个部件，控制台巡检、常用命令与免费额度速查。' },
+  { slug: 'updating', file: 'UPDATING.md', icon: '⬆️', title: '版本与更新', desc: '更新中心怎么用：看懂「更新了什么 / 优化了什么」，自己决定更新到最新版还是保持当前版本；Cloudflare 与 Docker 自托管的升级动作一次说清。' },
   { slug: 'guide', file: 'GUIDE.md', icon: '📖', title: '使用手册', desc: '后台导览、写文章全流程、快捷键、评论与媒体管理、设置逐项说明。' },
   { slug: 'plaza', file: 'PLAZA.md', icon: '🧭', title: '广场', desc: '内容聚合流：三步接入官方广场，让每篇文章与微博被更多博主看到；含混排口径与自建 hub。' },
   { slug: 'themes', file: 'THEMES.md', icon: '🎨', title: '主题开发', desc: '一套主题 = 八个必需渲染函数（+ 可选 member / rank）+ 全局 CSS，三步注册新主题。' },

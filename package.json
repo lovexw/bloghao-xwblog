@@ -11,6 +11,7 @@
     "deploy:demo": "wrangler deploy -c wrangler.demo.jsonc",
     "deploy:site": "cd website && wrangler pages deploy public",
     "build:docs": "node website/build-docs.mjs",
+    "build:release": "node scripts/build-release.mjs",
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke.mjs",
     "db:init:local": "wrangler d1 execute DB --local --file schema.sql",

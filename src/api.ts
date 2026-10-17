@@ -24,6 +24,7 @@ import {
   memberSessionCookie,
 } from './auth'
 import { verifyTurnstile } from './turnstile'
+import { updateStatus, validateUpdateManifest, UPDATE_GUIDE_URL, UPDATE_MANIFEST_URL } from './update'
 import { APP_VERSION } from './version'
 import {
   countUsers,
@@ -567,6 +568,29 @@ api.get('/admin/stats', async (c) => {
       published_at: r.published_at,
     })),
   })
+})
+
+/* 更新中心（自选更新）——按需抓官网发布的机器可读版本清单（src/update.ts），比对当前版本给出
+ * 「更新了什么 / 优化了什么」，用户自己决定「更新到最新」还是「保持当前版本」。**不做任何自动
+ * 更新**：这里只读清单 + 报状态，真正换版本靠一次部署动作（Cloudflare 重新部署 / Docker 重建，
+ * 见 docs/UPDATING.md）。出网端点是固定可信地址（同 api.telegram.org 口径），仅 https、无用户
+ * 输入进路径；响应按不可信输入严格校验，拿不到就降级为「暂不可检查」。演示站禁外发，直接短路 */
+api.get('/admin/update', async (c) => {
+  const current = APP_VERSION
+  if (isDemo(c.env)) return c.json({ ok: true, checkable: false, reason: 'demo', current, guide: UPDATE_GUIDE_URL })
+  const settings = await getSettings(c.env.DB)
+  let manifest = null
+  try {
+    const res = await fetch(UPDATE_MANIFEST_URL, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(6_000),
+    })
+    if (res.ok) manifest = validateUpdateManifest(await res.json().catch(() => null))
+  } catch {
+    /* 网络异常 / 超时 / 非 JSON：一律按「拿不到最新版本信息」降级，不打扰用户 */
+  }
+  if (!manifest) return c.json({ ok: true, checkable: false, reason: 'unreachable', current, guide: UPDATE_GUIDE_URL })
+  return c.json({ ok: true, checkable: true, ...updateStatus(current, manifest, settings.updateIgnoredVersion || ''), guide: UPDATE_GUIDE_URL })
 })
 
 /* 访客统计（后台「统计」页），聚合见 src/stats.ts；bot 为爬虫/AI 抓取维度（src/bots.ts） */
@@ -2119,6 +2143,13 @@ api.put('/admin/settings', async (c) => {
       // 渲染端 readAiPolicy 另有一层容错兜底（脏值一律当 allow）
       if (!AI_POLICY_VALUES.includes(v as AiPolicy)) return jsonError('AI 抓取策略档位不正确')
       patch[key] = v
+      continue
+    }
+    if (key === 'updateIgnoredVersion') {
+      // 更新中心「保持当前版本」记账位（src/update.ts）：只认 x.y.z 形态，脏值清空
+      // （清空即「没选择忽略」，下次检查照常提示更新——宁缺毋滥，不让脏值锁死更新提示）
+      const u = v.trim().replace(/^v/, '')
+      patch[key] = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(u) ? u : ''
       continue
     }
     if (key === 'edition') {
