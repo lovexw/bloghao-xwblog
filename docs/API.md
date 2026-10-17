@@ -363,6 +363,12 @@ AI 可获取面（`src/llms.ts`，`text/plain; charset=utf-8`，`public, max-age
 | GET | `/api/admin/export/markdown` | 下载 Markdown 包 zip：`posts/*.md`（YAML front-matter 含 title/slug/date/status/tags/category/cover/summary，正文 HTML→MD）、`weibo.md`、`pages/*.md`、`images/…`（正文/封面/微博引用的站内图，从 R2 流式打包）、`manifest.json`（含 missingImages 清单）。未被引用的图床文件不打包 |
 | GET | `/api/admin/export/wxr` | 下载 WordPress WXR 1.2 单文件：文章（HTML 正文、publish/draft 状态、分类与标签），供 WordPress / emlog 导入器使用；微博不进 WXR |
 
+### WordPress 导入（B5：WXR 1.2 迁入，src/import-wxr.ts）
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/admin/import/wxr` | Body = WXR 文件原文（`text/xml`，≤ 20MB，走 30MB 上传档）。解析映射后一次性写入：文章（保留 `wp:status` 与原发布时间；publish→published / future→scheduled / draft·pending·private→draft / trash·inherit 跳过）、独立页面、评论（approved 原样、待审进待审、spam 不导入）、分类与标签（缺失自动建）；`wp:post_password` 经 `hashPostPassword` 重新哈希上锁；slug 冲突自动加序号（与 uniqueSlugIn 同口径含回收站占用）；正文一律 `sanitizeHtml` 落库；单篇正文 > 1MB 跳过并计入 `report.skipped`。**合并式导入**（不要求空站，重复导入会产生重复内容）；**不触发发布广播**（firePostPublished，防 TG 轰炸）。上限整体 400：500 篇 / 100 页面 / 20 篇密码文 / 300 张图。返回 `{ok, report:{posts,pages,comments,categories,skipped,publishedNoTime}, images:[url…], batches}`。限频 3 次/10 分钟/IP，演示站 404 |
+| POST | `/api/admin/import/wxr/step` | Body `{urls:[…]}`（≤10 个 http(s) 地址）：逐张 `transferImage` 转存进图床，成功后全局替换 posts / pages 正文与封面里的旧地址；返回 `{moved:[{from,to}], failed:[url]}`。前端循环驱动（Workers 子请求预算）；限频 30 次/10 分钟/IP，演示站 404 |
+
 ### 整站包（B26：一键导出整站 / 一键还原到空站）
 
 与上面三条导出路的分工：Markdown 包 / WXR 是「带走文章去别家系统」，整站包是「原样搬家」（换服务器 / 换域名 / 重新部署同一系统，数据无损）；备份只导出不导入。包 = `manifest.json` + `tables/<表>.<片>.json` + `images/<key>`，单包 ≤2GB，落在 R2 `bundles/`（**不在 /images 公开白名单**，只有登录管理员能操作）。

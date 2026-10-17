@@ -671,6 +671,25 @@
 <td>下载 WordPress WXR 1.2 单文件：文章（HTML 正文、publish/draft 状态、分类与标签），供 WordPress / emlog 导入器使用；微博不进 WXR</td>
 </tr>
 </tbody></table></div>
+<h3 id="wordpress-导入b5wxr-12-迁入srcimport-wxrts">WordPress 导入（B5：WXR 1.2 迁入，src/import-wxr.ts）</h3><div class="table-wrap"><table>
+<thead>
+<tr>
+<th>方法</th>
+<th>路径</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/api/admin/import/wxr</code></td>
+<td>Body = WXR 文件原文（<code>text/xml</code>，≤ 20MB，走 30MB 上传档）。解析映射后一次性写入：文章（保留 <code>wp:status</code> 与原发布时间；publish→published / future→scheduled / draft·pending·private→draft / trash·inherit 跳过）、独立页面、评论（approved 原样、待审进待审、spam 不导入）、分类与标签（缺失自动建）；<code>wp:post_password</code> 经 <code>hashPostPassword</code> 重新哈希上锁；slug 冲突自动加序号（与 uniqueSlugIn 同口径含回收站占用）；正文一律 <code>sanitizeHtml</code> 落库；单篇正文 &gt; 1MB 跳过并计入 <code>report.skipped</code>。<strong>合并式导入</strong>（不要求空站，重复导入会产生重复内容）；<strong>不触发发布广播</strong>（firePostPublished，防 TG 轰炸）。上限整体 400：500 篇 / 100 页面 / 20 篇密码文 / 300 张图。返回 <code>{ok, report:{posts,pages,comments,categories,skipped,publishedNoTime}, images:[url…], batches}</code>。限频 3 次/10 分钟/IP，演示站 404</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/admin/import/wxr/step</code></td>
+<td>Body <code>{urls:[…]}</code>（≤10 个 http(s) 地址）：逐张 <code>transferImage</code> 转存进图床，成功后全局替换 posts / pages 正文与封面里的旧地址；返回 <code>{moved:[{from,to}], failed:[url]}</code>。前端循环驱动（Workers 子请求预算）；限频 30 次/10 分钟/IP，演示站 404</td>
+</tr>
+</tbody></table></div>
 <h3 id="整站包b26一键导出整站-一键还原到空站">整站包（B26：一键导出整站 / 一键还原到空站）</h3><p>与上面三条导出路的分工：Markdown 包 / WXR 是「带走文章去别家系统」，整站包是「原样搬家」（换服务器 / 换域名 / 重新部署同一系统，数据无损）；备份只导出不导入。包 = <code>manifest.json</code> + <code>tables/&lt;表&gt;.&lt;片&gt;.json</code> + <code>images/&lt;key&gt;</code>，单包 ≤2GB，落在 R2 <code>bundles/</code>（<strong>不在 /images 公开白名单</strong>，只有登录管理员能操作）。</p>
 <div class="table-wrap"><table>
 <thead>
@@ -849,6 +868,7 @@
         <li class="toc-d3"><a href="#采集公众号文章" data-toc="采集公众号文章">采集（公众号文章）</a></li>
         <li class="toc-d3"><a href="#外部发布管理" data-toc="外部发布管理">外部发布（管理）</a></li>
         <li class="toc-d3"><a href="#备份-数据导出" data-toc="备份-数据导出">备份 / 数据导出</a></li>
+        <li class="toc-d3"><a href="#wordpress-导入b5wxr-12-迁入srcimport-wxrts" data-toc="wordpress-导入b5wxr-12-迁入srcimport-wxrts">WordPress 导入（B5：WXR 1.2 迁入，src/import-wxr.ts）</a></li>
         <li class="toc-d3"><a href="#整站包b26一键导出整站-一键还原到空站" data-toc="整站包b26一键导出整站-一键还原到空站">整站包（B26：一键导出整站 / 一键还原到空站）</a></li>
         <li class="toc-d3"><a href="#get-apimetathemes" data-toc="get-apimetathemes">GET /api/meta/themes</a></li>
         <li class="toc-d3"><a href="#get-apiadminmemberspage1q" data-toc="get-apiadminmemberspage1q">GET /api/admin/members?page=1&amp;q=</a></li>

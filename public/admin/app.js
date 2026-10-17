@@ -3608,6 +3608,15 @@ async function viewSettings() {
     </div>
 
     <div class="panel" style="padding:20px;">
+      <div class="form-section"><h3>WordPress 导入</h3><div class="sec-desc">从 WordPress 迁移过来：上传后台「工具 → 导出」得到的 WXR 文件，文章 / 独立页面 / 评论 / 分类与标签一并进来，<b>保留原发布状态与发布时间</b>；带访问密码的文章继续上锁，定时中的文章保持定时。导入完成后自动分批把 WP 站内图片转存进你的图床并改写正文引用（源站防盗链导致转存失败的图保留原链）。slug 冲突自动加序号；<b>重复导入会产生重复内容</b>；导入不触发发布通知。</div>
+        <div class="fav-row">
+          <button class="btn" id="btn-wxr-import" type="button">选择 WXR 文件并导入</button>
+          <span class="sec-desc" id="wxr-status">单文件 ≤ 20MB；文章 ≤ 500 篇 / 带密码文 ≤ 20 篇 / 图片 ≤ 300 张，更大的博客请在 WordPress「按作者 / 日期」分卷导出</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="padding:20px;">
       <div class="form-section"><h3>整站搬家</h3><div class="sec-desc">把整站原样打成一个包带走：全部文章 / 微博 / 页面 / 评论 / 会员 / 分类标签 / 友链 / 图床图片。<b>只允许还原到「没有内容的站」</b>（没有未删除的文章 / 微博 / 页面；刚装好的新站请先把自带的「示例文章」与「关于我」页面删进回收站，或直接用下面的「清空本站内容」），<b>不会覆盖、不会合并</b>；包与系统版本不匹配会明确报错，不猜。包里不含管理员账号与各类密钥（新站自己登录、自己填）。换服务器 / 换域名 / 重新部署时用它。</div>
         <div class="fav-row">
           <a class="btn" href="/api/admin/bundle/export" download>导出整站包</a>
@@ -3926,6 +3935,61 @@ async function viewSettings() {
     btn.disabled = false
     btn.textContent = '立即备份'
   })
+
+  /* ---- WordPress 导入（B5 搬家导入工具）----
+   * 两步：上传 WXR 一次性进正文（文章 / 页面 / 评论 / 分类标签，保留原状态与时间），
+   * 然后前端逐批驱动图片转存（每批 10 张，服务端转存后全局替换正文 / 封面旧地址）。
+   * WXR 是 XML 原文，直调 fetch（api() 会 JSON 编码 body）；重复导入会产生重复内容。 */
+  const wxrBtn = document.getElementById('btn-wxr-import')
+  if (wxrBtn) {
+    wxrBtn.addEventListener('click', () => {
+      pickFiles('.xml,text/xml,application/xml', false, (files) => runWxrImport(files[0]))
+    })
+  }
+
+  async function runWxrImport(file) {
+    const statusEl = document.getElementById('wxr-status')
+    if (!file) return
+    wxrBtn.disabled = true
+    try {
+      statusEl.textContent = `解析中（${(file.size / 1024 / 1024).toFixed(1)}MB，大文件需要一会儿）…`
+      const text = await file.text()
+      const res = await fetch('/api/admin/import/wxr', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'text/xml' },
+        body: text,
+      })
+      const r = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(r.error || '导入失败')
+      const rep = r.report || {}
+      const parts = [`文章 ${rep.posts || 0} 篇 · 页面 ${rep.pages || 0} 个 · 评论 ${rep.comments || 0} 条`]
+      if (rep.publishedNoTime) parts.push(`${rep.publishedNoTime} 篇无原发布时间已按导入时间落库`)
+      if (rep.skipped && rep.skipped.length) parts.push(`跳过 ${rep.skipped.length} 篇（${rep.skipped.slice(0, 3).map((s) => `「${s.title}」${s.reason}`).join('；')}${rep.skipped.length > 3 ? ' 等' : ''}）`)
+      const imgs = r.images || []
+      if (!imgs.length) {
+        statusEl.textContent = parts.join('；')
+        toast('导入完成 ✅')
+        return
+      }
+      let moved = 0
+      const failed = []
+      for (let i = 0; i < imgs.length; i += 10) {
+        statusEl.textContent = `${parts.join('；')}；转存图片 ${Math.min(i + 10, imgs.length)}/${imgs.length}…`
+        const d = await api('/admin/import/wxr/step', { method: 'POST', body: { urls: imgs.slice(i, i + 10) } })
+        moved += (d.moved || []).length
+        failed.push(...(d.failed || []))
+      }
+      parts.push(`图片转存 ${moved}/${imgs.length} 张${failed.length ? `（${failed.length} 张失败保留原链：多为源站防盗链，可手动下载后重传）` : ''}`)
+      statusEl.textContent = parts.join('；')
+      toast('导入完成 ✅')
+    } catch (e) {
+      statusEl.textContent = '导入没有完成——' + (e.message || '未知错误')
+      toast(e.message, true)
+    } finally {
+      wxrBtn.disabled = false
+    }
+  }
 
   /* ---- 整站搬家（B26）：一键导出整站包 / 一键还原到空站 ----
    * 还原是「分步驱动」：start 拿到步骤清单（每张表的分片 + 每批图片），前端循环 step——

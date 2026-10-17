@@ -1543,6 +1543,23 @@ try {
     }
   }
 
+  // ── WordPress 导入链路（B5，src/import-wxr.ts）──
+  // 导入是重操作（写库 + 出网转存），未登录必须 401，绝不落在鉴权之外
+  console.log('[B5] WordPress 导入链路')
+  {
+    const anonPost = await raw('POST', '/api/admin/import/wxr', { headers: { 'Content-Type': 'text/xml' }, body: '<rss></rss>' })
+    const anonStep = await raw('POST', '/api/admin/import/wxr/step', { headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    const anonOk = anonPost.status === 401 && anonStep.status === 401
+    results.push(['WordPress 导入：未登录一律 401', anonOk])
+    console.log(`  ${anonOk ? '✓' : '✗'} WordPress 导入：未登录一律 401（import ${anonPost.status} / step ${anonStep.status}）`)
+
+    // 已登录但结构不对：400 明确报错（不 500、不静默）
+    const bad = await raw('POST', '/api/admin/import/wxr', { headers: { 'Content-Type': 'text/xml', Cookie: cookie }, body: '<html><body>不是 WXR</body></html>' })
+    const badOk = bad.status === 400
+    results.push(['WordPress 导入：非 WXR 结构 400', badOk])
+    console.log(`  ${anonOk ? '✓' : '✗'} WordPress 导入：非 WXR 结构 400（status ${bad.status}）`)
+  }
+
   // ── 整站包链路（B26：一键导出整站 / 一键还原到空站，src/sitebundle.ts）──
   // 守三件最容易被改坏的事：① 导出必须回真 zip（PK 魔数）；② /api/admin/bundle/upload 走的是
   // 「整站包档位」（100MB）而不是 2MB 普通档——>2MB 的包必须放行；③ **空站守卫**：冒烟库里

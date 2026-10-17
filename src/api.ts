@@ -123,6 +123,16 @@ import { sanitizeHtml } from './sanitize'
 import { cleanupUnreferenced, backfillHashes, mergeDuplicate, runAudit } from './audit'
 import { imageExtOf, MAX_REMOTE_IMAGES, MAX_UPLOAD_BYTES, saveUpload, sniffImageExt, sniffUploadExt, transferImage } from './store'
 import { hashPostPassword } from './protect'
+import {
+  IMPORT_IMAGE_BATCH,
+  mapWxrImport,
+  MAX_IMPORT_IMAGES,
+  MAX_IMPORT_PAGES,
+  MAX_IMPORT_PASSWORDS,
+  MAX_IMPORT_POSTS,
+  MAX_WXR_BYTES,
+  parseWxr,
+} from './import-wxr'
 import { listTrash, restorePostStatus, trashTable, type TrashTable } from './trash'
 import { classifyBrowser, classifyDevice, cleanPath, cleanRef, cleanTitle, cleanVid, getVisitStats, recordVisit } from './stats'
 import { getBotStats } from './bots'
@@ -159,7 +169,7 @@ const BODY_LIMIT_BUNDLE_BYTES = 100 * 1024 * 1024
  * 2MB 的普通限额预检——超过 2MB 的视频 / 大图 / 开放接口配图直接 413（前端只看到「上传失败」）。
  * 2026-10-13 站长上传 20MB 视频失败暴露：此前没有 >2MB 请求体的测试，所以一路潜伏到线上。
  * 冒烟「上传体积预检」用例守着（3MB mp4 必须 200，26MB 必须 413）。 */
-const UPLOAD_PATH_PREFIXES = ['/api/admin/upload', '/api/admin/og-image', '/api/external/weibo']
+const UPLOAD_PATH_PREFIXES = ['/api/admin/upload', '/api/admin/og-image', '/api/external/weibo', '/api/admin/import/wxr']
 /** 整站包上传：独立档位（比普通上传高），同样必须写全前缀 */
 const BUNDLE_PATH_PREFIXES = ['/api/admin/bundle/upload']
 api.use('*', async (c, next) => {
@@ -2287,6 +2297,213 @@ api.post('/admin/bundle/delete', async (c) => {
   }
   await c.env.IMAGES.delete(key)
   return c.json({ ok: true })
+})
+
+/* ---------------- WordPress 导入（B5 搬家导入工具，WXR 1.2） ----------------
+ * 两步式：① POST /admin/import/wxr 上传 WXR 全文——解析映射后一次性写入文章 / 页面 /
+ * 评论 / 分类标签（保留原状态与原发布时间），图片不阻塞、以附件清单形式返回；
+ * ② POST /admin/import/wxr/step 由前端逐批驱动图片转存（Workers 子请求预算扛不住
+ * 一次几百张），服务端转存后全局替换正文 / 封面里的旧地址。解析与映射的纯函数在
+ * src/import-wxr.ts（tests/import-wxr.test.ts 直接导入）；防线：演示站 404、限流、
+ * 上限常量整体 400、正文 sanitizeHtml 落库、不逐篇触发发布广播（防 TG 轰炸）。 */
+
+api.post('/admin/import/wxr', async (c) => {
+  if (isDemo(c.env)) return jsonError('演示站不开放导入', 404)
+  if (!rateLimit(`wxr-import:${clientIp(c.req.raw)}`, 3, 10 * 60_000)) return jsonError('操作太频繁，请 10 分钟后再试', 429)
+  const xml = await c.req.text()
+  if (new TextEncoder().encode(xml).length > MAX_WXR_BYTES) return jsonError(`WXR 文件超过 ${Math.floor(MAX_WXR_BYTES / 1024 / 1024)}MB 上限，请在 WordPress 用「按作者 / 日期」分卷导出`)
+  const parsed = parseWxr(xml)
+  if (!parsed.ok) return jsonError('不是有效的 WordPress 导出文件（WXR / RSS 结构不符）')
+  const m = mapWxrImport(parsed.items)
+  if (!m.posts.length && !m.pages.length) return jsonError('WXR 里没有可导入的文章或页面（全部被跳过或为空）')
+  if (m.posts.length > MAX_IMPORT_POSTS) return jsonError(`文章 ${m.posts.length} 篇超过单次上限 ${MAX_IMPORT_POSTS}，请在 WordPress 按作者 / 日期分卷导出后分批导入`)
+  if (m.pages.length > MAX_IMPORT_PAGES) return jsonError(`页面 ${m.pages.length} 个超过单次上限 ${MAX_IMPORT_PAGES}，请分卷导出`)
+  if (m.counts.protected > MAX_IMPORT_PASSWORDS) return jsonError(`带访问密码的文章 ${m.counts.protected} 篇超过单次上限 ${MAX_IMPORT_PASSWORDS}（密码哈希是慢操作），请先处理或分卷导入`)
+  if (m.images.length > MAX_IMPORT_IMAGES) return jsonError(`附件图片 ${m.images.length} 张超过单次上限 ${MAX_IMPORT_IMAGES}，请在媒体库精简后重新导出，或分卷导入`)
+
+  const db = c.env.DB
+  const user = c.get('user')
+  const now = Date.now()
+
+  // slug 全量预取（posts + pages 两表、含回收站占用行——与 uniqueSlugIn 同口径），导入期内存去重
+  const slugTaken = new Set<string>()
+  const [exPost, exPage] = await Promise.all([
+    db.prepare('SELECT slug FROM posts WHERE deleted_at IS NULL').all<{ slug: string }>(),
+    db.prepare('SELECT slug FROM pages').all<{ slug: string }>(),
+  ])
+  for (const r of exPost.results ?? []) slugTaken.add(r.slug)
+  for (const r of exPage.results ?? []) slugTaken.add(r.slug)
+  const nextSlug = (base: string, wpId: number): string => {
+    let s = cleanSlug(base) || `wp-${wpId}`
+    if (!slugTaken.has(s)) {
+      slugTaken.add(s)
+      return s
+    }
+    for (let i = 2; ; i++) {
+      const candidate = `${s}-${i}`
+      if (!slugTaken.has(candidate)) {
+        slugTaken.add(candidate)
+        return candidate
+      }
+    }
+  }
+
+  // 分类：现有名字 → id；缺失的先建（slug 用站内 slugify 口径）
+  const catRows = await db.prepare('SELECT id, name FROM categories').all<{ id: number; name: string }>()
+  const catIdByName = new Map<string, number>((catRows.results ?? []).map((r) => [r.name, r.id]))
+  let catSort = (catRows.results ?? []).length
+  for (const name of m.categoryNames) {
+    if (catIdByName.has(name)) continue
+    const cat = await createCategory(db, name, slugify(name), catSort++)
+    catIdByName.set(name, cat.id)
+  }
+
+  // 文章 / 页面：10 条一批并发插入（逐条 .run() 拿 last_row_id，不做 meta 赌注）
+  const postIdByWp = new Map<number, number>()
+  let publishedNoTime = 0
+  for (let i = 0; i < m.posts.length; i += 10) {
+    await Promise.all(
+      m.posts.slice(i, i + 10).map(async (p) => {
+        const clean = sanitizeHtml(p.content)
+        const passwordHash = p.password ? await hashPostPassword(p.password) : ''
+        const publishedAt = p.status === 'published' ? (p.publishedAt ?? now) : null
+        if (p.status === 'published' && p.publishedAt == null) publishedNoTime++
+        const res = await db
+          .prepare(
+            `INSERT INTO posts (slug, title, content, summary, cover, tags, status, pinned, author_id, published_at, publish_at, min_tier, password_hash, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'all', ?, ?, ?)`
+          )
+          .bind(
+            nextSlug(p.slug || p.title, p.wpId),
+            p.title,
+            clean,
+            // 摘要：WXR 手写摘要优先；密码文留空（summary 是对外导读面，同 api.ts 建文口径）
+            p.excerpt.trim() || (passwordHash ? '' : excerpt(clean, 80)),
+            '', // 封面由图片转存阶段回填（_thumbnail_id → 附件映射）
+            JSON.stringify(p.tags.filter((t) => t)),
+            p.status,
+            user.id,
+            publishedAt,
+            p.publishAt,
+            passwordHash,
+            publishedAt ?? now,
+            now
+          )
+          .run()
+        postIdByWp.set(p.wpId, Number(res.meta.last_row_id))
+      })
+    )
+  }
+  const pageIdByWp = new Map<number, number>()
+  for (let i = 0; i < m.pages.length; i += 10) {
+    await Promise.all(
+      m.pages.slice(i, i + 10).map(async (p) => {
+        const clean = sanitizeHtml(p.content)
+        const publishedAt = p.status === 'published' ? (p.publishedAt ?? now) : null
+        const res = await db
+          .prepare('INSERT INTO pages (title, slug, content, status, show_in_nav, sort, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0, ?, ?)')
+          .bind(p.title, nextSlug(p.slug || p.title, p.wpId), clean, p.status, publishedAt ?? now, now)
+          .run()
+        pageIdByWp.set(p.wpId, Number(res.meta.last_row_id))
+      })
+    )
+  }
+
+  // 文章 → 分类关联
+  const catLinks: D1PreparedStatement[] = []
+  for (const p of m.posts) {
+    const postId = postIdByWp.get(p.wpId)
+    if (!postId) continue
+    const catId = p.categories.map((n) => catIdByName.get(n)).find(Boolean)
+    if (catId) catLinks.push(db.prepare('INSERT INTO post_categories (post_id, category_id) VALUES (?, ?)').bind(postId, catId))
+  }
+  if (catLinks.length) await db.batch(catLinks)
+
+  // 评论：按父引用分层（拓扑序：父评论必在更早的层），层内 10 条并发
+  const commentIdByWp = new Map<number, number>()
+  const pendingComments = m.comments.slice()
+  let insertedComments = 0
+  for (;;) {
+    const layer = pendingComments.filter((cm) => !cm.parentWpId || commentIdByWp.has(cm.parentWpId))
+    if (!layer.length) break
+    for (let i = 0; i < layer.length; i += 10) {
+      await Promise.all(
+        layer.slice(i, i + 10).map(async (cm) => {
+          const postId = postIdByWp.get(cm.postKey) ?? pageIdByWp.get(cm.postKey) ?? 0
+          if (!postId) return // 目标篇目被跳过（如超长文），评论随之丢弃
+          const res = await db
+            .prepare(
+              `INSERT INTO comments (post_id, weibo_id, parent_id, is_admin, member_id, nickname, email, website, content, status, created_at)
+               VALUES (?, 0, ?, 0, 0, ?, ?, ?, ?, ?, ?)`
+            )
+            .bind(
+              postId,
+              cm.parentWpId ? (commentIdByWp.get(cm.parentWpId) ?? 0) : 0,
+              cm.nickname || '匿名',
+              cm.email.slice(0, 120),
+              cm.website.slice(0, 300),
+              sanitizeHtml(cm.content) || '（空评论）',
+              cm.status,
+              cm.createdAt ?? now
+            )
+            .run()
+          commentIdByWp.set(cm.wpId, Number(res.meta.last_row_id))
+          insertedComments++
+        })
+      )
+    }
+    for (const cm of layer) {
+      const idx = pendingComments.indexOf(cm)
+      if (idx !== -1) pendingComments.splice(idx, 1)
+    }
+  }
+
+  // 内容变更即时失效（AGENTS.md pagecache 节：写库成功后补清理）
+  c.executionCtx.waitUntil(purgePageCache(c.env.DB))
+  return c.json({
+    ok: true,
+    report: {
+      posts: m.posts.length,
+      pages: m.pages.length,
+      comments: insertedComments,
+      categories: catLinks.length,
+      skipped: m.skipped,
+      publishedNoTime,
+    },
+    images: m.images,
+    batches: Math.ceil(m.images.length / IMPORT_IMAGE_BATCH),
+  })
+})
+
+/** 图片转存分步：前端持附件清单循环驱动，每批 ≤10 张；转存成功后全局替换正文 / 封面里的旧地址 */
+api.post('/admin/import/wxr/step', async (c) => {
+  if (isDemo(c.env)) return jsonError('演示站不开放导入', 404)
+  if (!rateLimit(`wxr-step:${clientIp(c.req.raw)}`, 30, 10 * 60_000)) return jsonError('操作太频繁，请稍后再试', 429)
+  const body = await c.req.json<{ urls?: unknown }>().catch(() => null)
+  const urls = Array.isArray(body?.urls) ? body!.urls.filter((u): u is string => typeof u === 'string') : []
+  if (!urls.length || urls.length > IMPORT_IMAGE_BATCH) return jsonError('urls 需为 1-10 个图片地址')
+  const moved: { from: string; to: string }[] = []
+  const failed: string[] = []
+  for (const [i, url] of urls.entries()) {
+    if (!/^https?:\/\//i.test(url)) {
+      failed.push(url)
+      continue
+    }
+    const local = await transferImage(c.env, url, `WP导入图-${i + 1}`)
+    if (!local) {
+      failed.push(url)
+      continue
+    }
+    await Promise.all([
+      c.env.DB.prepare('UPDATE posts SET content = replace(content, ?, ?), cover = replace(cover, ?, ?) WHERE content LIKE ? OR cover = ?')
+        .bind(url, local, url, local, `%${url}%`, url)
+        .run(),
+      c.env.DB.prepare('UPDATE pages SET content = replace(content, ?, ?) WHERE content LIKE ?').bind(url, local, `%${url}%`).run(),
+    ])
+    moved.push({ from: url, to: local })
+  }
+  if (moved.length) c.executionCtx.waitUntil(purgePageCache(c.env.DB))
+  return c.json({ ok: true, moved, failed })
 })
 
 /* ---------------- 清空本站内容（整站搬家的准备步骤：把任何站变回「可导入的空站」） ----------------
