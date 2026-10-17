@@ -43,7 +43,7 @@ const DOCS = [
   { slug: 'api', file: 'API.md', icon: '🔌', title: 'API 参考', desc: '全部公开 / 管理接口与 HTML 净化白名单摘要，写自己的客户端。' },
   { slug: 'typography', file: 'wechat-typography-spec.md', icon: '🩺', title: '排版规范', desc: '微信编辑器插件开发规范的落地对照表与体检规则。' },
   { slug: 'demo', file: 'DEMO.md', icon: '🎪', title: '演示站指南', desc: '官方演示站的机制：仿真数据、每 2 小时重置、DEMO_MODE 门控与体验守卫。' },
-  { slug: 'roadmap', file: 'ROADMAP.md', icon: '🗺️', title: '路线图', desc: '已上线能力与近期计划，按 A / B / C 优先级管理的开发方向。' },
+  { slug: 'roadmap', file: 'ROADMAP.md', icon: '🗺️', title: '路线图', desc: '接下来做什么（排期内 / 待拍板 / 随缘）、已上线大事记与不做清单。' },
   { slug: 'versions', file: 'VERSIONS.md', icon: '🏷️', title: '版本更新说明', desc: '从 2026-10-03 项目诞生到今天的大版本大事记：每个版本带来了什么，博客号一路怎么长成现在这样。' },
   { slug: 'changelog', file: '../CHANGELOG.md', icon: '📜', title: '更新日志', desc: '每个版本更新了哪些细节：新增、变更与修复，官方发布时回填；升级 = 重新部署，D1 自动迁移。' },
 ]
