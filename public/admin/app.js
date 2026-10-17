@@ -10,6 +10,7 @@ const state = {
   needsSetup: false,
   settings: null,
   demo: false, // 演示站模式（/auth/state 返回 demo: true）：登录页公示演示账号、禁用改密码与闭站开关
+  needsTotp: false, // 两步验证已开启（/auth/state 返回，B13）：登录表单预显验证码框
 }
 
 /* 微博编辑态：null = 新建；点「编辑」后暂存，离开微博页时清空 */
@@ -202,6 +203,7 @@ function authView(mode) {
     <form id="auth-form">
       <div class="auth-field"><label>用户名</label><input class="input" name="username" autocomplete="username" placeholder="2-24 位字母、数字、_ 或 -" required></div>
       <div class="auth-field"><label>密码</label><input class="input" type="password" name="password" autocomplete="${isSetup ? 'new-password' : 'current-password'}" placeholder="${isSetup ? '至少 8 位' : '输入密码'}" required></div>
+      ${!isSetup && state.needsTotp ? '<div class="auth-field"><label>两步验证码</label><input class="input" name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="验证器 App 里的 6 位数字" maxlength="6"></div>' : ''}
       ${isSetup ? '<div class="auth-field"><label>昵称（可选）</label><input class="input" name="displayName" placeholder="显示在文章作者位"></div>' : ''}
       <button class="btn btn-primary auth-btn" type="submit">${isSetup ? '创建并进入' : '登 录'}</button>
       <div class="auth-err" id="auth-err"></div>
@@ -222,6 +224,7 @@ function authView(mode) {
     btn.disabled = true
     try {
       const body = { username: f.username.value.trim(), password: f.password.value }
+      if (!isSetup && f.totp) body.totp = f.totp.value.trim()
       if (isSetup) body.displayName = f.displayName.value.trim()
       const d = await api(isSetup ? '/auth/setup' : '/auth/login', { method: 'POST', body })
       state.user = d.user
@@ -3442,6 +3445,21 @@ async function viewSettings() {
         </div>
       </div>
     </div>
+
+    <div class="panel" style="padding:20px;">
+      <div class="form-section"><h3>两步验证（TOTP）</h3><div class="sec-desc">给管理员登录再加一道锁：开启后每次登录除了密码还要输验证器 App 里的 6 位数字码（Google Authenticator / 1Password / 微软 Authenticator 等都支持）。密钥只在绑定时显示一次，换手机先关闭再重新绑定。</div>
+        <div id="totp-box">${state.demo ? '演示站不提供两步验证。' : s.totpEnabled === '1'
+          ? `<div class="totp-status">✅ 两步验证已开启。关闭需输入登录密码确认。</div>
+             <div class="form-row" style="margin-top:8px;"><div class="form-item"><input class="input" type="password" id="totp-disable-pw" placeholder="登录密码确认" autocomplete="current-password"></div>
+             <div class="form-item" style="flex:0 0 auto;align-self:flex-end;"><button class="btn" id="btn-totp-disable">关闭两步验证</button></div></div>`
+          : `<div class="totp-status">未开启。登录只验密码——建议开启。</div>
+             <div class="form-row" style="margin-top:8px;"><button class="btn" id="btn-totp-setup">开始绑定</button></div>
+             <div id="totp-bind" hidden style="margin-top:12px;"></div>`}</div>
+      </div>
+      <div class="form-section" style="margin-top:14px;"><h3>活跃会话</h3><div class="sec-desc">当前登录中的设备——看到不认识的就撤销（即刻生效，那台设备下次操作被踢回登录页）。改密码后其他设备自动全部失效。</div>
+        <div id="session-list" class="sec-desc">加载中…</div>
+      </div>
+    </div>
     </div>
 
     <div class="stab-pane" data-pane="social" hidden>
@@ -3843,6 +3861,83 @@ async function viewSettings() {
       btn.disabled = false
     }
   })
+
+  /* ---- 两步验证（B13）：绑定 / 关闭 / 会话管理 ---- */
+  const totpSetupBtn = document.getElementById('btn-totp-setup')
+  if (totpSetupBtn) {
+    totpSetupBtn.addEventListener('click', async () => {
+      totpSetupBtn.disabled = true
+      try {
+        const d = await api('/admin/totp/setup', { method: 'POST' })
+        const box = document.getElementById('totp-bind')
+        box.hidden = false
+        box.innerHTML = `<div class="totp-bind">${d.qrSvg ? `<div class="totp-qr">${d.qrSvg}</div>` : ''}
+          <div class="totp-key">扫不了码就手动输入密钥：<code>${esc(d.secret)}</code>（只显示这一次）</div>
+          <div class="totp-verify form-row" style="margin-top:8px;"><div class="form-item"><input class="input" id="totp-code" inputmode="numeric" maxlength="6" placeholder="输入 App 里的 6 位码验证"></div>
+          <div class="form-item" style="flex:0 0 auto;align-self:flex-end;"><button class="btn btn-primary" id="btn-totp-enable">确认开启</button></div></div></div>`
+        document.getElementById('btn-totp-enable').addEventListener('click', async () => {
+          const btn = document.getElementById('btn-totp-enable')
+          btn.disabled = true
+          try {
+            await api('/admin/totp/enable', { method: 'POST', body: { code: document.getElementById('totp-code').value.trim() } })
+            toast('两步验证已开启 ✅ 下次登录需要输验证码')
+            navigate()
+          } catch (e) {
+            toast(e.message, true)
+            btn.disabled = false
+          }
+        })
+      } catch (e) {
+        toast(e.message, true)
+      } finally {
+        totpSetupBtn.disabled = false
+      }
+    })
+  }
+  const totpDisableBtn = document.getElementById('btn-totp-disable')
+  if (totpDisableBtn) {
+    totpDisableBtn.addEventListener('click', async () => {
+      const pw = document.getElementById('totp-disable-pw').value
+      if (!pw) return toast('输入登录密码确认关闭', true)
+      totpDisableBtn.disabled = true
+      try {
+        await api('/admin/totp/disable', { method: 'POST', body: { password: pw } })
+        toast('已关闭两步验证')
+        navigate()
+      } catch (e) {
+        toast(e.message, true)
+        totpDisableBtn.disabled = false
+      }
+    })
+  }
+  const sessEl = document.getElementById('session-list')
+  if (sessEl) {
+    try {
+      const d = await api('/admin/sessions')
+      if (!d.sessions || !d.sessions.length) {
+        sessEl.textContent = '没有活跃会话。'
+      } else {
+        sessEl.innerHTML = d.sessions
+          .map((x) => `<div class="sess-row"><span>${x.isCurrent ? '<b>本设备（当前会话）</b>' : '其他设备'} · 登录于 ${fmtDateTime(x.createdAt)}</span>${x.isCurrent ? '' : `<button class="btn sess-kick" data-kick="${esc(x.tokenHash)}">撤销</button>`}</div>`)
+          .join('')
+        sessEl.querySelectorAll('[data-kick]').forEach((b) =>
+          b.addEventListener('click', async () => {
+            b.disabled = true
+            try {
+              await api('/admin/sessions', { method: 'DELETE', body: { tokenHash: b.getAttribute('data-kick') } })
+              toast('已撤销该会话')
+              navigate()
+            } catch (e) {
+              toast(e.message, true)
+              b.disabled = false
+            }
+          })
+        )
+      }
+    } catch {
+      sessEl.textContent = '会话列表加载失败。'
+    }
+  }
 
   const tokenInput = document.getElementById('st-externalToken')
   tokenInput.addEventListener('click', () => tokenInput.select()) // 事件绑定（CSP 禁内联脚本）
@@ -4432,6 +4527,7 @@ async function boot() {
     state.user = st.user
     state.needsSetup = st.needsSetup
     state.demo = !!st.demo
+    state.needsTotp = !!st.needsTotp
   } catch {
     state.user = null
   }

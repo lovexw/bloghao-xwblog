@@ -21,6 +21,7 @@ import {
   safeEqual,
   SESSION_COOKIE,
   sessionCookie,
+  tokenHash,
   memberSessionCookie,
 } from './auth'
 import { verifyTurnstile } from './turnstile'
@@ -123,6 +124,9 @@ import { sanitizeHtml } from './sanitize'
 import { cleanupUnreferenced, backfillHashes, mergeDuplicate, runAudit } from './audit'
 import { imageExtOf, MAX_REMOTE_IMAGES, MAX_UPLOAD_BYTES, saveUpload, sniffImageExt, sniffUploadExt, transferImage } from './store'
 import { hashPostPassword } from './protect'
+import { generateTotpSecret, totpProvisioningUri, verifyTotp } from './totp'
+import { qrMatrix } from './qrcode'
+import { notifyAdminText } from './external'
 import {
   IMPORT_IMAGE_BATCH,
   mapWxrImport,
@@ -201,9 +205,10 @@ api.get('/health', (c) => c.json({ ok: true, time: Date.now() }))
 
 /* ---------------- 认证 ---------------- */
 api.get('/auth/state', async (c) => {
-  const [user, n] = await Promise.all([getSessionUser(c.env.DB, c.req.raw), countUsers(c.env.DB)])
-  // demo 标记给后台前端用：登录页公示演示账号、禁用改密码与闭站开关
-  return c.json({ needsSetup: n === 0, user, demo: isDemo(c.env) })
+  const [user, n, settings] = await Promise.all([getSessionUser(c.env.DB, c.req.raw), countUsers(c.env.DB), getSettings(c.env.DB)])
+  // demo 标记给后台前端用：登录页公示演示账号、禁用改密码与闭站开关；
+  // needsTotp（B13）驱动登录表单预显「两步验证码」输入框（开了 TOTP 才显示，别让全员看到多余框）
+  return c.json({ needsSetup: n === 0, user, demo: isDemo(c.env), needsTotp: settings.totpEnabled === '1' })
 })
 
 api.post('/auth/setup', async (c) => {
@@ -248,10 +253,27 @@ api.post('/auth/setup', async (c) => {
   }
 })
 
+/** 登录失败 TG 告警（B13）：每 IP 10 分钟最多 1 条防爆破刷屏；TG 未配置时 notifyAdminText 内部静默；
+ *  异步发送不阻塞登录响应。用户名来自请求体（截断 40），纯文本消息无注入面 */
+function alertLoginFailure(env: Env, ip: string, username: string): void {
+  if (!rateLimit(`login-alert:${ip}`, 1, 10 * 60_000)) return
+  void notifyAdminText(env, `⚠️ 后台登录失败：用户名「${String(username || '').slice(0, 40)}」IP ${ip}。若非本人操作，请改密码或到「设置 → 两步验证」加固`).catch(() => {})
+}
+
+/** TOTP 配对二维码（B13）：qrMatrix（src/qrcode.ts 零依赖实现）→ 内联 SVG，随 setup 一次性回显 */
+function qrSvgData(text: string): string {
+  const m = qrMatrix(text)
+  if (!m) return ''
+  const n = m.length
+  let path = ''
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (m[y][x]) path += `M${x} ${y}h1v1h-1z`
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n} ${n}" shape-rendering="crispEdges" width="180" height="180"><rect width="${n}" height="${n}" fill="#ffffff"/><path d="${path}" fill="#211d19"/></svg>`
+}
+
 api.post('/auth/login', async (c) => {
   const ip = clientIp(c.req.raw)
   if (!rateLimit(`login:${ip}`, 10, 10 * 60_000)) return jsonError('尝试次数过多，请 10 分钟后再试', 429)
-  const body = await c.req.json<{ username?: string; password?: string }>().catch(() => null)
+  const body = await c.req.json<{ username?: string; password?: string; totp?: string }>().catch(() => null)
   const username = (body?.username || '').trim()
   const password = body?.password || ''
   const user = await c.env.DB.prepare('SELECT * FROM users WHERE username = ?').bind(username).first<{
@@ -265,6 +287,15 @@ api.post('/auth/login', async (c) => {
   if (user) {
     const { hash } = await hashPassword(password, user.salt)
     if (safeEqual(hash, user.password_hash)) {
+      // 两步验证（B13）：密码验证通过之后、会话签发之前——路径唯一不可绕过；
+      // 登录页由 /auth/state 的 needsTotp 预显验证码框，这里只认 6 位码
+      const totpSettings = await getSettings(c.env.DB)
+      if (totpSettings.totpEnabled === '1' && totpSettings.totpSecret) {
+        if (!(await verifyTotp(totpSettings.totpSecret, body?.totp || ''))) {
+          alertLoginFailure(c.env, ip, username)
+          return jsonError('两步验证码不对', 401)
+        }
+      }
       const token = await createSession(c.env.DB, user.id)
       c.header('Set-Cookie', sessionCookie(token))
       return c.json({
@@ -276,6 +307,7 @@ api.post('/auth/login', async (c) => {
     // 用户不存在也跑一次等开销的哈希：响应耗时对齐，防时序侧信道枚举用户名
     await hashPassword(password, 'timing-equalizer-salt-0000')
   }
+  alertLoginFailure(c.env, ip, username)
   return jsonError('用户名或密码错误', 401)
 })
 
@@ -526,6 +558,72 @@ api.route('/admin/export', exportRoutes)
 api.route('/admin/external', adminExternalRoutes)
 api.route('/external', externalRoutes)
 api.route('/telegram', telegramRoutes)
+
+/* ---------------- 两步验证 + 活跃会话（B13 管理员安全包） ---------------- */
+
+api.post('/admin/totp/setup', async (c) => {
+  const user = c.get('user')
+  if (!rateLimit(`totp-setup:${clientIp(c.req.raw)}`, 5, 60_000)) return jsonError('操作太频繁，请稍后再试', 429)
+  const secret = generateTotpSecret()
+  // 只写 pending：已开启状态下重新绑定不降级（旧 secret 在 enable 成功前继续生效）；
+  // saveSettings 自动换代页缓存 + invalidateSharedSettings（AGENTS「写了 settings 就要失效缓存」）
+  await saveSettings(c.env.DB, { totpSecretPending: secret })
+  const uri = totpProvisioningUri(secret, user.username)
+  return c.json({ ok: true, secret, uri, qrSvg: qrSvgData(uri) })
+})
+
+api.post('/admin/totp/enable', async (c) => {
+  if (!rateLimit(`totp-enable:${clientIp(c.req.raw)}`, 5, 60_000)) return jsonError('操作太频繁，请稍后再试', 429)
+  const body = await c.req.json<{ code?: string }>().catch(() => null)
+  const s = await getSettings(c.env.DB)
+  if (!s.totpSecretPending) return jsonError('请先点「开始绑定」生成密钥')
+  if (!(await verifyTotp(s.totpSecretPending, body?.code || ''))) return jsonError('验证码不对——请确认手机时间已同步，并用绑定页的密钥重算', 400)
+  await saveSettings(c.env.DB, { totpSecret: s.totpSecretPending, totpEnabled: '1', totpSecretPending: '' })
+  return c.json({ ok: true })
+})
+
+api.post('/admin/totp/disable', async (c) => {
+  const user = c.get('user')
+  if (!rateLimit(`totp-disable:${clientIp(c.req.raw)}`, 5, 60_000)) return jsonError('操作太频繁，请稍后再试', 429)
+  const body = await c.req.json<{ password?: string }>().catch(() => null)
+  const row = await c.env.DB.prepare('SELECT password_hash, salt FROM users WHERE id = ?').bind(user.id).first<{ password_hash: string; salt: string }>()
+  if (!row) return jsonError('账号不存在', 404)
+  const { hash } = await hashPassword(body?.password || '', row.salt)
+  if (!safeEqual(hash, row.password_hash)) return jsonError('登录密码不对', 400)
+  await saveSettings(c.env.DB, { totpEnabled: '0', totpSecret: '', totpSecretPending: '' })
+  return c.json({ ok: true })
+})
+
+/** 活跃会话列表（B13）：token 落库即 SHA-256（AGENTS「会话 token」节），出参的 tokenHash 不可逆可作撤销标识 */
+api.get('/admin/sessions', async (c) => {
+  const user = c.get('user')
+  const currentHash = await tokenHash(getCookie(c.req.raw, SESSION_COOKIE) || '')
+  const rows = await c.env.DB.prepare(
+    'SELECT token, created_at, expires_at FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY created_at DESC'
+  )
+    .bind(user.id, Date.now())
+    .all<{ token: string; created_at: number; expires_at: number }>()
+  const sessions = (rows.results ?? []).map((r) => ({
+    tokenHash: r.token,
+    isCurrent: r.token === currentHash,
+    createdAt: r.created_at,
+    expiresAt: r.expires_at,
+  }))
+  return c.json({ ok: true, sessions })
+})
+
+/** 撤销其他设备会话（B13）：按 token_hash 删且限定 user_id；当前会话不许自撤（退出走「退出」按钮） */
+api.delete('/admin/sessions', async (c) => {
+  const user = c.get('user')
+  const body = await c.req.json<{ tokenHash?: string }>().catch(() => null)
+  const target = String(body?.tokenHash || '')
+  if (!/^[0-9a-f]{64}$/.test(target)) return jsonError('会话标识非法')
+  const currentHash = await tokenHash(getCookie(c.req.raw, SESSION_COOKIE) || '')
+  if (target === currentHash) return jsonError('当前会话不能在这里撤销——退出登录请用侧栏「退出」')
+  const res = await c.env.DB.prepare('DELETE FROM sessions WHERE token = ? AND user_id = ?').bind(target, user.id).run()
+  if (!res.meta.changes) return jsonError('会话不存在或已过期', 404)
+  return c.json({ ok: true })
+})
 
 api.get('/admin/stats', async (c) => {
   const db = c.env.DB

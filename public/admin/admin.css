@@ -959,3 +959,14 @@ a.stat-row:hover .stat-row-title { color: var(--accent); }
 .mode-seg input { accent-color: var(--accent); }
 .mode-seg:hover { border-color: var(--accent); }
 .mode-seg:has(input:checked) { border-color: var(--accent); color: var(--accent); background: var(--card); }
+
+/* ---------- 两步验证（B13） ---------- */
+.totp-status { font-size: 13.5px; color: var(--sub); }
+.totp-bind { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
+.totp-qr { flex: 0 0 180px; width: 180px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #fff; }
+.totp-qr svg { display: block; width: 100%; height: auto; }
+.totp-key { font-size: 13px; color: var(--sub); margin-top: 6px; max-width: 420px; }
+.totp-key code { word-break: break-all; user-select: all; }
+.sess-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px dashed var(--line); font-size: 13.5px; flex-wrap: wrap; }
+.sess-row:last-child { border-bottom: none; }
+.sess-kick { padding: 4px 14px; font-size: 12.5px; }

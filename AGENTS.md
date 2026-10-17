@@ -113,6 +113,14 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - sessions / member_sessions 落库的是 **SHA-256(token)**（`tokenHash`），Cookie 里才是原文：库泄露 ≠ 会话可重放。会话相关查询/删除一律先过 tokenHash，别拿 Cookie 里的明文 token 直查直删（2026-10 切换，上线时全部旧登录态失效一次属预期）
 - 改密码后「踢其他设备、保留当前会话」统一走 auth.ts 的 `destroyOtherSessions`（管理员，api.ts PUT /admin/password）/ `destroyOtherMemberSessions`（会员）——keepToken 是 Cookie 里的**明文** token，函数内部先 `tokenHash` 再比对；**别在端点里手写 `DELETE ... token != ?` 拿明文直比**（库里是哈希，恒不相等 = 删光全部会话、把自己也踢下线——2026-10-16 修复，tests/auth.test.ts 真库用例守着）
 
+**两步验证与活跃会话（tests/totp.test.ts，机制在 src/totp.ts，B13，2026-10-17）**
+
+- TOTP 是 RFC 6238 零依赖实现（base32 + crypto.subtle HMAC-SHA1）：secret 落 base32、30s 步长、6 位、验证窗口 ±1；**校验只走 `totp.ts verifyTotp`**（safeEqual 恒时比较、三次窗口全跑）——别在端点手写 % 1e6 比对；测试用 RFC 6238 §B 官方向量（T=59s → 287082）
+- 三键口径：`totpSecret`（启用后的密钥）/ `totpSecretPending`（绑定中暂存）双双进 SECRET_SETTINGS 打码；`totpEnabled` 独立开关（DEFAULT_SETTINGS 预置空）。**绑定流程不降级**：setup 只写 pending——已开启状态下重新绑定，旧 secret 在 enable 成功前继续生效
+- 登录链路的二段校验位置固定：**密码验证通过之后、会话签发之前**（api.ts /auth/login），路径唯一不可绕过；登录页靠 `/auth/state` 的 `needsTotp` 预显验证码框，别改成「试错后再要码」的两段式
+- 会话管理出参只给 `tokenHash`（落库即 SHA-256，不可逆）作撤销标识；DELETE 限定 user_id 且**当前会话拒绝自撤**（防误把自己踢下线；退出走「退出」按钮）。改密码踢其他设备走 auth.ts destroyOtherSessions 老路径不动
+- 登录失败 TG 告警 = `alertLoginFailure`（api.ts）：密码错 / 验证码错都触发，每 IP 10 分钟最多 1 条（rateLimit 内存键 `login-alert:`），notifyAdminText 异步发送（demo 短路内置）；它是「提醒」不是计数器，别拿它做爆破统计
+
 **MCP 服务器（tests/mcp.test.ts、冒烟「MCP 链路」，机制在 src/mcp.ts，B10）**
 
 - `POST /mcp` 是 **Streamable HTTP 无状态模式**（JSON-RPC 2.0 进、`application/json` 出，GET/DELETE 405 不开 SSE；通知回 202 空 body，兼容数组批处理逐条派发）——协议层 `dispatchRpc` 是纯函数、工具处理器 db 第一参数依赖注入，Node 测试直接导入（tests/mcp.test.ts 三层：协议 / node:sqlite 真库工具 / hono 薄壳路由）；别往里加会话状态或 SSE，Workers isolate 短生命周期扛不住
@@ -279,6 +287,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - `src/seo.ts`：站长 SEO 与结构化数据（**B20 / B23 / B24 / B27**，2026-10-13）——验证 meta（`parseVerifyMetas`/`cleanVerifyMetas`/`verifyMetaTagsHtml`）、统计脚本（`parseAnalyticsScript`/`cleanAnalyticsScript`/`analyticsScriptHtml`/`analyticsOrigin`）、robots.txt（`cleanRobotsExtra`/`buildRobotsTxt` + **AI 抓取策略 `readAiPolicy`/`AI_POLICY_VALUES`/`aiRobotsBlock`**）、预取声明（`SPECULATION_RULES`/`speculationRulesHtml`）、面包屑（`breadcrumbJsonLd`）、分类描述（`cleanCategoryDescription`）、预取请求识别（`isSpeculativeRequest`）；全是纯函数，tests/seo.test.ts 直接导入，防线见「站长 SEO」节
 - `src/llms.ts`：AI 索引导读（**B28**，2026-10-17）——`buildLlmsTxt`（/llms.txt 导读索引）/ `buildLlmsFullTxt`（/llms-full.txt 全文合集）/ `buildLlmsStub`（演示站与 siteNoindex 桩）纯函数组，tests/llms.test.ts 直接导入；防泄漏清单见「站长 SEO」节 AI 可获取面条
 - `src/turnstile.ts`：注册人机验证（**Cloudflare Turnstile**，A2 Sybil 根治）——`verifyTurnstile(secret, token, ip, fetchImpl?)` 纯函数（tests/turnstile.test.ts 注入 fetch 直接导入）；siteverify 是固定可信端点直连（同 api.telegram.org 口径），**fail closed**：非 `success===true`/非 2xx/网络异常一律 false；两键成对启用、`turnstileSecret` 进 SECRET_SETTINGS、演示站跳过、sitekey 走 `<html data-turnstile>` + site.js 显式渲染懒挂载、CSP 放行版仅会员页——防线细节见「会员体系」末条
+- `src/totp.ts`：TOTP 两步验证（**B13**，2026-10-17）——RFC 6238 零依赖纯函数组（`base32Encode/Decode` / `generateTotpSecret` / `totpCode` / `verifyTotp` ±1 窗口恒时比较 / `totpProvisioningUri`），测试含官方向量；端点（setup/enable/disable/sessions）在 api.ts，防线见「两步验证与活跃会话」节
 - `src/version.ts`：系统版本号镜像（`APP_VERSION`，后台概览「系统」卡展示，/admin/stats 管理面唯一出口）——事实源是 package.json（Workers 无 fs 读不了 JSON），发版**两处同步**，tests/version.test.ts 守漂移；不进 RSS/公开接口，避免自托管装机指纹
 - `src/import-wxr.ts`：WordPress 导入（**B5**，2026-10-17）——WXR 1.2 解析与映射纯函数组（`parseWxr` / `mapWxrImport` / `parseWpDate` / `mapWxrStatus`，CDATA 感知扫描器），上限常量 `MAX_WXR_BYTES` 等；端点（正文一步 + 图片转存分步）在 api.ts，防线见「WordPress 导入」节，用法 GUIDE §19
 - `src/update.ts`：更新中心（自选更新，**B29**，2026-10-17）——分站 / 自托管用户自己决定「更新到最新版」还是「保持当前版本」：`parseSemver` / `compareSemver` / `cleanManifestText` / `validateUpdateManifest` / `updateStatus` 全纯函数（tests/update.test.ts 直接导入），常量 `UPDATE_MANIFEST_URL`（官网 `https://bloghao.com/version.json`，由 `scripts/build-release.mjs` 从 CHANGELOG 生成）与 `UPDATE_GUIDE_URL`。出网抓取在 api.ts `GET /admin/update`（固定可信端点 + 严格校验 + 优雅降级）与 docker-poc/control.ts 控制面复用；偏好记账 settings `updateIgnoredVersion`（脏值清空）；**不做任何自动更新**——升级恒为一次显式部署动作，见「更新中心」防线节与 docs/UPDATING.md

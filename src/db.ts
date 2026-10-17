@@ -115,7 +115,9 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   rankTopN: '10',
   // 注册人机验证（Cloudflare Turnstile，A2 根治）：两键成对填写才启用（PUT 校验成对），都留空 = 关闭；
   // Secret 属敏感键（api.ts SECRET_SETTINGS 打码），sitekey 是公开值、随 /member 页下发给 site.js
-  turnstileSiteKey: '',
+  // 两步验证（B13）：totpEnabled 开关 + totpSecret 密钥（SECRET_SETTINGS 打码）+ totpSecretPending 绑定中暂存
+  totpEnabled: '',
+    turnstileSiteKey: '',
   turnstileSecret: '',
   // 英文测试版（内部代号 English 0.1，见 src/i18n.ts）：edition 是后台可切的语言版本；
   // editionEnStatus 是运行状态（active 正常 / fallback 渲染异常已自动回退中文，重新开启时重置）
@@ -140,6 +142,9 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
  *  唯一来源就在这里——新增敏感键只改这张表，别在别处再抄一份（曾因清单分叉漏打码）。
  *  明文只在生成时返回一次；打码占位符提交 = 保留原值（同 SECRET_SETTINGS 口径） */
 export const SECRET_SETTINGS = [
+  // 两步验证（B13）：secret 是验证器密钥本体、pending 是绑定进行中的暂存——全部打码
+  'totpSecret',
+  'totpSecretPending',
   'externalToken',
   'telegramBotToken',
   'telegramWebhookSecret',

@@ -12,7 +12,7 @@ export function randomToken(bytes = 32): string {
 
 /** 会话 token 落库一律存 SHA-256：D1 里的 sessions / member_sessions 不再有可直接
  *  重放的明文 token（库泄露 ≠ 会话被冒用）；查询时对 Cookie 里的 token 同样哈希后比对 */
-function tokenHash(token: string): Promise<string> {
+export function tokenHash(token: string): Promise<string> {
   return sha256Hex(enc.encode(token).buffer as ArrayBuffer)
 }
 

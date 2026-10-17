@@ -120,7 +120,7 @@ AI 可获取面（`src/llms.ts`，`text/plain; charset=utf-8`，`public, max-age
 ## 认证
 
 ### GET /api/auth/state
-`{"needsSetup": true, "user": null}` —— `needsSetup=true` 表示尚无任何用户，可调用 setup。
+`{"needsSetup": true, "user": null}` —— `needsSetup=true` 表示尚无任何用户，可调用 setup。开启两步验证后多 `needsTotp: true`（登录表单据此预显「两步验证码」输入框；登录 Body 需带 `totp` 6 位码，`±1` 时间窗内有效）。
 
 ### POST /api/auth/setup （仅首次）
 ```json
@@ -322,6 +322,12 @@ AI 可获取面（`src/llms.ts`，`text/plain; charset=utf-8`，`public, max-age
 ### 设置 / 账号 / 工具
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
+| POST | `/api/admin/totp/setup` | 开始绑定两步验证（B13）：生成新 secret 存 `totpSecretPending`（已开启状态下重新绑定不降级，旧 secret 在 enable 成功前继续生效），返回 `{secret, uri(otpauth://), qrSvg(内联 SVG)}`——密钥只此一次回显；限频 5 次/分钟/IP |
+| POST | `/api/admin/totp/enable` | Body `{code}`：`verifyTotp(pending, code)`（±1 窗口、恒时比较）通过后 `totpSecret=pending`、`totpEnabled='1'`、清 pending；未绑定或码不对 400。登录端点此后强制二段校验 |
+| POST | `/api/admin/totp/disable` | Body `{password}`：校验登录密码后清 `totpSecret` / `totpEnabled` / pending；密码错 400 |
+| GET | `/api/admin/sessions` | 当前管理员的活跃会话 `{sessions:[{tokenHash(不可逆，作撤销标识), isCurrent, createdAt, expiresAt}]}`（token 落库即 SHA-256，出参无重放风险） |
+| DELETE | `/api/admin/sessions` | Body `{tokenHash}`：撤销该设备会话（限定 user_id；当前会话拒绝自撤 400）——「改密码踢其他设备」之外的按台粒度管理 |
+
 | GET / PUT | `/api/admin/settings` | 可写键：`siteName, siteDescription, siteUrl（http(s) scheme 校验，非法整体 400；留空 = 回退当前访问域名）, siteMode（blog-weibo/weibo-blog/blog/weibo 四选一，脏值回退默认）, footerText, avatarUrl, faviconUrl, ogImageDefault, theme, allowComments, moderateComments, showCommentRegion（评论 IP 属地展示开关，默认 0；采集无条件，见 /api/public/comments）, notifyNewComment, rssFullText, backupEnabled, postsPerPage, about（legacy，已由「页面」承载）, pluginsDisabled, serverPluginsDisabled（服务端插件停用名单）, serverPluginConfig（服务端插件配置 JSON：{插件id:{字段:值}}，顶层键必须是注册插件、字段键必须在其 configFields 登记内、值字符串 ≤ 500，插件 configValidate 语义校验不过整体 400）, appearance（主题外观变量 JSON，非法整体 400）, customCss（皮肤包自定义 CSS，样式安检门净化：@import 与脚本类内容拒绝、url() 只收 https 与站内相对或 data:image|font、花括号配平、≤ 8000 字符，非法整体 400）, siteGrayscale, siteClosed, siteClosedMessage, siteNoindex（全站 noindex 开关）, membersEnabled（会员体系总开关）, onboarding/onboardingManual（新手引导记账位：`onboarding` 由 `/api/auth/setup` 首装成功时播种 `'1'`，后台概览页据此显示引导清单卡，置 `'0'` 即完成/跳过且不再显示；`onboardingManual` 记录「使用手册」已打开；设置页「保存全部」不含这两键）, rankTopN（/rank 展示条数 1-50）, turnstileSiteKey/turnstileSecret（注册人机验证，两键成对启用否则整体 400）, edition（zh/en，重新开启 en 即重置回退状态）, tgChannelChatId, commentWebhookUrl（公网 http(s) 校验）, footerHtmlCode（≤5000 字，管理员信任级 HTML）, bufferAccessToken/bufferChannelId（微博同步 Buffer）, plazaEndpoint（公网 https 校验）/plazaToken（广场同步）, externalToken, telegramBotToken, telegramAllowFrom, telegramWebhookSecret, verifyMetas（站点验证 meta：一行一个 meta 标签，name 走白名单、取值形态受限，非法整体 400）, analyticsScript（统计脚本：https 脚本地址或 script 片段，内联脚本体与白名单外属性拒绝）, robotsExtra（robots.txt 追加段，剥控制字符、限 2000 字符）, aiPolicy（AI 抓取策略三档：`allow` 默认 / `seek` 只许检索引用不许训练 / `deny` 全部拒绝；写进 robots.txt 的 AI 声明段 + `Content-signal` 行，**默认档输出与历史逐字节一致**；三值白名单脏值整体 400，渲染端 `readAiPolicy` 脏值兜底当 allow）, contentVisibleRange（站点可见窗口：`''` 全部可见默认 / `3d` / `1m` / `6m` / `1y`，白名单外整体 400——窗口外内容对游客与会员彻底不可见，防泄漏清单见 AGENTS.md「站点可见窗口」节）, updateIgnoredVersion（更新中心「保持当前版本」记账位：`x.y.z` 形态，脏值清空；出现更高版本自动失效重新提示）`；`theme` 必须是已注册主题 id；`avatarUrl`/`faviconUrl`/`ogImageDefault` 只接受站内 `/images/` 与 `http(s)` 外链；`pluginsDisabled`/`serverPluginsDisabled` 为逗号分隔的插件 id（仅字母/数字/`_`/`-`）；`siteGrayscale`/`siteClosed`/`siteNoindex`/布尔开关为 `1`/`0`（闭站时公开页面与公开 API 一律 503，白名单见 src/closed.ts，已登录管理员不受影响）；`siteClosedMessage` ≤1000 字；`externalToken`/`telegramBotToken`/`telegramWebhookSecret`/`commentWebhookUrl`/`bufferAccessToken`/`plazaToken`/`turnstileSecret` 为敏感项，GET 与 PUT 的响应一律打码（`••••••••`），明文只在生成时返回一次，PUT 收到打码占位符视为保持原值；`verifyMetas` / `analyticsScript` 存库为结构化 JSON，GET 与 PUT 响应回显成「可粘贴形态」（与提交格式同形，可原样改回再存），渲染时按结构化值重放——统计脚本域自动进 CSP（`script-src` + `connect-src`），验证 meta 与预取声明（Speculation Rules）注入 head；`robotsExtra` 附在内置 robots 段之后（`GET /robots.txt`，演示站与全站 noindex 固定整站 Disallow） |
 | PUT | `/api/admin/password` | Body `{oldPassword, newPassword}`（8-64 位） |
 | POST | `/api/admin/tools/md` | Body `{md}` → `{html}`，Markdown 渲染 |
