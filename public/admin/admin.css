@@ -969,4 +969,7 @@ a.stat-row:hover .stat-row-title { color: var(--accent); }
 .totp-key code { word-break: break-all; user-select: all; }
 .sess-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px dashed var(--line); font-size: 13.5px; flex-wrap: wrap; }
 .sess-row:last-child { border-bottom: none; }
+/* 长列表限高内部滚动（v2.8.0 反馈：几十条会话平铺把设置页拉到无限长） */
+.sess-list { max-height: 300px; overflow-y: auto; }
+.sess-expand { margin-top: 8px; padding: 4px 14px; font-size: 12.5px; }
 .sess-kick { padding: 4px 14px; font-size: 12.5px; }

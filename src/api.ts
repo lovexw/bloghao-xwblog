@@ -253,6 +253,9 @@ api.post('/auth/setup', async (c) => {
   }
 })
 
+/** 单账号同时存活的会话上限（v2.8.0 反馈）：超过即从最旧开始删——防重复登录无限堆积 */
+const SESSIONS_PER_USER_CAP = 10
+
 /** 登录失败 TG 告警（B13）：每 IP 10 分钟最多 1 条防爆破刷屏；TG 未配置时 notifyAdminText 内部静默；
  *  异步发送不阻塞登录响应。用户名来自请求体（截断 40），纯文本消息无注入面 */
 function alertLoginFailure(env: Env, ip: string, username: string): void {
@@ -297,6 +300,17 @@ api.post('/auth/login', async (c) => {
         }
       }
       const token = await createSession(c.env.DB, user.id)
+      // 会话膨胀防护（v2.8.0 反馈）：登录时顺手清本账号的过期会话；活跃会话超过上限删最旧——
+      // 否则每次登录新增一行，30 天有效期内无限堆积，「活跃会话」列表长到没法看
+      await c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ? AND expires_at <= ?').bind(user.id, Date.now()).run()
+      const cnt = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM sessions WHERE user_id = ?').bind(user.id).first<{ n: number }>()
+      const over = (cnt?.n ?? 0) - SESSIONS_PER_USER_CAP
+      if (over > 0)
+        await c.env.DB.prepare(
+          'DELETE FROM sessions WHERE token IN (SELECT token FROM sessions WHERE user_id = ? ORDER BY created_at ASC, expires_at ASC LIMIT ?)'
+        )
+          .bind(user.id, over)
+          .run()
       c.header('Set-Cookie', sessionCookie(token))
       return c.json({
         ok: true,
@@ -390,6 +404,16 @@ api.post('/member/login', async (c) => {
       // 先验口令再报封禁：不向未持有口令的人泄露账号状态（契约 A5：403 {error:'banned'}）
       if (m.status === 'banned') return jsonError('banned', 403)
       const token = await createMemberSession(c.env.DB, m.id)
+      // 会员会话同款膨胀防护（每日签到每天都会登录一次，30 天有效期堆积更快）
+      await c.env.DB.prepare('DELETE FROM member_sessions WHERE member_id = ? AND expires_at <= ?').bind(m.id, Date.now()).run()
+      const mcnt = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM member_sessions WHERE member_id = ?').bind(m.id).first<{ n: number }>()
+      const mover = (mcnt?.n ?? 0) - SESSIONS_PER_USER_CAP
+      if (mover > 0)
+        await c.env.DB.prepare(
+          'DELETE FROM member_sessions WHERE token IN (SELECT token FROM member_sessions WHERE member_id = ? ORDER BY created_at ASC, expires_at ASC LIMIT ?)'
+        )
+          .bind(m.id, mover)
+          .run()
       c.header('Set-Cookie', memberSessionCookie(token))
       await awardPoints(c.env.DB, m.id, 'dailyLogin')
       await c.env.DB.prepare('UPDATE members SET last_login_at = ? WHERE id = ?').bind(Date.now(), m.id).run()

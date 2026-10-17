@@ -3920,12 +3920,17 @@ async function viewSettings() {
   if (sessEl) {
     try {
       const d = await api('/admin/sessions')
-      if (!d.sessions || !d.sessions.length) {
+      const sessAll = d.sessions || []
+      if (!sessAll.length) {
         sessEl.textContent = '没有活跃会话。'
-      } else {
-        sessEl.innerHTML = d.sessions
-          .map((x) => `<div class="sess-row"><span>${x.isCurrent ? '<b>本设备（当前会话）</b>' : '其他设备'} · 登录于 ${fmtDateTime(x.createdAt)}</span>${x.isCurrent ? '' : `<button class="btn sess-kick" data-kick="${esc(x.tokenHash)}">撤销</button>`}</div>`)
-          .join('')
+        return
+      }
+      // 折叠（v2.8.0 反馈）：默认只显最近 5 条，长列表展开成内部滚动区
+      const SESS_PREVIEW = 5
+      let expanded = sessAll.length <= SESS_PREVIEW
+      const sessRow = (x) =>
+        `<div class="sess-row"><span>${x.isCurrent ? '<b>本设备（当前会话）</b>' : '其他设备'} · 登录于 ${fmtDateTime(x.createdAt)}</span>${x.isCurrent ? '' : `<button class="btn sess-kick" data-kick="${esc(x.tokenHash)}">撤销</button>`}</div>`
+      const bindKicks = () =>
         sessEl.querySelectorAll('[data-kick]').forEach((b) =>
           b.addEventListener('click', async () => {
             b.disabled = true
@@ -3939,7 +3944,24 @@ async function viewSettings() {
             }
           })
         )
+      const renderSess = () => {
+        const shown = expanded ? sessAll : sessAll.slice(0, SESS_PREVIEW)
+        sessEl.innerHTML =
+          `<div class="sess-list">` +
+          shown.map(sessRow).join('') +
+          `</div>` +
+          (expanded
+            ? ''
+            : `<button class="btn sess-expand" type="button">展开全部 ${sessAll.length} 条</button>`)
+        bindKicks()
+        const ex = sessEl.querySelector('.sess-expand')
+        if (ex)
+          ex.addEventListener('click', () => {
+            expanded = true
+            renderSess()
+          })
       }
+      renderSess()
     } catch {
       sessEl.textContent = '会话列表加载失败。'
     }
