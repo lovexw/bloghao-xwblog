@@ -16,7 +16,7 @@ function post(over: Partial<PostRow>): PostRow {
     slug: 'hello-world',
     title: '你好世界',
     summary: '第一篇文章的摘要',
-    content: '# 正文标题\n\n这是正文内容，含 smoke-llms-body-marker。',
+    content: '<h2>正文标题</h2>\n<p>这是正文内容，含 smoke-llms-body-marker。</p>',
     status: 'published',
     password_hash: null,
     min_tier: 'all',
@@ -53,11 +53,13 @@ test('llms.txt：中文 slug 百分号编码；摘要/标题内嵌换行单行�
   assert.ok(!out.includes('## 独立页面'), '无页面时整节省略')
 })
 
-test('llms-full.txt：普通文出 Markdown 原文 + 日期', () => {
+test('llms-full.txt：正文是库存 HTML，经 htmlToMd 转换出干净 Markdown（标签不透出）', () => {
   const out = buildLlmsFullTxt(S, [post({})], SITE)
   assert.ok(out.includes('## [你好世界](https://blog.example.com/post/hello-world)'))
   assert.ok(out.includes('发布：'))
-  assert.ok(out.includes('smoke-llms-body-marker'), '全文包含正文原文')
+  assert.ok(out.includes('## 正文标题'), 'h2 转 markdown 标题')
+  assert.ok(out.includes('smoke-llms-body-marker'), '正文文本保留')
+  assert.ok(!out.includes('<h2>') && !out.includes('<p>'), 'HTML 标签不原样透出')
   assert.ok(out.includes('---'), '条目以分隔线收尾')
 })
 

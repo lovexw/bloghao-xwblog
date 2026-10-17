@@ -34,6 +34,7 @@ import {
   type RankMemberRow,
 } from './db'
 import { searchPosts, searchWeibo } from './fts'
+import { htmlToMd } from './html-md'
 import {
   articleJsonLd,
   archiveGroups,
@@ -513,9 +514,12 @@ async function renderList(
   )
 }
 
-/* ---------------- /post/:slug.md —— Markdown 原文镜像（B28，2026-10-17） ----------------
- * 内容库里存的就是 Markdown：镜像 = 原样输出，零转换（对冲 Cloudflare「面向代理的 Markdown」
- * Pro 付费能力的自建实现，且无损）。分流在 renderPost 顶部（cleanSlug 不允许点号，.md 后缀无歧义）。
+/* ---------------- /post/:slug.md —— Markdown 镜像（B28，2026-10-17） ----------------
+ * 内容库存的是净化 HTML（编辑器 MD 模式保存链路 mdToHtml→sanitizeHtml 落库，文章页渲染同源），
+ * 镜像 = sanitizeHtml → htmlToMd（src/html-md.ts，与导出 Markdown 包同款转换器）——别按「库存即
+ * Markdown」原样输出，那会把成片标签当 Markdown 发给代理（上线首日修复，tests/llms.test.ts 喂
+ * HTML 输入 + smoke AI 面守着）。自建实现，对冲 Cloudflare「面向代理的 Markdown」的 Pro 付费能力。
+ * 分流在 renderPost 顶部（cleanSlug 不允许点号，.md 后缀无歧义）。
  * 机器可读面恒为游客视角（与 RSS 同口径，不查会话）：响应只依赖 slug/settings/库，千人一面，
  * 自动吃到页面边缘缓存（CACHEABLE_PAGE_RE 的 /post/[^/]+ 覆盖 .md 后缀；404 不回填）。
  * 防泄漏：密码文与可见窗口外 404（同一句响应，不透露存在性，与关键词搜索「整体退出」同口径）；
@@ -542,14 +546,14 @@ export async function renderPostMarkdown(c: C, slug: string): Promise<Response> 
     ? en
       ? `> This post is members-only; this is an excerpt. Read the full text on the site after member login.\n\n原文：${canonical}\n`
       : `> 本文为会员专属内容，此处仅为摘录，登录会员后可阅读全文。\n\n原文：${canonical}\n`
-    : `${String(row.content ?? '').trim()}\n\n---\n\n${en ? 'Source: ' : '原文：'}${canonical}\n`
+    : `${htmlToMd(sanitizeHtml(String(row.content ?? ''))).trim()}\n\n---\n\n${en ? 'Source: ' : '原文：'}${canonical}\n`
   c.header('Content-Type', 'text/markdown; charset=utf-8')
   return c.body(`${head}\n${body}`)
 }
 
 export async function renderPost(c: C): Promise<Response> {
   const slugParam = c.req.param('slug') ?? ''
-  // /post/:slug.md 分流（B28 Markdown 原文镜像）：cleanSlug 不允许点号，后缀判定无歧义
+  // /post/:slug.md 分流（B28 Markdown 镜像）：cleanSlug 不允许点号，后缀判定无歧义
   if (/\.md$/i.test(slugParam)) return renderPostMarkdown(c, slugParam.replace(/\.md$/i, ''))
   const settings = await getSettings(c.env.DB)
   baseHeaders(c, settings)

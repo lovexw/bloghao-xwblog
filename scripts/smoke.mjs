@@ -1456,15 +1456,16 @@ try {
     console.log(`  ${h3 === 'miss' ? '✓' : '✗'} 页缓存：清理后回源（x-page-cache: ${h3}）`)
   }
 
-  // ── AI 可获取面链路（B28：/llms.txt、/llms-full.txt、/post/:slug.md 原文镜像）──
-  // 守四件：① .md 镜像 200 且 Content-Type 是 text/markdown、内容与库同源；② llms.txt 索引出条目
-  // 与订阅清单；③ llms-full.txt 出正文原文；④ 密码文 .md 404（与关键词搜索「整体退出」同口径）
+  // ── AI 可获取面链路（B28：/llms.txt、/llms-full.txt、/post/:slug.md Markdown 镜像）──
+  // 守四件：① .md 镜像 200 且 Content-Type 是 text/markdown、内容与库同源且标签剥净（库存是
+  // 净化 HTML，镜像经 htmlToMd 转换）；② llms.txt 索引出条目与订阅清单；③ llms-full.txt 出正文
+  // 且不带标签；④ 密码文 .md 404（与关键词搜索「整体退出」同口径）
   console.log('\n▸ AI 可获取面链路（B28）')
   {
     const mdMark = 'smoke-llms-md-body-77881'
     const mdCreate = await raw('POST', '/api/admin/posts', {
       headers: { 'Content-Type': 'application/json', Cookie: cookie },
-      body: JSON.stringify({ title: '冒烟：AI 镜像文章', content: mdMark, summary: '镜像摘要 77881', status: 'published' }),
+      body: JSON.stringify({ title: '冒烟：AI 镜像文章', content: '<p>AI 镜像正文 ' + mdMark + '</p>', summary: '镜像摘要 77881', status: 'published' }),
     })
     const mdCreated = await mdCreate.json().catch(() => null)
     const mdId = mdCreated && mdCreated.post && mdCreated.post.id
@@ -1474,9 +1475,14 @@ try {
       const mdRes = await raw('GET', `/post/${encodeURIComponent(mdSlug)}.md`)
       const mdType = (mdRes.headers.get('content-type') || '').includes('text/markdown')
       const mdBody = await mdRes.text()
-      const mdOk = mdRes.status === 200 && mdType && mdBody.includes(mdMark) && mdBody.includes('镜像摘要 77881')
-      results.push(['AI 面：.md 镜像 200 + text/markdown + 正文同源', mdOk])
-      console.log(`  ${mdOk ? '✓' : '✗'} AI 面：.md 镜像 200 + text/markdown + 正文同源`)
+      const mdOk =
+        mdRes.status === 200 &&
+        mdType &&
+        mdBody.includes('AI 镜像正文 ' + mdMark) &&
+        !mdBody.includes('<p>') &&
+        mdBody.includes('镜像摘要 77881')
+      results.push(['AI 面：.md 镜像 200 + text/markdown + 正文同源且标签剥净', mdOk])
+      console.log(`  ${mdOk ? '✓' : '✗'} AI 面：.md 镜像 200 + text/markdown + 正文同源且标签剥净`)
 
       const llmsRes = await raw('GET', '/llms.txt')
       const llmsBody = await llmsRes.text()
@@ -1489,9 +1495,11 @@ try {
       console.log(`  ${llmsOk ? '✓' : '✗'} AI 面：llms.txt 索引出条目与机器可读清单`)
 
       const fullRes = await raw('GET', '/llms-full.txt')
-      const fullOk = fullRes.status === 200 && (await fullRes.text()).includes(mdMark)
-      results.push(['AI 面：llms-full.txt 出正文', fullOk])
-      console.log(`  ${fullOk ? '✓' : '✗'} AI 面：llms-full.txt 出正文`)
+      const fullBody = await fullRes.text()
+      const fullOk =
+        fullRes.status === 200 && fullBody.includes('AI 镜像正文 ' + mdMark) && !fullBody.includes('<p>AI 镜像正文')
+      results.push(['AI 面：llms-full.txt 出正文且标签剥净', fullOk])
+      console.log(`  ${fullOk ? '✓' : '✗'} AI 面：llms-full.txt 出正文且标签剥净`)
 
       // 密码文：.md 一律 404（与不存在同响应，不透露存在性）
       const pwCreate = await raw('POST', '/api/admin/posts', {

@@ -16,6 +16,8 @@
 import type { PostRow, SettingsMap } from './types'
 import { isEn, tr } from './i18n'
 import { fmtDate } from './utils'
+import { htmlToMd } from './html-md'
+import { sanitizeHtml } from './sanitize'
 
 /** 独立页面（llms.txt「独立页面」节）：slug/title 由调用方从 listPages 已发布行映射 */
 export interface LlmsPage {
@@ -57,8 +59,8 @@ function frame(settings: SettingsMap, siteUrl: string, middle: string): string {
     ],
   ])
   const mdNote = en
-    ? 'Every post is also available as raw Markdown: append `.md` to its URL (e.g. `' + siteUrl + '/post/example.md`).'
-    : '每篇文章另有 Markdown 原文镜像：在文章地址后加 `.md`（例如 `' + siteUrl + '/post/example.md`）。'
+    ? 'Every post is also available as Markdown: append `.md` to its URL (e.g. `' + siteUrl + '/post/example.md`).'
+    : '每篇文章另有 Markdown 镜像：在文章地址后加 `.md`（例如 `' + siteUrl + '/post/example.md`）。'
   return `${head}\n${middle}${tools}\n${mdNote}\n`
 }
 
@@ -80,7 +82,9 @@ export function buildLlmsTxt(settings: SettingsMap, posts: PostRow[], pages: Llm
   return frame(settings, siteUrl, middle)
 }
 
-/** /llms-full.txt —— 同一结构附全文：普通文出 Markdown 原文；锁文/密码文只出摘要 + 引导（防泄漏） */
+/** /llms-full.txt —— 同一结构附全文：普通文出正文（库存净化 HTML 经 sanitizeHtml → htmlToMd 转
+ * Markdown，与导出 Markdown 包同款转换器——别按「库存即 Markdown」原样输出，标签会直接透出）；
+ * 锁文/密码文只出摘要 + 引导（防泄漏） */
 export function buildLlmsFullTxt(settings: SettingsMap, posts: PostRow[], siteUrl: string): string {
   const en = isEn(settings)
   const items = posts.map((p) => {
@@ -98,7 +102,7 @@ export function buildLlmsFullTxt(settings: SettingsMap, posts: PostRow[], siteUr
           ? `> The rest of this post is members-only. Read it on the site after member login: ${postUrl(siteUrl, p)}`
           : `> 本文为会员专属内容，此处仅为摘录，登录会员后可阅读全文：${postUrl(siteUrl, p)}`)
     } else {
-      body = String(p.content ?? '').trim()
+      body = htmlToMd(sanitizeHtml(String(p.content ?? ''))).trim()
     }
     const date = p.published_at || p.updated_at
     return `## [${oneLine(p.title)}](${postUrl(siteUrl, p)})\n\n${date ? (en ? 'Published: ' : '发布：') + fmtDate(date) + '\n\n' : ''}${body}\n\n---`
