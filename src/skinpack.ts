@@ -11,6 +11,9 @@
  *    关键字剥离，而反斜杠是转义生效的唯一条件——剥净后「转义写法」退化成普通文本
  *    （不再是合法的 @import / expression），且输出不含 `\`（浏览器无从还原）。
  *    代价：内容里真用 \XXXX 转义的字符按字面输出（如 content:"\201C" 显示 201C，极少见）
+ *  - 注释先剥（位置落空格）：CSS 注释对剥掉并落成空格，关键字中段藏注释的分词混淆
+ *    （@im 与 port 之间插注释那类写法）在净化器正则与浏览器解析之间再无分歧面
+ *    （见 cleanCustomCss 内注；字面示例只写在行注释里，块注释里放不得——注释本身含闭合序）
  *  - 剥 @import：外部样式表既是额外请求面，也能整表重排级联
  *  - 剥 expression() / -moz-binding / behavior:（历史脚本面，剥除代价一行）
  *  - url() 白名单：无 scheme = 站内相对放行；有 scheme 只认 https 与 data:image|font
@@ -49,6 +52,11 @@ export function cleanCustomCss(raw: string): string | null {
   if (!s0.trim()) return ''
   if (s0.length > CUSTOM_CSS_MAX) return null
   let s = s0.replace(CONTROL_RE, '')
+  // 注释先剥（位置落成空格）：注释内嵌可让关键字在「净化器正则」与「浏览器解析」之间
+  // 出现分歧面——老 IE 的 expression() 上下文里 JScript 会无视注释（expr/**/ession(
+  // 照样执行）；剥成空格后两边看到同一份文本，@im/**/port / expr/**/ession( / u/**/rl(
+  // 分词就再也拼不回去。位置落空格（而非删空）保证相邻 token 不会因剥注释而意外粘合
+  s = s.replace(/\/\*[\s\S]*?\*\//g, ' ')
   // <style> 逃逸面：< 全剥。CSS 语法不需要 <（媒体查询区间语法请用 max-width 形式），
   // 剥净后 </style>、<!--、<script> 等一切标签花招都不可能成立
   s = s.replace(/</g, '')

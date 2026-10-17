@@ -109,3 +109,16 @@ test('fontSrc：脏值（净化不过 = 不出 <style>）不放宽 CSP——判�
   assert.equal(needsFontSrc({ customCss: '.a { background: url(javascript:alert(1)); }' }), false, 'url 白名单不过')
   assert.equal(needsFontSrc({ customCss: '.a { color: red; }' }), true)
 })
+
+test('clean：注释分词防重组——注释先剥落空格，@im/××/port / expr/××/ession( / u/××/rl( 拼不回关键字', () => {
+  const out = cleanCustomCss('@im/**/port url("https://evil.example/x.css"); .a { color: red; }')!
+  assert.ok(out, '合法规则保留')
+  assert.ok(!out.toLowerCase().includes('@import'), '关键字拼不回来（@im port 形态浏览器也解析不了）')
+  assert.ok(!out.includes('/*'), '注释已剥净')
+  const ex = cleanCustomCss('.a { width: expr/**/ession(alert(1)); }')!
+  assert.ok(!ex.toLowerCase().includes('expression'), '老 IE expression() 上下文里 JS 会无视注释，剥掉才断得了')
+  const u = cleanCustomCss('.a { background: u/**/rl(javascript:alert(1)); }')!
+  assert.ok(!u.toLowerCase().includes('url('), 'url( 同样拼不回来，白名单不被绕过')
+  const nested = cleanCustomCss('.a { color: /* red */ blue; }')
+  assert.ok(nested && nested.includes('/*') === false && nested.includes('blue'), '正常注释剥除后样式值保留')
+})
