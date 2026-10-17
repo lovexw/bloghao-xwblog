@@ -494,21 +494,25 @@ try {
     })
     const j1 = await c1.json().catch(() => null)
     const id1 = j1 && j1.post && j1.post.id
+    // 断言用响应里的真实 slug（uniqueSlug 可能为撞名加序号，与库残留状态解耦）
+    const realA = j1 && j1.post && j1.post.slug
     let renamed = false
-    if (id1) {
+    if (id1 && realA) {
       const put = await raw('PUT', `/api/admin/posts/${id1}`, {
         headers: { 'Content-Type': 'application/json', Cookie: cookie },
         body: JSON.stringify({ slug: 'smoke-oldslug-b' }),
       })
-      renamed = put.status === 200
-      const old301 = await fetch(`${BASE}/post/smoke-oldslug-a`, { redirect: 'manual', headers: { Cookie: cookie }, signal: AbortSignal.timeout(15_000) })
+      const j2 = await put.json().catch(() => null)
+      const realB = j2 && j2.post && j2.post.slug
+      renamed = put.status === 200 && !!realB
+      const old301 = await fetch(`${BASE}/post/${realA}`, { redirect: 'manual', headers: { Cookie: cookie }, signal: AbortSignal.timeout(15_000) })
       const loc = old301.headers.get('location') || ''
-      results.push(['旧 slug 301：改名后旧地址 301 到新地址', old301.status === 301 && loc.endsWith('/post/smoke-oldslug-b')])
-      console.log(`  ${old301.status === 301 && loc.endsWith('/post/smoke-oldslug-b') ? 'Y' : 'X'} 旧 slug 301（status ${old301.status} loc ${loc}）`)
-      const new200 = await raw('GET', '/post/smoke-oldslug-b')
+      results.push(['旧 slug 301：改名后旧地址 301 到新地址', old301.status === 301 && loc.endsWith(`/post/${realB}`)])
+      console.log(`  ${old301.status === 301 && loc.endsWith(`/post/${realB}`) ? 'Y' : 'X'} 旧 slug 301（status ${old301.status} loc ${loc}）`)
+      const new200 = await raw('GET', `/post/${realB}`)
       results.push(['旧 slug 301：新地址 200', new200.status === 200])
       await raw('DELETE', `/api/admin/posts/${id1}`, { headers: { Cookie: cookie } })
-      const gone404 = await fetch(`${BASE}/post/smoke-oldslug-a`, { redirect: 'manual', signal: AbortSignal.timeout(15_000) })
+      const gone404 = await fetch(`${BASE}/post/${realA}`, { redirect: 'manual', signal: AbortSignal.timeout(15_000) })
       results.push(['旧 slug 301：回收站后旧地址 404', gone404.status === 404])
       console.log(`  ${gone404.status === 404 ? 'Y' : 'X'} 旧 slug 301：回收站后 404（status ${gone404.status}）`)
     }
