@@ -20,8 +20,8 @@ emlog / Typecho 导入（B5 第二批）**刻意押后**：两家系统没有 WX
 - [x] **CP1 · B22 旧 slug 301**——提交见 git log（feat(slug)）；800/800 + smoke 268/268 全绿，已推 origin
 - [x] **CP2 · B13 管理员安全包**——806/806 + smoke 268/268 全绿，已推 origin（含 smoke 301 用例真实 slug 修复）
 - [x] **CP3 · 后台 PWA**——806/806 全绿，已推 origin
-- [ ] **CP4 · B3 通知三插件**
-- [ ] **CP5 · 收工**（AGENTS/AI-COLLAB 收工动作 + 本日志终稿）
+- [x] **CP4 · B3 通知三插件**——811/811 + smoke 268/268 全绿，已推 origin（含 bark 空 Key 闸修复）
+- [x] **CP5 · 收工**——四件全部完成，各自独立提交可单独 revert；backup 分支保留在 origin 作整批恢复点（AGENTS/AI-COLLAB 收工动作 + 本日志终稿）
 
 ## 恢复速查
 
