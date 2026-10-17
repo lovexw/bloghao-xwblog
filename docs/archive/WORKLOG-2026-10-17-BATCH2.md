@@ -19,7 +19,7 @@ emlog / Typecho 导入（B5 第二批）**刻意押后**：两家系统没有 WX
 - [x] **CP0 · 2026-10-17** 基线 a6c04bc（typecheck ✓ / test 797/797 / smoke 265/265，主站部署中）。备份分支 `backup/20261017-pre-batch` 已推 origin；本工作日志建立。
 - [x] **CP1 · B22 旧 slug 301**——提交见 git log（feat(slug)）；800/800 + smoke 268/268 全绿，已推 origin
 - [x] **CP2 · B13 管理员安全包**——806/806 + smoke 268/268 全绿，已推 origin（含 smoke 301 用例真实 slug 修复）
-- [ ] **CP3 · 后台 PWA**
+- [x] **CP3 · 后台 PWA**——806/806 全绿，已推 origin
 - [ ] **CP4 · B3 通知三插件**
 - [ ] **CP5 · 收工**（AGENTS/AI-COLLAB 收工动作 + 本日志终稿）
 
