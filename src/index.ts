@@ -20,7 +20,7 @@ import { purgeVisits } from './stats'
 import { purgeTrash } from './trash'
 import { refreshFootStats } from './db'
 import type { Env, SessionUser } from './types'
-import { fmtDate, isDemo } from './utils'
+import { fmtDate, isDemo, siteVisibleCutoff } from './utils'
 
 const app = new Hono<{ Bindings: Env; Variables: { user: SessionUser | null } }>()
 
@@ -132,9 +132,17 @@ app.get('/search', enGuard(renderSearch))
 
 // 随机来一篇：从已发布文章里随机挑一篇跳过去（加密文章不进随机池——落上去就是一堵密码墙）
 app.get('/random', async (c) => {
-  const row = await c.env.DB.prepare("SELECT slug FROM posts WHERE status = 'published' AND deleted_at IS NULL AND (password_hash IS NULL OR password_hash = '') ORDER BY RANDOM() LIMIT 1").first<{
-    slug: string
-  }>()
+  // 站点可见窗口：随机入口同样只在窗口内抽（抽到窗口外文章 = 直链 404 死链）
+  const settings = await getSettings(c.env.DB)
+  const cutoff = siteVisibleCutoff(settings)
+  const vis = cutoff ? 'AND COALESCE(published_at, created_at) >= ?' : ''
+  const row = await c.env.DB.prepare(
+    `SELECT slug FROM posts WHERE status = 'published' AND deleted_at IS NULL ${vis} AND (password_hash IS NULL OR password_hash = '') ORDER BY RANDOM() LIMIT 1`
+  )
+    .bind(...(cutoff ? [cutoff] : []))
+    .first<{
+      slug: string
+    }>()
   if (!row) return renderNotFound(c)
   return c.redirect(`/post/${encodeURIComponent(row.slug)}`)
 })
@@ -210,7 +218,8 @@ const RSS_ALIASES = [
 ]
 const rssHandler: PublicHandler = async (c) => {
   const settings = await getSettings(c.env.DB)
-  const { items } = await listPosts(c.env.DB, { status: 'published', limit: 50 })
+  // 站点可见窗口：窗口外文章不进订阅源（比会员锁文的「试读段」更彻底——直接不出现）
+  const { items } = await listPosts(c.env.DB, { status: 'published', limit: 50, afterTs: siteVisibleCutoff(settings) })
   const siteUrl = siteBase(settings, new URL(c.req.url).origin)
   c.header('Content-Type', 'application/rss+xml; charset=utf-8')
   c.header('Cache-Control', 'public, max-age=600')
@@ -223,7 +232,8 @@ for (const p of RSS_ALIASES) app.get(p, rssHandler)
 // 闭站中间件同样覆盖（订阅面随闭站 503）
 const jsonFeedHandler: PublicHandler = async (c) => {
   const settings = await getSettings(c.env.DB)
-  const { items } = await listPosts(c.env.DB, { status: 'published', limit: 50 })
+  // 站点可见窗口：与 RSS 同一份口径（buildJsonFeed 防泄漏清单）
+  const { items } = await listPosts(c.env.DB, { status: 'published', limit: 50, afterTs: siteVisibleCutoff(settings) })
   const siteUrl = siteBase(settings, new URL(c.req.url).origin)
   c.header('Content-Type', 'application/json; charset=utf-8')
   c.header('Cache-Control', 'public, max-age=600')
@@ -234,7 +244,7 @@ app.get('/feed.json', jsonFeedHandler)
 app.get('/sitemap.xml', async (c) => {
   const settings = await getSettings(c.env.DB)
   const [posts, categories, catLastmod, pages, wbLastmod] = await Promise.all([
-    listSitemapPosts(c.env.DB),
+    listSitemapPosts(c.env.DB, siteVisibleCutoff(settings)),
     listCategories(c.env.DB),
     listSitemapCategoryLastmod(c.env.DB),
     listSitemapPages(c.env.DB),

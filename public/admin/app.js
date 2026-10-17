@@ -3356,7 +3356,11 @@ async function viewSettings() {
           <label class="switch"><input type="checkbox" id="st-showCommentRegion" ${s.showCommentRegion === '1' ? 'checked' : ''}><span class="track"></span></label>
         </div>
         <div class="form-item" style="max-width:180px;"><label>每页文章数</label><input class="input" id="st-postsPerPage" type="number" min="1" max="50" value="${esc(s.postsPerPage)}"></div>
+        <div class="form-item" style="max-width:220px;"><label>内容可见范围</label><select class="input" id="st-contentVisibleRange">${[['', '全部可见'], ['3d', '最近 3 天可见'], ['1m', '最近 1 个月可见'], ['6m', '最近半年可见'], ['1y', '最近 1 年可见']]
+          .map(([v, label]) => `<option value="${v}"${(s.contentVisibleRange || '') === v ? ' selected' : ''}>${label}</option>`)
+          .join('')}</select></div>
       </div>
+      <div class="switch-sub" style="margin:-4px 0 0;">类似朋友圈「几天可见」：窗口外的文章与微博对访客（游客和会员）不可见——列表不出现、直链打不开、搜索搜不到、RSS 与 sitemap 不包含，后台管理、备份与导出不受影响；窗口内访客仍可用前台的时间范围条再缩小。默认全部可见，改完保存立即生效</div>
     </div>
 
     <div class="panel" style="padding:20px;">
@@ -3662,6 +3666,7 @@ async function viewSettings() {
       moderateComments: g('st-moderateComments').checked ? '1' : '0',
       showCommentRegion: g('st-showCommentRegion').checked ? '1' : '0',
       postsPerPage: g('st-postsPerPage').value || '10',
+      contentVisibleRange: g('st-contentVisibleRange').value,
       membersEnabled: g('st-membersEnabled').checked ? '1' : '0',
       rankTopN: g('st-rankTopN').value || '10',
       turnstileSiteKey: g('st-turnstileSiteKey').value.trim(),

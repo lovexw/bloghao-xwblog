@@ -129,7 +129,7 @@ import { fetchLinkMeta, fetchableUrl } from './linkmeta'
 import { BROWSER_UA, buildCardHtml, coverProxyHostOk, coverReferer, fetchDoubanDetail, probeRelay, resolveCardCover, sanitizeMediaItem, searchMedia, subjectIdFromUrl, validateRelay, type MediaItem } from './douban'
 import { THEMES } from './themes/registry'
 import type { CommentRow, Env, MemberRow, MemberTier, PostRow, SessionUser } from './types'
-import { clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extractWeiboTopics, fmtDateCN, isDemo, isValidQQ, jsonItemLikePattern, listRangeCutoff, nicknameCooldown, normalizeLinkUrl, slugify } from './utils'
+import { clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extractWeiboTopics, fmtDateCN, isDemo, isValidQQ, jsonItemLikePattern, LIST_RANGES, listRangeCutoff, nicknameCooldown, normalizeLinkUrl, siteVisibleCutoff, slugify } from './utils'
 
 type AppEnv = { Bindings: Env; Variables: { user: SessionUser } }
 
@@ -1972,6 +1972,13 @@ api.put('/admin/settings', async (c) => {
       patch[key] = SITE_MODE_VALUES.includes(v as SiteMode) ? v : 'blog-weibo'
       continue
     }
+    if (key === 'contentVisibleRange') {
+      // 站点可见窗口（朋友圈式 N 天可见）：写路径严格白名单——脏值 400 而不是静默降级，
+      // 站长得知道「保存了但没生效」是输入问题；'' = 全部可见
+      if (v !== '' && !Object.prototype.hasOwnProperty.call(LIST_RANGES, v)) return jsonError('可见范围档位不正确')
+      patch[key] = v
+      continue
+    }
     if (key === 'appearance') {
       // 主题外观变量（B9 · 内测）：净化成规范化 JSON 存库，非法整体拒绝；角色是否被当前
       // 主题支持、是否等于主题默认值留给渲染端按当前主题过滤（先调外观再换皮肤顺序无关）
@@ -2469,11 +2476,14 @@ api.get('/public/emoji', (c) => {
 api.get('/public/posts', async (c) => {
   // tag 与缓存键侧同口径 trim（审计 C1：服务端不 trim 会让带空白的请求把空结果投毒到干净键上）
   const tag = c.req.query('tag')?.trim() || undefined
+  // 站点可见窗口：公开接口与页面同一份口径，不能成为窗口外内容的旁路出口
+  const settings = await getSettings(c.env.DB)
   const r = await listPosts(c.env.DB, {
     status: 'published',
     tag,
     page: clampInt(c.req.query('page'), 1, 1000, 1),
     limit: clampInt(c.req.query('limit'), 1, 50, 10),
+    afterTs: siteVisibleCutoff(settings),
   })
   return c.json({
     items: r.items.map((p) => toHomePost(p, parseTags(p))),
@@ -2488,7 +2498,13 @@ api.get('/public/posts', async (c) => {
 // 微博，hub 定时拉取对齐（source='pull'，不覆盖 push）。只读公开数据：listWeibo 已过
 // 回收站与 status 过滤，微博无锁文概念，出参无敏感字段。
 api.get('/public/weibo', async (c) => {
-  const r = await listWeibo(c.env.DB, { status: 'published', limit: clampInt(c.req.query('limit'), 1, 50, 20) })
+  // 站点可见窗口：hub 补漏拉取的也是窗口内内容（窗口外微博对订阅方同样不存在）
+  const settings = await getSettings(c.env.DB)
+  const r = await listWeibo(c.env.DB, {
+    status: 'published',
+    limit: clampInt(c.req.query('limit'), 1, 50, 20),
+    afterTs: siteVisibleCutoff(settings),
+  })
   const origin = new URL(c.req.url).origin
   return c.json({
     weibo: r.items.map((w) => {

@@ -64,7 +64,7 @@ import { getTheme, THEMES } from './themes/registry'
 import type { MemberData, RankData } from './themes/registry'
 import type { Env, PostRow, SessionUser, SettingsMap } from './types'
 import { packMatrix, qrMatrix } from './qrcode'
-import { clampInt, esc, excerpt, isDemo, listRangeCutoff, readingMinutes, teaserHtml } from './utils'
+import { clampInt, esc, excerpt, isDemo, listRangeCutoff, readingMinutes, siteVisibleCutoff, teaserHtml } from './utils'
 import { analyticsOrigin, breadcrumbJsonLd, isSpeculativeRequest } from './seo'
 import { needsFontSrc } from './skinpack'
 
@@ -250,9 +250,12 @@ async function renderList(
   const seed =
     sort === 'random' ? clampInt(url.searchParams.get('seed'), 1, 999999999, 0) || 1 + Math.floor(Math.random() * 999999998) : 0
   // 时间范围（前台游客/会员）：仅干净首页开放（tag/分类/搜索页有各自的范围口径，不叠加）。
-  // 档位白名单 + cutoff 计算都在服务端（utils.listRangeCutoff），URL 传什么都拿不到白名单之外的口径
+  // 档位白名单 + cutoff 计算都在服务端（utils.listRangeCutoff），URL 传什么都拿不到白名单之外的口径；
+  // 站点可见窗口（settings.contentVisibleRange）是全局上限，两者取更严者——分类/搜索/标签页
+  // 不吃 URL 范围但同样吃站点窗口（朋友圈式 N 天可见对全部公开列表生效）
+  const siteCutoff = siteVisibleCutoff(settings)
   const range = opts.mode === 'home' && !tag ? (url.searchParams.get('range') || '').trim() : ''
-  const afterTs = listRangeCutoff(range)
+  const afterTs = Math.max(listRangeCutoff(range), siteCutoff)
 
   // 搜索模式不分页，直接取前 50 条；文章搜索走 FTS5（src/fts.ts，短词自动退回 LIKE 同口径）
   const [
@@ -270,7 +273,7 @@ async function renderList(
     wbSearch,
   ] = await Promise.all([
     opts.mode === 'search' && q
-      ? searchPosts(c.env.DB, q, 50)
+      ? searchPosts(c.env.DB, q, 50, afterTs)
       : listPosts(c.env.DB, {
           status: 'published',
           tag: opts.mode === 'home' ? tag : undefined,
@@ -286,21 +289,22 @@ async function renderList(
     navCategories(c),
     navPages(c),
     categorySlug ? getCategoryBySlug(c.env.DB, categorySlug) : Promise.resolve(null),
-    // 首页微博入口卡（博客+微博模式）：最新两条随手记摘要
+    // 首页微博入口卡（博客+微博模式）：最新两条随手记摘要（吃站点可见窗口）
     opts.mode === 'home' && mode === 'blog-weibo'
-      ? listWeibo(c.env.DB, { status: 'published', page: 1, limit: 2 })
+      ? listWeibo(c.env.DB, { status: 'published', page: 1, limit: 2, afterTs: siteCutoff })
       : Promise.resolve(null),
-    // 首页微博流（微博+博客模式）：完整卡片先行，管理员键与评论照常可用
+    // 首页微博流（微博+博客模式）：完整卡片先行，管理员键与评论照常可用（吃站点可见窗口）
     opts.mode === 'home' && mode === 'weibo-blog'
-      ? listWeibo(c.env.DB, { status: 'published', page: 1, limit: HOME_WEIBO_FEED_LIMIT, pinnedFirst: true })
+      ? listWeibo(c.env.DB, { status: 'published', page: 1, limit: HOME_WEIBO_FEED_LIMIT, pinnedFirst: true, afterTs: siteCutoff })
       : Promise.resolve(null),
     opts.mode === 'home' && mode === 'weibo-blog' ? getSessionUser(c.env.DB, c.req.raw) : Promise.resolve(null),
-    // 历史上的今天：仅首页第一页且未带筛选时查（有内部按天缓存）
-    opts.mode === 'home' && pageNum === 1 && !tag && !q ? listOnThisDay(c.env.DB) : Promise.resolve(null),
+    // 历史上的今天：仅首页第一页且未带筛选时查（有内部按天缓存）；站点可见窗口开启时整体隐藏
+    // ——该模块本质是展示往年内容，与「N 天可见」直接冲突
+    opts.mode === 'home' && pageNum === 1 && !tag && !q && !siteCutoff ? listOnThisDay(c.env.DB) : Promise.resolve(null),
     // 会员会话（首页微博流的 memberName 用；未开启时省一次查询，无 Cookie 时是纯内存快路径）
     membersEnabled(settings) ? getMemberUser(c.env.DB, c.req.raw) : Promise.resolve(null),
-    // 搜索页微博结果（ROADMAP B4）：长词走 weibo_fts、短词 LIKE 扫微博表，都在 fts.ts 内部定
-    opts.mode === 'search' && q ? searchWeibo(c.env.DB, q, 20) : Promise.resolve(null),
+    // 搜索页微博结果（ROADMAP B4）：长词走 weibo_fts、短词 LIKE 扫微博表，都在 fts.ts 内部定（吃可见窗口）
+    opts.mode === 'search' && q ? searchWeibo(c.env.DB, q, 20, afterTs) : Promise.resolve(null),
   ])
   if (opts.mode === 'category' && !category) return renderNotFound(c)
   // 页码跳转可能输入越界，回到最后一页重新取一次
@@ -527,6 +531,13 @@ export async function renderPost(c: C): Promise<Response> {
     // 草稿只允许作者本人带 preview=1 预览
     const user = await getSessionUser(c.env.DB, c.req.raw)
     if (!isPreview || !user) return renderNotFound(c)
+  }
+  // 站点可见窗口（朋友圈式 N 天可见）：窗口外文章对游客/会员不可见——直链即 404（内容仍在库，
+  // 后台管理与备份不受影响）；管理员登录放行预览。解锁 Cookie 不豁免：时间门是第一道门
+  const visibleCutoff = siteVisibleCutoff(settings)
+  if (visibleCutoff && (row.published_at ?? row.created_at ?? 0) < visibleCutoff) {
+    const user = await getSessionUser(c.env.DB, c.req.raw)
+    if (!user) return renderNotFound(c)
   }
 
   const [comments, related, categories, categoryId, user, tags, pages, commentTotal, member, neighbors] = await Promise.all([
@@ -880,16 +891,17 @@ export async function renderWeibo(c: C, asHome = false): Promise<Response> {
   const url = new URL(c.req.url)
   const perPage = 15
   const topic = (url.searchParams.get('topic') || '').trim().slice(0, 24)
-  // 时间范围（前台游客/会员）：档位白名单 + cutoff 计算都在服务端；与话题筛选叠加
+  // 时间范围（前台游客/会员）：档位白名单 + cutoff 计算都在服务端；与话题筛选叠加。
+  // 站点可见窗口（settings）是全局上限，两者取更严者
   const range = (url.searchParams.get('range') || '').trim()
-  const rangeAfterTs = listRangeCutoff(range)
+  const rangeAfterTs = Math.max(listRangeCutoff(range), siteVisibleCutoff(settings))
   const pageParam = clampInt(url.searchParams.get('page'), 1, 1000, 1)
   // ?wb=<id> 深链定位：历史上的今天、首页入口卡、TG 通知都链到 /weibo?wb=x#wb-x，而目标条目常不在第 1
   // 页——服务端先算出所在页直接渲染，浏览器原生锚点才滚动得到；定位失败（已删/非已发布）回退 ?page=
   let pageNum = pageParam
   const wbParam = (url.searchParams.get('wb') || '').trim()
   if (/^\d{1,12}$/.test(wbParam)) {
-    const located = await locateWeiboPage(c.env.DB, Number(wbParam), { limit: perPage, topic: topic || undefined })
+    const located = await locateWeiboPage(c.env.DB, Number(wbParam), { limit: perPage, topic: topic || undefined, afterTs: rangeAfterTs })
     if (located) pageNum = located
   }
   const [r, categories, topics, user, tags, pages, member] = await Promise.all([

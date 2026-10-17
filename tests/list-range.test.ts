@@ -5,9 +5,18 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import type { D1Database } from '@cloudflare/workers-types'
-import { listPosts, listWeibo } from '../src/db.ts'
+import {
+  adjacentPosts,
+  ensureSchema,
+  listPosts,
+  listSitemapPosts,
+  listWeibo,
+  locateWeiboPage,
+  relatedPosts,
+} from '../src/db.ts'
+import { searchPosts, searchWeibo } from '../src/fts.ts'
 import { homeSortBar, weiboPager, weiboRangeBar } from '../src/render.ts'
-import { listRangeCutoff, LIST_RANGES } from '../src/utils.ts'
+import { listRangeCutoff, siteVisibleCutoff, LIST_RANGES } from '../src/utils.ts'
 
 // ── 后台列表时间范围筛选（文章 / 微博共用）──
 // 防线核心：客户端只传白名单语义值（3d/1m/6m/1y），真实 cutoff 由服务端
@@ -182,4 +191,85 @@ test('weiboPager：翻页链接同时带话题与范围', () => {
   const noRange = weiboPager(2, 5, undefined, false)
   assert.ok(noRange.includes('href="/weibo?page=1"'))
   assert.ok(!noRange.includes('range='))
+})
+
+// ── 站点可见窗口（朋友圈式 N 天可见）：settings.contentVisibleRange 强制上限 ──
+// 与 URL 自选范围不同：这是站长设定的硬上限，窗口外内容对所有公开面「不存在」——
+// 列表 / 直链 404 / 搜索 / RSS / sitemap / 相邻导航 / 深链定位全面收口，后台与备份不受影响。
+
+test('siteVisibleCutoff：settings 档位 → cutoff，未配置/脏值 = 0（全部可见，老站零打扰）', () => {
+  const now = 1_750_000_000_000
+  assert.equal(siteVisibleCutoff({}), 0)
+  assert.equal(siteVisibleCutoff({ contentVisibleRange: '' }), 0)
+  assert.equal(siteVisibleCutoff({ contentVisibleRange: '3d' }, now), now - 3 * 86_400_000)
+  assert.equal(siteVisibleCutoff({ contentVisibleRange: '1y' }, now), now - 365 * 86_400_000)
+  assert.equal(siteVisibleCutoff({ contentVisibleRange: '10y' }, now), 0, '读侧脏值降级全部可见（写侧 PUT 400 拦）')
+  assert.equal(siteVisibleCutoff({ contentVisibleRange: 'constructor' }, now), 0, '原型链属性不穿透')
+})
+
+test('可见窗口收口：sitemap / 相邻文章 / 相关文章 / 深链定位都只出窗口内', async () => {
+  const { db, raw, now } = seedRangeDb()
+  const DAY = 86_400_000
+  const cutoff = now - 30 * DAY // 1 个月窗口：新文章（1 天）在窗内，200/400 天前的出窗
+  const idOf = (slug: string) => (raw.prepare('SELECT id FROM posts WHERE slug = ?').get(slug) as { id: number }).id
+  const widOf = (content: string) => (raw.prepare('SELECT id FROM weibo WHERE content = ?').get(content) as { id: number }).id
+
+  // sitemap：只收已发布文章（草稿本就不进），窗口外文章再退出（404 的页面不该有 URL）
+  assert.deepEqual((await listSitemapPosts(db)).map((p) => p.slug).sort(), ['new-pub', 'old-pub'])
+  assert.deepEqual((await listSitemapPosts(db, cutoff)).map((p) => p.slug).sort(), ['new-pub'])
+
+  // 相邻文章：从窗口内最新的已发布文章往「更早」走，开窗后停在窗口边界（不指向 400 天前的死链）
+  const newPub = (await listPosts(db, { status: 'published' })).items.find((p) => p.slug === 'new-pub')!
+  const adj = await adjacentPosts(db, newPub.published_at ?? newPub.created_at, newPub.id, cutoff)
+  assert.equal(adj.prev, null, '更早的方向上只有出窗文章：prev 为空而不是死链')
+  assert.equal(adj.next, null, '更新的方向没有已发布文章（new-draft 是草稿，本就不进导航）')
+  // 不带窗口 = 全量口径：prev 是旧文（开窗后它就是 404 死链，必须摘掉）
+  const adjAll = await adjacentPosts(db, newPub.published_at ?? newPub.created_at, newPub.id)
+  assert.equal(adjAll.prev?.slug, 'old-pub')
+  assert.equal(adjAll.next, null)
+
+  // 相关文章：窗口内没有其他已发布文章（new-draft 是草稿）→ 空列表而不是指向出窗旧文
+  const rel = await relatedPosts(db, newPub, 3, cutoff)
+  assert.deepEqual(rel.map((p) => p.slug), [])
+  assert.deepEqual((await relatedPosts(db, newPub, 3)).map((p) => p.slug), ['old-pub'], '无窗口时相关文章是旧文')
+
+  // 深链定位：窗口内定位正常，窗口外微博定位不到（回退第 1 页而非展示不可见内容）
+  assert.equal(await locateWeiboPage(db, widOf('新微博'), { afterTs: cutoff }), 1)
+  assert.equal(await locateWeiboPage(db, widOf('旧微博'), { afterTs: cutoff }), null, '窗口外微博深链不定位')
+  assert.ok((await locateWeiboPage(db, widOf('旧微博'), { limit: 15 })) !== null, '无窗口时照常定位')
+})
+
+test('搜索吃可见窗口：FTS 与 LIKE 两条路都不出窗口外内容', async () => {
+  const DAY = 86_400_000
+  const now = 1_750_000_000_000
+  const cutoff = now - 30 * DAY
+  const raw = new DatabaseSync(':memory:')
+  raw.exec(SCHEMA_SQL)
+  const d1 = d1FromSqlite(raw)
+  await ensureSchema(d1) // 建触发器：插入即同步 FTS 索引
+  raw.prepare(
+    'INSERT INTO posts (slug, title, content, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run('new-p', '部署教程新篇', '部署教程正文，讲清楚第一步', 'published', now - 1 * DAY, now - 1 * DAY, now - 1 * DAY)
+  raw.prepare(
+    'INSERT INTO posts (slug, title, content, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run('old-p', '部署教程旧篇', '部署教程去年的正文', 'published', now - 400 * DAY, now - 400 * DAY, now - 400 * DAY)
+  raw.prepare(
+    'INSERT INTO weibo (content, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+  ).run('随手记部署心得', 'published', now - 1 * DAY, now - 1 * DAY, now - 1 * DAY)
+  raw.prepare(
+    'INSERT INTO weibo (content, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+  ).run('去年的随手记部署', 'published', now - 400 * DAY, now - 400 * DAY, now - 400 * DAY)
+
+  // 长词（≥3 字）走 FTS：窗口外不命中
+  const ftsWin = await searchPosts(d1, '部署教程', 50, cutoff)
+  assert.deepEqual(ftsWin.items.map((p) => p.slug), ['new-p'])
+  assert.equal(ftsWin.total, 1)
+  assert.equal((await searchPosts(d1, '部署教程', 50)).total, 2, '不带窗口 = 全量，参数缺省行为不变')
+  // 短词（2 字）走 LIKE 兜底：同样收口
+  const likeWin = await searchPosts(d1, '部署', 50, cutoff)
+  assert.deepEqual(likeWin.items.map((p) => p.slug), ['new-p'])
+  // 微博两条路同口径
+  assert.deepEqual((await searchWeibo(d1, '随手记部署', 20, cutoff)).items.map((w) => w.content), ['随手记部署心得'])
+  assert.deepEqual((await searchWeibo(d1, '部署', 20, cutoff)).items.map((w) => w.content), ['随手记部署心得'])
+  assert.equal((await searchWeibo(d1, '部署', 20)).total, 2)
 })

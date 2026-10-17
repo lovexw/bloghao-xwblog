@@ -131,6 +131,15 @@ export function listRangeCutoff(v: string | null | undefined, now: number = Date
   return days ? now - days : 0
 }
 
+/** 站点可见窗口（朋友圈式 N 天可见，settings `contentVisibleRange`）：窗口外内容对游客/会员
+ *  彻底不可见（列表不出现、直链 404、搜索不命中、RSS/sitemap 不含），后台管理与备份不受影响。
+ *  与 URL 自选范围组合时调用方取 max（更严者）——窗口是站点级上限，访客只能在窗口内再缩小。
+ *  档位白名单与 listRangeCutoff 同源（LIST_RANGES），未配置/脏值一律 0 = 全部可见（老站零打扰） */
+export function siteVisibleCutoff(settings: Record<string, unknown>, now: number = Date.now()): number {
+  const v = settings.contentVisibleRange
+  return listRangeCutoff(typeof v === 'string' ? v : '', now)
+}
+
 /* ---------------- 会员昵称（注册选填 + 30 天一次修改，中英文均可） ----------------
  * 展示名不做唯一约束（username 才是登录凭证），渲染层 esc 兜底 XSS；
  * 清洗与窗口判定是纯函数：SSR 渲染、API 校验、Node 测试三处共用同一口径。 */

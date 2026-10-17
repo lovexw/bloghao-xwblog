@@ -28,6 +28,10 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   // 站点模式：blog-weibo（博客+微博，博客优先，默认）/ weibo-blog（微博+博客，微博优先）/
   // blog（纯博客）/ weibo（纯微博）——前台模块显隐与首页优先级，见 src/render.ts siteMode()
   siteMode: 'blog-weibo',
+  // 站点可见窗口（朋友圈式 N 天可见）：'' = 全部可见（默认，老站零打扰）；'3d'/'1m'/'6m'/'1y' =
+  // 窗口外内容对游客/会员不可见（列表/直链/搜索/RSS/sitemap 全面收口），后台与备份不受影响。
+  // 档位白名单与窗口天数唯一来源 utils.LIST_RANGES，校验在 api.ts 设置 PUT
+  contentVisibleRange: '',
   siteUrl: '',
   // 主题外观变量（B9 · 内测）：扁平 JSON（角色键 → 色值 + font/fontSize），渲染期按当前主题
   // 映射回主题自己的 CSS 变量输出覆盖样式，空串 = 未配置，机制见 src/appearance.ts
@@ -431,27 +435,34 @@ export async function postHeatmap(db: D1Database): Promise<{ days: { day: string
 export async function adjacentPosts(
   db: D1Database,
   ts: number,
-  id: number
+  id: number,
+  afterTs = 0
 ): Promise<{ prev: { slug: string; title: string } | null; next: { slug: string; title: string } | null }> {
+  // 可见窗口开启时邻居导航不得指向窗口外文章（点了就是 404 的死链）
+  const vis = afterTs > 0 ? 'AND COALESCE(published_at, created_at) >= ?' : ''
+  const binds = (args: unknown[]) => (afterTs > 0 ? [...args, afterTs] : args)
   const where = "FROM posts WHERE status = 'published' AND deleted_at IS NULL AND id != ? AND COALESCE(published_at, created_at)"
   const [prev, next] = await Promise.all([
     db
-      .prepare(`SELECT slug, title ${where} < ? ORDER BY COALESCE(published_at, created_at) DESC LIMIT 1`)
-      .bind(id, ts)
+      .prepare(`SELECT slug, title ${where} < ? ${vis} ORDER BY COALESCE(published_at, created_at) DESC LIMIT 1`)
+      .bind(...binds([id, ts]))
       .first<{ slug: string; title: string }>(),
     db
-      .prepare(`SELECT slug, title ${where} > ? ORDER BY COALESCE(published_at, created_at) ASC LIMIT 1`)
-      .bind(id, ts)
+      .prepare(`SELECT slug, title ${where} > ? ${vis} ORDER BY COALESCE(published_at, created_at) ASC LIMIT 1`)
+      .bind(...binds([id, ts]))
       .first<{ slug: string; title: string }>(),
   ])
   return { prev: prev ?? null, next: next ?? null }
 }
 
 /** sitemap 用的轻量列表：slug + updated_at（不走 listPosts——它的 limit 被 clamp 到 100） */
-export async function listSitemapPosts(db: D1Database): Promise<{ slug: string; updated_at: number }[]> {
-  const { results } = await db
-    .prepare("SELECT slug, updated_at FROM posts WHERE status = 'published' AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 2000")
-    .all<{ slug: string; updated_at: number }>()
+export async function listSitemapPosts(db: D1Database, afterTs = 0): Promise<{ slug: string; updated_at: number }[]> {
+  // 可见窗口开启时窗口外文章不进 sitemap（前台 404 的页面不提交搜索引擎）
+  const vis = afterTs > 0 ? 'AND COALESCE(published_at, created_at) >= ?' : ''
+  const stmt = db.prepare(
+    `SELECT slug, updated_at FROM posts WHERE status = 'published' AND deleted_at IS NULL ${vis} ORDER BY updated_at DESC LIMIT 2000`
+  )
+  const { results } = await (afterTs > 0 ? stmt.bind(afterTs) : stmt).all<{ slug: string; updated_at: number }>()
   return results ?? []
 }
 
@@ -584,7 +595,10 @@ export async function listOnThisDay(db: D1Database): Promise<OnThisDayItem[]> {
 let otdCache: { day: string; at: number; items: OnThisDayItem[] } | null = null
 
 
-export async function relatedPosts(db: D1Database, post: PostRow, limit = 3): Promise<PostRow[]> {
+export async function relatedPosts(db: D1Database, post: PostRow, limit = 3, afterTs = 0): Promise<PostRow[]> {
+  // 可见窗口开启时相关文章同样限定在窗口内（链接出去就是 404）
+  const vis = afterTs > 0 ? 'AND COALESCE(published_at, created_at) >= ?' : ''
+  const tail = (args: unknown[]) => (afterTs > 0 ? [...args, afterTs] : args)
   const tags = parseTags(post)
   if (tags.length) {
     // 与 listPosts 的标签过滤同口径：带 JSON 引号精确匹配 + ESCAPE，防「猫」命中「波斯猫」/通配符注入
@@ -592,15 +606,15 @@ export async function relatedPosts(db: D1Database, post: PostRow, limit = 3): Pr
     const likeBinds = tags.map(() => "tags LIKE ? ESCAPE '\\'").join(' OR ')
     const { results } = await db
       .prepare(
-        `SELECT * FROM posts WHERE id != ? AND status = 'published' AND deleted_at IS NULL AND (${likeBinds}) ORDER BY views DESC LIMIT ?`
+        `SELECT * FROM posts WHERE id != ? AND status = 'published' AND deleted_at IS NULL AND (${likeBinds}) ${vis} ORDER BY views DESC LIMIT ?`
       )
-      .bind(post.id, ...tags.map((t) => jsonItemLikePattern(t)), limit)
+      .bind(...tail([post.id, ...tags.map((t) => jsonItemLikePattern(t))]), limit)
       .all<PostRow>()
     if ((results?.length ?? 0) > 0) return results ?? []
   }
   const { results } = await db
-    .prepare("SELECT * FROM posts WHERE id != ? AND status = 'published' AND deleted_at IS NULL ORDER BY published_at DESC LIMIT ?")
-    .bind(post.id, limit)
+    .prepare(`SELECT * FROM posts WHERE id != ? AND status = 'published' AND deleted_at IS NULL ${vis} ORDER BY published_at DESC LIMIT ?`)
+    .bind(...tail([post.id]), limit)
     .all<PostRow>()
   return results ?? []
 }
@@ -884,9 +898,13 @@ export async function listWeibo(
  * 排序口径与 listWeibo 的 pinnedFirst（置顶优先 + 时间倒序 + id 兜底）一致，status/topic 过滤同步生效；
  * 目标不存在 / 非已发布 / 不在 topic 筛选范围内时返回 null，调用方回退常规分页。
  */
-export async function locateWeiboPage(db: D1Database, id: number, opts: { limit?: number; topic?: string } = {}): Promise<number | null> {
+export async function locateWeiboPage(
+  db: D1Database,
+  id: number,
+  opts: { limit?: number; topic?: string; afterTs?: number } = {}
+): Promise<number | null> {
   const limit = clampInt(opts.limit, 1, 100, 15)
-  const { conds, binds } = weiboConditions({ status: 'published', topic: opts.topic })
+  const { conds, binds } = weiboConditions({ status: 'published', topic: opts.topic, afterTs: opts.afterTs })
   const target = conds.length ? `id = ? AND ${conds.join(' AND ')}` : 'id = ?'
   const x = await db
     .prepare(`SELECT id, pinned, COALESCE(published_at, created_at) AS ts FROM weibo WHERE ${target}`)
