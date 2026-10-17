@@ -113,6 +113,24 @@ export function clampInt(v: unknown, min: number, max: number, fallback: number)
   return Math.min(max, Math.max(min, n))
 }
 
+/* ---------------- 后台列表时间范围筛选（文章 / 微博共用） ----------------
+ * 客户端只传白名单语义值，真实 cutoff 由服务端按本函数计算后参数化进 SQL——
+ * 时间戳永远不由客户端供给，手搓任意参数拿不到白名单之外的口径；
+ * 未传 / 未知值一律回 0（= 不过滤，即「全部」），与列表 status 参数的白名单降级口径一致。 */
+
+export const LIST_RANGES: Record<string, number> = {
+  '3d': 3 * 86_400_000,
+  '1m': 30 * 86_400_000,
+  '6m': 182 * 86_400_000,
+  '1y': 365 * 86_400_000,
+}
+
+/** 范围值 → cutoff 毫秒时间戳（0 = 不过滤）。窗口为滚动窗口（now - N），非自然日边界 */
+export function listRangeCutoff(v: string | null | undefined, now: number = Date.now()): number {
+  const days = Object.prototype.hasOwnProperty.call(LIST_RANGES, v ?? '') ? LIST_RANGES[v as string] : 0
+  return days ? now - days : 0
+}
+
 /* ---------------- 会员昵称（注册选填 + 30 天一次修改，中英文均可） ----------------
  * 展示名不做唯一约束（username 才是登录凭证），渲染层 esc 兜底 XSS；
  * 清洗与窗口判定是纯函数：SSR 渲染、API 校验、Node 测试三处共用同一口径。 */

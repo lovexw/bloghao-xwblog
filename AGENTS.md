@@ -143,6 +143,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 **后台交互（public/admin/，无自动化测试，靠约定）**
 
 - 后台所有请求走 `api()`：401 会话过期已统一拦截回登录页（勿在别处重复处理，也别动 `state.user` 的判断顺序——登录表单的密码错误提示依赖它）；每个写操作按钮必须 try/catch + toast，请求期间 disabled 防连击
+- **后台列表时间范围筛选**（文章 / 微博列表，全部 / 3 天 / 1 个月 / 半年 / 1 年，2026-10-17，tests/list-range.test.ts）：**限制只在服务端强制**——客户端只传白名单语义值（`3d/1m/6m/1y`），真实 cutoff 由 `utils.ts listRangeCutoff` 在服务端计算后参数化进 SQL（`COALESCE(published_at, created_at) >= ?`，谓词与 feed 部分索引表达式同形可作范围约束），**时间戳不可由客户端注入**；未传 / 未知值降级为「全部」（与列表 status 参数的白名单降级同口径），`hasOwnProperty` 查表防原型链穿透。窗口是滚动窗口（now - N）非自然日边界；**置顶不豁免范围**（旧置顶微博在 3 天窗口内同样出窗——「只显示最近 N 天」按时间说话）。新增档位只改 `LIST_RANGES`（utils.ts）一处窗口天数 + `app.js LIST_RANGE_CHIPS` 一处展示标签；两处 chips UI 共用同一常量，别在视图里手写档位表
 - 设置页「保存全部」的 body **不带 theme 键**（主题只在皮肤页管理；服务端 PUT 对 body 里存在的 key 一律写入——历史上带了就曾把皮肤静默重置成 wechat）；分类/媒体页等操作后的列表刷新统一 `navigate()`，别直调 `viewX()` 绕过防串页守卫
 - 后台 SPA 经 wrangler assets 直出不经过 Worker，CSP 靠 admin/index.html 的 **meta 兜底**（前台在 pages.ts baseHeaders；form-action 在 meta 里有效，**frame-ancestors 是 meta 无效项**）；meta 兜不住的响应头（XFO / `frame-ancestors` / nosniff / Referrer-Policy / COOP / 静态资源缓存）走 **public/_headers**（Workers assets 原生支持、wrangler dev 同样生效，docker-poc/server.ts 的 serveStatic 有同语义镜像——**改口径两侧同改**，`_headers` 自身不对外服务，冒烟「后台防嵌套响应头」守着）：后台模板/弹窗里**禁止新增内联事件属性（onclick 等）与内联 `<script>`**，交互一律 addEventListener
 - 操作回调里刷新列表统一 `navigate()`（自带 pendingRoute/navSeq 防串页守卫），别直接 `viewX()`——慢响应会把用户从新页面拽回旧页面

@@ -260,6 +260,9 @@ export interface ListPostsOptions {
   /** 前台列表排序：latest 置顶优先最新在前；random 需配 seed 保证翻页不重洗 */
   sort?: PostSort
   seed?: number
+  /** 后台时间范围筛选：只出 COALESCE(published_at, created_at) >= afterTs 的行（0/缺省 = 不过滤）。
+   *  值由 api.ts 用 utils.listRangeCutoff 从白名单语义值算出，客户端不供给时间戳 */
+  afterTs?: number
 }
 
 export interface ListPostsResult {
@@ -293,6 +296,11 @@ export async function listPosts(db: D1Database, opts: ListPostsOptions = {}): Pr
   if (opts.categorySlug) {
     where.push('id IN (SELECT post_id FROM post_categories WHERE category_id IN (SELECT id FROM categories WHERE slug = ?))')
     binds.push(opts.categorySlug)
+  }
+  // 后台时间范围筛选：谓词落在排序键 COALESCE(published_at, created_at) 上——与 idx_posts_feed 表达式同形，可作索引范围约束
+  if (opts.afterTs && opts.afterTs > 0) {
+    where.push('COALESCE(published_at, created_at) >= ?')
+    binds.push(opts.afterTs)
   }
   const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : ''
   const recency = 'COALESCE(published_at, created_at) DESC'
@@ -819,8 +827,8 @@ export interface ListWeiboResult {
   totalPages: number
 }
 
-/** listWeibo / locateWeiboPage 共用的过滤条件（status + 话题 + 回收站），保证深链定位与列表分页的口径一致 */
-function weiboConditions(opts: { status?: 'published' | 'draft' | 'all'; topic?: string }): { conds: string[]; binds: unknown[] } {
+/** listWeibo / locateWeiboPage 共用的过滤条件（status + 话题 + 时间范围 + 回收站），保证深链定位与列表分页的口径一致 */
+function weiboConditions(opts: { status?: 'published' | 'draft' | 'all'; topic?: string; afterTs?: number }): { conds: string[]; binds: unknown[] } {
   const conds: string[] = ['deleted_at IS NULL'] // 回收站过滤：微博页/首页入口卡/后台列表都不展示已删行
   const binds: unknown[] = []
   if (opts.status && opts.status !== 'all') {
@@ -830,6 +838,12 @@ function weiboConditions(opts: { status?: 'published' | 'draft' | 'all'; topic?:
   if (opts.topic) {
     conds.push("topics LIKE ? ESCAPE '\\'")
     binds.push(jsonItemLikePattern(opts.topic))
+  }
+  // 后台时间范围筛选：cutoff 由服务端 listRangeCutoff 算出（客户端只传白名单语义值），
+  // 谓词落在排序键 COALESCE(published_at, created_at) 上——与 idx_weibo_feed 表达式同形，可作索引范围约束
+  if (opts.afterTs && opts.afterTs > 0) {
+    conds.push('COALESCE(published_at, created_at) >= ?')
+    binds.push(opts.afterTs)
   }
   return { conds, binds }
 }
@@ -842,6 +856,7 @@ export async function listWeibo(
     limit?: number
     topic?: string
     pinnedFirst?: boolean
+    afterTs?: number
   } = {}
 ): Promise<ListWeiboResult> {
   const page = clampInt(opts.page, 1, 1000, 1)

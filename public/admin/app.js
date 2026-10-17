@@ -24,6 +24,16 @@ let searchFocused = false
 /* 当前路由名（'editor' 等）：判断「离开编辑器」用 */
 let currentRoute = ''
 
+/* 后台列表时间范围筛选（文章 / 微博共用）：'' = 全部。客户端只传这些语义值，
+ * 真实时间 cutoff 由服务端 listRangeCutoff 按白名单计算——前端拿时间戳拼参也改变不了口径 */
+const LIST_RANGE_CHIPS = [
+  ['', '全部'],
+  ['3d', '3 天'],
+  ['1m', '1 个月'],
+  ['6m', '半年'],
+  ['1y', '1 年'],
+]
+
 /* ---------------- 工具 ---------------- */
 function esc(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
@@ -821,10 +831,11 @@ async function viewPosts() {
   const status = q.get('status') || 'all'
   const page = parseInt(q.get('page') || '1', 10)
   const kw = q.get('q') || ''
+  const range = q.get('range') || ''
 
   let d
   try {
-    d = await api(`/admin/posts?status=${status}&page=${page}&q=${encodeURIComponent(kw)}`)
+    d = await api(`/admin/posts?status=${status}&page=${page}&q=${encodeURIComponent(kw)}${range ? `&range=${encodeURIComponent(range)}` : ''}`)
   } catch (e) {
     return handleApiErr(e)
   }
@@ -881,6 +892,9 @@ async function viewPosts() {
           )
           .join('')}
       </div>
+      <div class="tabs">
+        ${LIST_RANGE_CHIPS.map(([v, label]) => `<button class="tab${v === range ? ' is-active' : ''}" data-range="${v}" type="button">${label}</button>`).join('')}
+      </div>
       <input class="input" id="search-input" placeholder="搜索标题 / 正文…" value="${esc(kw)}">
     </div>
     <div class="panel">${rows || '<div class="empty-box">没有找到文章</div>'}</div>
@@ -888,10 +902,12 @@ async function viewPosts() {
   )
 
   const nav = (patch) => {
-    const p = new URLSearchParams({ status, page: String(page), ...(kw ? { q: kw } : {}), ...patch })
+    const p = new URLSearchParams({ status, page: String(page), ...(kw ? { q: kw } : {}), ...(range ? { range } : {}), ...patch })
+    if (!p.get('range')) p.delete('range') // 选回「全部」时把 range 从地址里摘掉，URL 保持干净
     location.hash = '#/posts?' + p.toString()
   }
   $app.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => nav({ status: b.dataset.tab, page: 1 })))
+  $app.querySelectorAll('[data-range]').forEach((b) => b.addEventListener('click', () => nav({ range: b.dataset.range, page: 1 })))
   $app.querySelectorAll('[data-vtab="cats"]').forEach((b) =>
     b.addEventListener('click', () => (location.hash = '#/posts?view=cats'))
   )
@@ -960,9 +976,10 @@ const WB_MAX_CHARS = 5000
 async function viewWeibo() {
   const q = new URLSearchParams(location.hash.split('?')[1] || '')
   const page = parseInt(q.get('page') || '1', 10)
+  const range = q.get('range') || ''
   let d
   try {
-    d = await api(`/admin/weibo?page=${page}`)
+    d = await api(`/admin/weibo?page=${page}${range ? `&range=${encodeURIComponent(range)}` : ''}`)
   } catch (e) {
     return handleApiErr(e)
   }
@@ -1010,6 +1027,11 @@ async function viewWeibo() {
   await shellView(
     'weibo',
     `<div class="page-head"><div><div class="page-title">微博</div><div class="page-sub">随手记：短文字 + 图片，不用起标题</div></div></div>
+    <div class="toolbar">
+      <div class="tabs">
+        ${LIST_RANGE_CHIPS.map(([v, label]) => `<button class="tab${v === range ? ' is-active' : ''}" data-range="${v}" type="button">${label}</button>`).join('')}
+      </div>
+    </div>
     <div class="panel wb-composer">
       <textarea class="textarea wb-input" id="wb-content" maxlength="${WB_MAX_CHARS}" placeholder="有什么新鲜事？">${esc(wbEditing?.content || '')}</textarea>
       <div class="wb-hint">支持 ⌘/Ctrl+V 粘贴截图或视频、把文件拖进来，或点下方「加图」；正文里写 #话题 即可归类并高亮，如 #晚餐日记</div>
@@ -1231,8 +1253,12 @@ async function viewWeibo() {
 
   const prev = document.getElementById('pg-prev')
   const next = document.getElementById('pg-next')
-  if (prev) prev.addEventListener('click', () => (location.hash = `#/weibo?page=${page - 1}`))
-  if (next) next.addEventListener('click', () => (location.hash = `#/weibo?page=${page + 1}`))
+  const wbHash = (p) => `#/weibo?page=${p}${range ? `&range=${encodeURIComponent(range)}` : ''}`
+  if (prev) prev.addEventListener('click', () => (location.hash = wbHash(page - 1)))
+  if (next) next.addEventListener('click', () => (location.hash = wbHash(page + 1)))
+  $app.querySelectorAll('[data-range]').forEach((b) =>
+    b.addEventListener('click', () => (location.hash = b.dataset.range ? `#/weibo?page=1&range=${encodeURIComponent(b.dataset.range)}` : '#/weibo?page=1'))
+  )
 
   $app.querySelectorAll('.wb-row').forEach((row) => {
     const id = Number(row.dataset.id)

@@ -129,7 +129,7 @@ import { fetchLinkMeta, fetchableUrl } from './linkmeta'
 import { BROWSER_UA, buildCardHtml, coverProxyHostOk, coverReferer, fetchDoubanDetail, probeRelay, resolveCardCover, sanitizeMediaItem, searchMedia, subjectIdFromUrl, validateRelay, type MediaItem } from './douban'
 import { THEMES } from './themes/registry'
 import type { CommentRow, Env, MemberRow, MemberTier, PostRow, SessionUser } from './types'
-import { clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extractWeiboTopics, fmtDateCN, isDemo, isValidQQ, jsonItemLikePattern, nicknameCooldown, normalizeLinkUrl, slugify } from './utils'
+import { clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extractWeiboTopics, fmtDateCN, isDemo, isValidQQ, jsonItemLikePattern, listRangeCutoff, nicknameCooldown, normalizeLinkUrl, slugify } from './utils'
 
 type AppEnv = { Bindings: Env; Variables: { user: SessionUser } }
 
@@ -723,6 +723,8 @@ api.get('/admin/posts', async (c) => {
     q: c.req.query('q') || undefined,
     page: clampInt(c.req.query('page'), 1, 1000, 1),
     limit: clampInt(c.req.query('limit'), 1, 100, 20),
+    // 时间范围：客户端只传白名单语义值（3d/1m/6m/1y），cutoff 在服务端算——时间戳不可注入
+    afterTs: listRangeCutoff(c.req.query('range')),
   })
   const catNames = await categoryNameMap(c.env.DB, r.items.map((p) => p.id))
   return c.json({
@@ -1009,6 +1011,8 @@ api.get('/admin/weibo', async (c) => {
     page: clampInt(c.req.query('page'), 1, 1000, 1),
     limit: clampInt(c.req.query('limit'), 1, 100, 20),
     pinnedFirst: true,
+    // 时间范围：客户端只传白名单语义值（3d/1m/6m/1y），cutoff 在服务端算——时间戳不可注入
+    afterTs: listRangeCutoff(c.req.query('range')),
   })
   const cmtCounts = await weiboCommentCountMap(c.env.DB, r.items.map((w) => w.id))
   return c.json({
