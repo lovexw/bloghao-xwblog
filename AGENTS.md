@@ -232,6 +232,8 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - 覆盖层（抽屉、弹窗）小屏下要有明确的关闭按钮，且默认不挡内容
 - 导航/页头类布局改动必须过「配置变体」：本地默认库会员是关闭的，**开启 membersEnabled 后导航会多一格会员药丸**（2026-10-11 实抓：RSS 图标上线把它挤成孤儿行）——390px 检查要覆盖会员开/关与站点模式四口径，别只换视口不换配置；wechat 主题移动端导航已是单行横滑（下拉菜单转 fixed 逃出滚动容器裁剪），改它先看这段
 
+**这一节是红线；做 UI 改动前额外读 `docs/MOBILE-UX.md`**（目标的展开与操作手册：逐面检查清单、后台「像 App」方向清单、「精简」取舍原则、候选待办）；想给前台 / 后台加「微信同款」的阅读增强、手势、聚合菜单等，先看 `docs/WECHAT-PLAYBOOK.md`（微信设计语言拆解、读写连三面缺口、插件候选总表，含**公众号 / JS-SDK / 服务号授权的能力门槛与红线**——开放性是产品定位，抄手感不抄围墙）。
+
 ## 结构速查
 
 - `src/i18n.ts`：英文测试版（内部代号 **English 0.1**，settings `edition` + `editionEnStatus` 两键）——词典 `tr(en, zh)`（**整串精确匹配，只翻系统内置文案，站长自填内容原样透传**）、英文日期四件套（`fmtDateEn/fmtDateEnShort/fmtDateTimeEn/weiboTimeEn`，与 fmtDate 同北京时间口径）、`enBetaBannerHtml` 公示横幅、`recordEditionFailure` 回退落库（tests/i18n.test.ts 直接导入）。**中文路径必须字节级不变**：`isEn(settings)`（edition=en 且 status≠fallback）为 false 时所有输出与历史版本完全一致，改共享构建器加英文分支时先跑 tests/themes.test.ts + tests/i18n.test.ts；公开页守卫在 index.ts `enGuard`——英文版渲染抛错即落库 status=fallback（全站自动回中文版）并当场用中文重渲染同一请求，后台横幅提醒，重新开启时 api.ts 重置状态；前台 JS 文案由 `<html data-edition="en">` 驱动（site.js / share-card.js 各有一份 T() 小词典，**改服务端文案记得同步客户端镜像**）
