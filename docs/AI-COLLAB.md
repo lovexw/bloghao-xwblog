@@ -77,6 +77,7 @@
 | 新增对外出口（RSS/接口/导出） | 直接输出全部字段 | 过防泄漏清单（付费墙 / 密码文 / 锁文） |
 | 改主题 / 编辑器样式 | 只改一侧 | `.ed-editor`（编辑器）与 `.rich`（文章页）镜像同改 |
 | 给分站加「更新」按钮 | 做成自动拉代码 / 自动迁移 | 更新中心**只告知 + 记录选择**，升级是一次显式部署动作（docs/UPDATING.md） |
+| 批量替换文本（sed 全仓） | `git ls-files` 不加过滤直接 sed | 先按扩展名过滤（`*.md` `*.ts` `*.js`…）——sed 会把 PNG / SVG 等二进制改坏几字节，还会给全仓文件留「幻影改动」（status 显示 M、diff 为空），清理很费劲（2026-10-17 实踩） |
 | 改版本清单结构 | 只改生成脚本 / 只改校验器 | 三处同步：`scripts/build-release.mjs`、`src/update.ts` 校验器、`tests/update.test.ts` 守卫 |
 | 发布回填 CHANGELOG 之后 | 忘了重生成 `version.json` | 跑 `npm run build:release` 并随发布提交 |
 
