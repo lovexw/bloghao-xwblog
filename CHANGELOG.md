@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+（尚未发布的内容，日常随手记入，发布时整段移入新版本小节。）
+
+## [2.6.0] - 2026-10-17
+
 ### 新增
 
 - **管理员在前台直接删评论**（2026-10-14）：文章评论区 / 留言板 / 微博评论区每条留言旁边都有「删除」键（登录管理员可见，访客 HTML 里不存在；与「回复」并排），点一下二次确认后连这条下面的回复一起删掉（评论没有回收站，不可恢复）——顺手把评论计数就地更新，删完当页立即消失，不用再回后台。写操作复用后台同一个端点（会话鉴权）
@@ -211,7 +215,8 @@
 - 运维省心：媒体库体检（未引用 / 重复文件扫描清理）、回收站（删除 30 天可找回）、一键灰度 / 闭站、定时备份与告警
 - 五套主题全部适配移动端；官方演示站每 2 小时自动重置体验
 
-[Unreleased]: https://github.com/bloghao/bloghao/compare/v2.5.1...HEAD
+[Unreleased]: https://github.com/bloghao/bloghao/compare/v2.6.0...HEAD
+[2.6.0]: https://github.com/bloghao/bloghao/compare/v2.5.1...v2.6.0
 [2.5.1]: https://github.com/bloghao/bloghao/compare/v2.5.0...v2.5.1
 [2.5.0]: https://github.com/bloghao/bloghao/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/bloghao/bloghao/compare/v2.3.0...v2.4.0
