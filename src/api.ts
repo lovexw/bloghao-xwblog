@@ -275,7 +275,7 @@ api.post('/auth/logout', async (c) => {
   return c.json({ ok: true })
 })
 
-/* ---------------- 会员（访客注册/登录，契约见 docs/DEVPLAN-2026-10-07.md 附录 A） ---------------- */
+/* ---------------- 会员（访客注册/登录，契约见 docs/archive/DEVPLAN-2026-10-07.md 附录 A） ---------------- */
 
 /** 对外视图裁剪：公开口径只有昵称/档位/积分；self = 本人视角（另给 email/username/createdAt），管理口径走 listMembersAdmin 原始行 */
 function memberView(m: MemberRow, self = false) {
@@ -375,7 +375,7 @@ api.get('/member/me', async (c) => {
   return c.json({ member: row ? memberView(row, true) : null })
 })
 
-/* 会员个人资料（/member 页会员卡，契约见 docs/DEVPLAN-2026-10-07.md）：改昵称（30 天一次）与改密码 */
+/* 会员个人资料（/member 页会员卡，契约见 docs/archive/DEVPLAN-2026-10-07.md）：改昵称（30 天一次）与改密码 */
 
 /** 抓取 QQ 头像并转存进站内图床，返回站内地址；失败返回 null（调用方容忍只存 qq 号，
  *  会员中心「重试头像」重跑同一请求补抓）。q1 主端点、q2 备用镜像，s=140 档（100 略糊、
@@ -2201,7 +2201,7 @@ api.post('/admin/backup', async (c) => {
 })
 
 /* ---------------- 整站包（B26：一键导出整站 / 一键导入还原到空站，机制 src/sitebundle.ts） ----------------
- * 设计见 docs/PROPOSAL-B26-SITE-BUNDLE.md。三条契约：只还原到空站 / 只装内容不装实例身份 /
+ * 设计见 docs/archive/PROPOSAL-B26-SITE-BUNDLE.md。三条契约：只还原到空站 / 只装内容不装实例身份 /
  * 版本不匹配一律拒绝（不做覆盖、不做合并）。全部端点都在 /admin/* 鉴权中间件之后。 */
 
 /** 一键导出整站包：流式吐 zip（与 Markdown / WXR 导出同形，不落 R2） */

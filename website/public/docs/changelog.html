@@ -172,7 +172,7 @@
 <li><strong>加固位</strong>：<code>/go</code> 中间页补 <code>frame-ancestors &#39;none&#39;</code>、编辑器预览补 <code>noopener</code>、外观查表与导出包条目名防原型链 / 路径注入、卡片链接生成时协议白名单</li>
 </ul>
 </li>
-<li>回归测试 518 → 553，冒烟 189 项同步全绿；完整报告与逐条终态见 docs/SECURITY-AUDIT-REPORT-2026-10-12.md</li>
+<li>回归测试 518 → 553，冒烟 189 项同步全绿；完整报告与逐条终态见 docs/archive/SECURITY-AUDIT-REPORT-2026-10-12.md</li>
 </ul>
 <h3 id="修复-2">修复</h3><ul>
 <li><strong>wechat 移动端两处</strong>：真 390px 下评论头的作者/会员徽标与回复按钮被挤到框内拆字换行（「作者」拆成两行）——评论头放开 flex 换行、整字不拆；顶栏转横向滚动后「分类话题」下拉被滚动容器剪掉——菜单打开时放开导航裁剪并转导航锚定定位（site.js 切 <code>snav-open</code>，<code>:has</code> 兜底无 JS）</li>

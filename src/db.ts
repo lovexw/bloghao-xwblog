@@ -109,7 +109,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   // robots.txt 整站 Disallow——用于空白模板站 / 演示性镜像 / 临时预览实例不进搜索引擎索引；
   // 与闭站不同：页面照常可访问，只是不让收录。默认关闭（正常收录）
   siteNoindex: '0',
-  // 会员体系总开关（契约见 docs/DEVPLAN-2026-10-07.md 附录 A）：关闭时前台无会员入口、/api/member/* 返回 404
+  // 会员体系总开关（契约见 docs/archive/DEVPLAN-2026-10-07.md 附录 A）：关闭时前台无会员入口、/api/member/* 返回 404
   membersEnabled: '0',
   // 排行榜展示条数上限（/rank 页与首页挂件共用，1-50）
   rankTopN: '10',
@@ -1016,7 +1016,7 @@ const SCHEMA_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: 'posts', column: 'deleted_at', ddl: 'ALTER TABLE posts ADD COLUMN deleted_at INTEGER' },
   { table: 'weibo', column: 'deleted_at', ddl: 'ALTER TABLE weibo ADD COLUMN deleted_at INTEGER' },
   { table: 'pages', column: 'deleted_at', ddl: 'ALTER TABLE pages ADD COLUMN deleted_at INTEGER' },
-  // 会员体系（docs/DEVPLAN-2026-10-07.md）：评论挂会员身份（0 = 游客）+ 文章可见档位（all | member | coffee | top）
+  // 会员体系（docs/archive/DEVPLAN-2026-10-07.md）：评论挂会员身份（0 = 游客）+ 文章可见档位（all | member | coffee | top）
   { table: 'comments', column: 'member_id', ddl: 'ALTER TABLE comments ADD COLUMN member_id INTEGER NOT NULL DEFAULT 0' },
   { table: 'posts', column: 'min_tier', ddl: "ALTER TABLE posts ADD COLUMN min_tier TEXT NOT NULL DEFAULT 'all'" },
   // 文章访问密码（src/protect.ts）：salt:hash（PBKDF2），空 = 未加密；解锁 Cookie 的 HMAC key 就用它
@@ -1037,7 +1037,7 @@ const SCHEMA_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: 'categories', column: 'description', ddl: "ALTER TABLE categories ADD COLUMN description TEXT NOT NULL DEFAULT ''" },
 ]
 const SCHEMA_TABLES = [
-  // 会员体系（2026-10-07 起，见 docs/DEVPLAN-2026-10-07.md 附录 A 契约）：
+  // 会员体系（2026-10-07 起，见 docs/archive/DEVPLAN-2026-10-07.md 附录 A 契约）：
   // members 与 users/sessions 彻底分离（users 只承载管理员，游客注册混入会破坏 /api/auth/setup 首装判断）
   `CREATE TABLE IF NOT EXISTS members (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1341,7 +1341,7 @@ export async function seedWelcomePost(db: D1Database, authorId: number): Promise
     .run()
 }
 
-/* ---------------- 会员（访客注册身份，与 users 管理员彻底分离，契约见 docs/DEVPLAN-2026-10-07.md 附录 A） ---------------- */
+/* ---------------- 会员（访客注册身份，与 users 管理员彻底分离，契约见 docs/archive/DEVPLAN-2026-10-07.md 附录 A） ---------------- */
 
 export async function getMemberByUsername(db: D1Database, username: string): Promise<MemberRow | null> {
   return db.prepare('SELECT * FROM members WHERE username = ?').bind(username).first<MemberRow>()
