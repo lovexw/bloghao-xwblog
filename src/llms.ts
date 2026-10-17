@@ -10,8 +10,9 @@
  *  - 访问密码文（password_hash 非空）：索引照常出作者摘要（与 RSS description 同口径），
  *    llms-full 只出摘要 + 加密说明；其 /post/:slug.md 直接 404（比 RSS 更严，与关键词搜索
  *    「整体退出」同口径——pages.ts renderPostMarkdown）；
- *  - 演示站 / 全站 noindex（settings.siteNoindex）：index.ts 出桩（只有站名与说明，不列内容），
- *    与 robots.txt 整站 Disallow 同口径。
+ *  - 演示站 / 全站 noindex（settings.siteNoindex）/ AI 策略 deny 档（readAiPolicy）：index.ts 出桩
+ *    （只有站名与说明，不列内容），与 robots.txt 整站 Disallow 同口径；deny 档时 .md 镜像同样
+ *    404、文章页 head 不再声明 alternate——AI 面随策略整体关闭，别只关 llms 留 .md。
  */
 import type { PostRow, SettingsMap } from './types'
 import { isEn, tr } from './i18n'
@@ -111,12 +112,16 @@ export function buildLlmsFullTxt(settings: SettingsMap, posts: PostRow[], siteUr
   return frame(settings, siteUrl, middle)
 }
 
-/** 演示站 / 全站 noindex 的桩输出：与 robots.txt 整站 Disallow 同口径，不列任何内容 */
-export function buildLlmsStub(settings: SettingsMap, siteUrl: string): string {
+/** 演示站 / 全站 noindex / AI 策略 deny 档的桩输出：与 robots.txt 整站 Disallow 同口径，不列任何内容。
+ * aiDenied=true 时文案指向「不允许 AI 抓取」而非演示（对真实站点诚实） */
+export function buildLlmsStub(settings: SettingsMap, siteUrl: string, aiDenied = false): string {
   const en = isEn(settings)
-  return `# ${oneLine(tr(en, settings.siteName))}\n\n> ${
-    en
+  const reason = aiDenied
+    ? en
+      ? 'This site does not permit AI crawlers (see robots.txt).'
+      : '本站已声明不允许 AI 抓取（见 robots.txt），此处不提供内容。'
+    : en
       ? 'This site is a demo / preview instance and does not expose content to AI crawlers.'
       : '本站为演示 / 预览实例，不向 AI 爬虫暴露内容。'
-  }\n`
+  return `# ${oneLine(tr(en, settings.siteName))}\n\n> ${reason}\n`
 }

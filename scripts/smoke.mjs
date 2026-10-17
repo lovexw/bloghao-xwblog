@@ -1501,6 +1501,21 @@ try {
       results.push(['AI 面：llms-full.txt 出正文且标签剥净', fullOk])
       console.log(`  ${fullOk ? '✓' : '✗'} AI 面：llms-full.txt 出正文且标签剥净`)
 
+      // AI 策略 deny 档：AI 面整体关闭——llms 出桩（文案指向策略）、.md 404；恢复后回正常
+      const denyPut = await putSettings({ aiPolicy: 'deny' })
+      const denyLlms = await raw('GET', `/llms.txt?_smoke=${Date.now()}`)
+      const denyLlmsBody = await denyLlms.text()
+      const denyMd = await raw('GET', `/post/${encodeURIComponent(mdSlug)}.md?_smoke=${Date.now()}`)
+      const denyOk =
+        denyPut.status === 200 &&
+        denyLlms.status === 200 &&
+        denyLlmsBody.includes('不允许 AI 抓取') &&
+        !denyLlmsBody.includes('演示') &&
+        denyMd.status === 404
+      results.push(['AI 面：aiPolicy=deny 时 llms 出桩 + .md 404', denyOk])
+      console.log(`  ${denyOk ? '✓' : '✗'} AI 面：aiPolicy=deny 时 llms 出桩 + .md 404`)
+      await putSettings({ aiPolicy: 'allow' })
+
       // 密码文：.md 一律 404（与不存在同响应，不透露存在性）
       const pwCreate = await raw('POST', '/api/admin/posts', {
         headers: { 'Content-Type': 'application/json', Cookie: cookie },

@@ -66,7 +66,7 @@ import type { MemberData, RankData } from './themes/registry'
 import type { Env, PostRow, SessionUser, SettingsMap } from './types'
 import { packMatrix, qrMatrix } from './qrcode'
 import { clampInt, esc, excerpt, isDemo, readingMinutes, siteVisibleCutoff, teaserHtml } from './utils'
-import { analyticsOrigin, breadcrumbJsonLd, isSpeculativeRequest } from './seo'
+import { analyticsOrigin, breadcrumbJsonLd, isSpeculativeRequest, readAiPolicy } from './seo'
 import { needsFontSrc } from './skinpack'
 
 type C = Context<{ Bindings: Env; Variables: { user: SessionUser | null } }>
@@ -528,7 +528,10 @@ export async function renderPostMarkdown(c: C, slug: string): Promise<Response> 
   const settings = await getSettings(c.env.DB)
   const row = await getPostBySlug(c.env.DB, slug)
   const visibleCutoff = siteVisibleCutoff(settings)
+  // AI 策略 deny 档：.md 镜像属 AI 面，随策略整体 404（与 llms 出桩、robots 全拒同口径）
+  const aiDenied = readAiPolicy(settings.aiPolicy) === 'deny'
   const hidden =
+    aiDenied ||
     !row ||
     row.status !== 'published' ||
     isProtected(row) ||

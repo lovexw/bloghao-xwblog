@@ -7,7 +7,7 @@ import { replaceEmoji } from './emoji'
 import { appearanceHeadStyle } from './appearance'
 import { customCssHeadStyle } from './skinpack'
 import { ipRegionLabel } from './ipregion'
-import { seoHeadHtml } from './seo'
+import { readAiPolicy, seoHeadHtml } from './seo'
 import { enBetaBannerHtml, fmtDateEn, fmtDateEnShort, fmtDateTimeEn, isEn, plural, tr, weiboTimeEn } from './i18n'
 
 // 英文测试版（English 0.1）的词典与日期随共享构建器一起再导出：主题与 pages.ts 只认 render 一个进口
@@ -109,7 +109,7 @@ ${jsonLdHtml}
 ${o.settings.faviconUrl ? `<link rel="icon" href="${esc(absUrl(base, o.settings.faviconUrl))}">` : `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`}
 ${base ? `<link rel="alternate" type="application/rss+xml" title="${esc(siteName)}" href="${esc(base)}/rss.xml">` : ''}
 ${base ? `<link rel="alternate" type="application/feed+json" title="${esc(siteName)}" href="${esc(base)}/feed.json">` : ''}
-${base && o.path.startsWith('/post/') ? `<link rel="alternate" type="text/markdown" title="${esc(o.title || siteName)}" href="${esc(base + o.path)}.md">` : ''}
+${base && o.path.startsWith('/post/') && readAiPolicy(o.settings.aiPolicy) !== 'deny' ? `<link rel="alternate" type="text/markdown" title="${esc(o.title || siteName)}" href="${esc(base + o.path)}.md">` : ''}
 <style>${o.css}</style>
 ${appearanceHeadStyle(o.settings)}
 ${customCssHeadStyle(o.settings)}

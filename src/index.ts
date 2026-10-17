@@ -16,7 +16,7 @@ import { mergeUnlockCookie, PP_COOKIE, PP_TTL_MS, verifyPostPassword } from './p
 import { installedManifest, pluginFileKey, readInstalled } from './pluginpkg'
 import { buildJsonFeed, buildRss, buildSitemap } from './rss'
 import { siteBase } from './render'
-import { buildRobotsTxt } from './seo'
+import { buildRobotsTxt, readAiPolicy } from './seo'
 import { purgeVisits } from './stats'
 import { purgeTrash } from './trash'
 import { refreshFootStats } from './db'
@@ -280,13 +280,16 @@ app.get('/robots.txt', async (c) => {
 /* ---------------- AI 索引导读（llms.txt / llms-full.txt，B28）----------------
  * 新兴 AI 抓取导读约定（llmstxt.org；Cloudflare 阻止响应的内置放行路径）。文章清单走 listPosts
  * 的同一份公开口径（status=published + 站点可见窗口 + 软删过滤），防泄漏清单在 src/llms.ts 头注；
- * 演示站 / siteNoindex 出桩（与 robots.txt 整站 Disallow 同口径）；两路径已进 pagecache 数据白名单 */
+ * 演示站 / siteNoindex / AI 策略 deny 档出桩（与 robots.txt 整站 Disallow 同口径）；两路径已进
+ * pagecache 数据白名单 */
 const llmsHandler = (full: boolean): PublicHandler => async (c) => {
   const settings = await getSettings(c.env.DB)
   const siteUrl = siteBase(settings, new URL(c.req.url).origin)
   c.header('Content-Type', 'text/markdown; charset=utf-8')
   c.header('Cache-Control', 'public, max-age=600')
-  if (isDemo(c.env) || settings.siteNoindex === '1') return c.body(buildLlmsStub(settings, siteUrl))
+  // AI 策略 deny 档：llms 面本就是给 AI 看的导读，robots 全拒时整体关闭（桩文案指向策略而非演示）
+  const aiDenied = readAiPolicy(settings.aiPolicy) === 'deny'
+  if (isDemo(c.env) || settings.siteNoindex === '1' || aiDenied) return c.body(buildLlmsStub(settings, siteUrl, aiDenied))
   const [feed, pages] = await Promise.all([
     listPosts(c.env.DB, { status: 'published', limit: full ? 50 : 100, afterTs: siteVisibleCutoff(settings) }),
     listPages(c.env.DB, { status: 'published' }),

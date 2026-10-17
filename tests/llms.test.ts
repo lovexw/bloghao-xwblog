@@ -83,3 +83,11 @@ test('llms 桩：演示站 / siteNoindex 只出站名与说明，不列任何内
   assert.ok(out.includes('不向 AI 爬虫暴露内容'))
   assert.ok(!out.includes('rss.xml') && !out.includes('##'))
 })
+
+test('llms 桩：AI 策略 deny 档文案指向策略而非演示', () => {
+  const out = buildLlmsStub(S, SITE, true)
+  assert.ok(out.startsWith('# 测试站'))
+  assert.ok(out.includes('不允许 AI 抓取'))
+  assert.ok(!out.includes('演示'), '真实站点的拒绝文案不冒充演示站')
+  assert.ok(!out.includes('rss.xml') && !out.includes('##'))
+})
