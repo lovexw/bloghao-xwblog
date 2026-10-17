@@ -15,6 +15,10 @@
 # 复访者每次导航都要发条件请求验证（跨境访客一个 RTT）。site.js / share-card.js 改动随部署
 # 发布且无构建链无版本号，max-age 只给 1 小时时效窗口（部署后旧 JS 最多滞后 1 小时）；
 # emoji PNG 是 scripts/fetch-emoji.mjs 的稳定产物（码点同名不改内容），一年 immutable。
+# 后台 Service Worker（C10）：必须每次校验最新版——SW 自身被长缓存会让卸载/更新失效
+/admin/sw.js
+  Cache-Control: no-cache
+
 /site.js
   Cache-Control: public, max-age=3600
 /share-card.js

@@ -113,6 +113,13 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - sessions / member_sessions 落库的是 **SHA-256(token)**（`tokenHash`），Cookie 里才是原文：库泄露 ≠ 会话可重放。会话相关查询/删除一律先过 tokenHash，别拿 Cookie 里的明文 token 直查直删（2026-10 切换，上线时全部旧登录态失效一次属预期）
 - 改密码后「踢其他设备、保留当前会话」统一走 auth.ts 的 `destroyOtherSessions`（管理员，api.ts PUT /admin/password）/ `destroyOtherMemberSessions`（会员）——keepToken 是 Cookie 里的**明文** token，函数内部先 `tokenHash` 再比对；**别在端点里手写 `DELETE ... token != ?` 拿明文直比**（库里是哈希，恒不相等 = 删光全部会话、把自己也踢下线——2026-10-16 修复，tests/auth.test.ts 真库用例守着）
 
+**后台 PWA（public/admin/sw.js + manifest.webmanifest，C10，2026-10-17）**
+
+- 定位：只为「添加到主屏幕」的安装资格存在（manifest + 两个 PNG 图标 + 极简 SW）。**SW 刻意只透传不缓存**——后台无构建链「改完即生效」是产品定位，任何资源缓存都会造成幽灵旧版；要加缓存策略先推翻这条产品红线
+- 三处同步：`public/admin/manifest.webmanifest`（scope=/admin/）+ `public/admin/sw.js`（fetch 透传 + 离线 503）+ admin/index.html 的 manifest/apple-touch-icon/theme-color 三 link；SW 注册在 app.js 顶层（失败静默）；`public/_headers` 给 /admin/sw.js 单独 no-cache（SW 自身被长缓存 = 更新失效；docker-poc 的 serveStatic 动态解析 _headers 自动跟随）
+- 图标 PNG 是一次性 node 脚本产物（像素绘制 B 字标 + zlib），无运行时生成；改图标直接换文件
+- admin/index.html 的 CSP meta 是 default-src 'self'——manifest 与 SW 同源 ✓，给 index.html 加第三方域资源前先想 CSP
+
 **两步验证与活跃会话（tests/totp.test.ts，机制在 src/totp.ts，B13，2026-10-17）**
 
 - TOTP 是 RFC 6238 零依赖实现（base32 + crypto.subtle HMAC-SHA1）：secret 落 base32、30s 步长、6 位、验证窗口 ±1；**校验只走 `totp.ts verifyTotp`**（safeEqual 恒时比较、三次窗口全跑）——别在端点手写 % 1e6 比对；测试用 RFC 6238 §B 官方向量（T=59s → 287082）

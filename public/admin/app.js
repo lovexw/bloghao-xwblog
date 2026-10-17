@@ -186,6 +186,12 @@ let navSeq = 0
 let pendingRoute = null
 
 /* ---------------- 登录 / 初始化 ---------------- */
+// PWA 可安装（C10）：注册极简 Service Worker（只透传不缓存——「改完即生效」不破）
+// 注册失败静默（file:// 或老浏览器），安装资格由 manifest + 图标满足
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  navigator.serviceWorker.register('/admin/sw.js').catch(() => {})
+}
+
 function authView(mode) {
   pendingRoute = null // 登录态下不允许任何迟到的 shell 视图渲染
   const isSetup = mode === 'setup'
