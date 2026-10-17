@@ -655,16 +655,21 @@ api.get('/admin/plaza-stats', async (c) => {
   const token = (settings.plazaToken || '').trim()
   if (!token) return jsonError('还没填广场站点 Token（设置 → 服务端插件）')
   const endpoint = (settings.plazaEndpoint || PLAZA_OFFICIAL_HUB).trim().replace(/\/+$/, '')
-  if (!/^https:\/\//i.test(endpoint)) return jsonError('广场地址无效（需 https:// 开头）')
+  // 运行时复核公网地址并走 fetchPublicResource 逐跳复查（裸 fetch 自动跟跳是 SSRF 面，
+  // 与出网安全防线同口径；也兜住配置被旁路写脏的形态——落库校验不是最后防线）
+  const target = fetchableUrl(`${endpoint}/api/site-stats`)
+  if (!target) return jsonError('广场地址无效（需公网 https 地址）', 502)
+  const r = await fetchPublicResource(target.href, {
+    maxBytes: 256 * 1024,
+    timeoutMs: 10_000,
+    headers: { 'x-plaza-token': token },
+  })
+  // fetchPublicResource 失败一律 null（网络异常与非 2xx 不区分），文案合并保证可行动
+  if (!r) return jsonError('广场 hub 连不上或 Token 无效，请检查 Token 后稍后再试', 502)
   try {
-    const res = await fetch(`${endpoint}/api/site-stats`, {
-      headers: { 'x-plaza-token': token },
-      signal: AbortSignal.timeout(10_000),
-    })
-    if (!res.ok) return jsonError(`广场 hub 返回 ${res.status}，请检查 Token 是否有效`, 502)
-    return c.json((await res.json()) as Record<string, unknown>)
+    return c.json(JSON.parse(new TextDecoder().decode(r.buf)) as Record<string, unknown>)
   } catch {
-    return jsonError('广场 hub 连不上，稍后再试', 502)
+    return jsonError('广场 hub 返回异常，稍后再试', 502)
   }
 })
 
