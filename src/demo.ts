@@ -10,7 +10,7 @@
  * 种子数据是站点自己的内容，不依赖外部服务——TG/webhook 等外发钩子在 DEMO_MODE 下被禁用（src/hooks.ts）。
  */
 import { hashPassword } from './auth'
-import { DEFAULT_SETTINGS, invalidateSharedSettings } from './db'
+import { DEFAULT_SETTINGS, invalidateSharedSettings, recountWeiboCount, refreshOnThisDay } from './db'
 import { buildDemoPlan, DEMO_ADMIN, DEMO_RESET_CRON } from './demo-content'
 import { demoImages } from './demo-images'
 import SCHEMA_SQL from '../schema.sql'
@@ -327,6 +327,10 @@ async function seedAll(env: Env): Promise<void> {
     .prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
     .bind(SEEDED_KEY, String(Date.now()))
     .run()
+  // 派生记账位按新库重建（2026-10-18 读放大治理）：wbPubCount / onThisDay 是运行时快照，
+  // 重灌绕过了单条写入口，带着上一轮的旧值会给首页与微博页错误的分页总数 / 往年今日
+  await recountWeiboCount(db)
+  await refreshOnThisDay(db).catch(() => {})
   // 播种写了一堆 settings（认领位 / 完成位），失效 settings 共享快照——重灌后的请求
   // 必须看到演示站的全新口径，不能拿到重灌前的旧值
   await invalidateSharedSettings(db)

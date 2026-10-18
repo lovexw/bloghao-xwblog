@@ -589,12 +589,34 @@ export function buildOnThisDayItems(postRows: OnThisDayRow[], weiboRows: OnThisD
 /**
  * 往年今日已发布的内容：文章 + 微博合并，时间倒序全量返回（封顶 ON_THIS_DAY_MAX）。
  * 只匹配更早的年份（今年的今天不算），没有命中返回空数组；卡片折叠区负责承载多条目。
- * 结果按天做进程内缓存：首页每次渲染不必重复全表扫（数据变了最多延迟 10 分钟）。
+ * 结果按天缓存在 settings（键 onThisDay，JSON 带 dayKey 北京日期守卫）：两侧查询按
+ * strftime 匹配月-日，任何表达式索引都吃不到，是随微博条数线性增长的全表扫——实测
+ * 1900 条微博时 113 次/天 21 万行读，上万条时百万级。首页渲染改读快照 0 行读，只有
+ * 北京日期翻天后的第一个渲染重算一次并回填；每晚备份 cron 的 refreshOnThisDay 顺带
+ * 重算（覆盖当天对往年内容的编辑），其余时间连翻页连爬虫都走快照。
  */
 export async function listOnThisDay(db: D1Database): Promise<OnThisDayItem[]> {
   // 缓存 key 也按北京时间的日期翻日（fmtDate 即 +8h 口径）
   const dayKey = fmtDate(Date.now())
-  if (otdCache && otdCache.day === dayKey && Date.now() - otdCache.at < 10 * 60_000) return otdCache.items
+  const cached = parseOnThisDaySnapshot((await getSettings(db)).onThisDay)
+  if (cached && cached.day === dayKey) return cached.items
+  return refreshOnThisDay(db, dayKey)
+}
+
+/** 快照解析：脏 JSON / 形状不对一律当没配（同 appearance 等净化口径，宁重算勿报错） */
+function parseOnThisDaySnapshot(raw: string | undefined): { day: string; items: OnThisDayItem[] } | null {
+  if (!raw) return null
+  try {
+    const v = JSON.parse(raw) as { day?: unknown; items?: unknown }
+    if (typeof v?.day !== 'string' || !Array.isArray(v?.items)) return null
+    return { day: v.day, items: v.items as OnThisDayItem[] }
+  } catch {
+    return null
+  }
+}
+
+/** 计算 + 回填当天的往年今日快照：listOnThisDay 翻天首渲与每晚 cron 共用 */
+export async function refreshOnThisDay(db: D1Database, dayKey = fmtDate(Date.now())): Promise<OnThisDayItem[]> {
   // 两侧比较基准都要 +28800 对齐北京时间：'now' 是 UTC 墙钟，直接比会让北京 0-8 点匹配到「昨天」的历史
   const [postsRes, weiboRes] = await db.batch([
     db
@@ -617,10 +639,13 @@ export async function listOnThisDay(db: D1Database): Promise<OnThisDayItem[]> {
     (weiboRes.results ?? []) as unknown as OnThisDayRow[],
     Date.now()
   )
-  otdCache = { day: dayKey, at: Date.now(), items }
+  await db
+    .prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .bind('onThisDay', JSON.stringify({ day: dayKey, items }))
+    .run()
+  await invalidateSharedSettings(db)
   return items
 }
-let otdCache: { day: string; at: number; items: OnThisDayItem[] } | null = null
 
 
 export async function relatedPosts(db: D1Database, post: PostRow, limit = 3, afterTs = 0): Promise<PostRow[]> {
@@ -908,15 +933,77 @@ export async function listWeibo(
   const order = opts.pinnedFirst
     ? 'ORDER BY pinned DESC, COALESCE(published_at, created_at) DESC, id DESC'
     : 'ORDER BY COALESCE(published_at, created_at) DESC, id DESC'
-  const [itemsRes, countRes] = await Promise.all([
-    db
-      .prepare(`SELECT * FROM weibo ${whereSql} ${order} LIMIT ? OFFSET ?`)
-      .bind(...binds, limit, (page - 1) * limit)
-      .all<WeiboRow>(),
-    db.prepare(`SELECT COUNT(*) AS n FROM weibo ${whereSql}`).bind(...binds).first<{ n: number }>(),
-  ])
-  const total = countRes?.n ?? 0
+  const itemsRes = await db
+    .prepare(`SELECT * FROM weibo ${whereSql} ${order} LIMIT ? OFFSET ?`)
+    .bind(...binds, limit, (page - 1) * limit)
+    .all<WeiboRow>()
+  // 分页总数走记账位快路径（D1 读放大，2026-10-18）：COUNT(*) 对 status 前缀索引也要扫全部
+  // 已发布条目（N 行/次），微博页/首页微博流/公开接口每次渲染各一发，爬虫翻页时乘上分页数——
+  // 实测 1900 条微博时这一条查询一天烧 224 万行读（当日额度的 42%）。公开口径（status='published'
+  // 且无话题/窗口过滤）改读 settings 快照 0 行读，写路径 bumpWeiboCount* 增量维护、
+  // 每晚备份 cron recountWeiboCount 校准；带过滤的口径（话题/可见窗口/后台）照旧真 COUNT。
+  let total: number | null = null
+  if (opts.status === 'published' && !opts.topic && !(opts.afterTs && opts.afterTs > 0)) {
+    const cached = Number((await getSettings(db)).wbPubCount)
+    if (Number.isFinite(cached) && cached >= 0) total = cached
+  }
+  if (total === null) {
+    const countRes = await db.prepare(`SELECT COUNT(*) AS n FROM weibo ${whereSql}`).bind(...binds).first<{ n: number }>()
+    total = countRes?.n ?? 0
+    if (opts.status === 'published' && !opts.topic && !(opts.afterTs && opts.afterTs > 0)) {
+      // 首个到达的渲染播种记账位（upsert 幂等，并发 isolate 重复算也只是同值覆盖）
+      await db
+        .prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+        .bind(WB_PUB_COUNT_KEY, String(total))
+        .run()
+      await invalidateSharedSettings(db)
+    }
+  }
   return { items: itemsRes.results ?? [], total, page, totalPages: Math.max(1, Math.ceil(total / limit)) }
+}
+
+/* ---------------- 微博总数记账位（settings.wbPubCount） ---------------- */
+
+const WB_PUB_COUNT_KEY = 'wbPubCount'
+
+/** 重算并落库已发布微博总数（= listWeibo 公开口径的 COUNT）：每晚备份 cron 校准一次防增量漂移；
+ *  整站包导入 / 清空本站 / 演示站播种收尾也各调一次（这些路径绕过单条写入口） */
+export async function recountWeiboCount(db: D1Database): Promise<void> {
+  const r = await db
+    .prepare("SELECT COUNT(*) AS n FROM weibo WHERE deleted_at IS NULL AND status = 'published'")
+    .first<{ n: number }>()
+  await db
+    .prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .bind(WB_PUB_COUNT_KEY, String(r?.n ?? 0))
+    .run()
+  await invalidateSharedSettings(db)
+}
+
+/** 增减记账位（写路径调用）：键缺失时是 no-op（留给热路径首次渲染播种）。调用方保证
+ *  delta 与「该语句执行时刻」的行状态一致——发布跃迁 +1 / 转回草稿 -1 */
+export async function bumpWeiboCount(db: D1Database, delta: number): Promise<void> {
+  if (!delta) return
+  await db
+    .prepare(`UPDATE settings SET value = CAST(CAST(value AS INTEGER) + CAST(? AS INTEGER) AS TEXT) WHERE key = '${WB_PUB_COUNT_KEY}'`)
+    .bind(delta)
+    .run()
+  await invalidateSharedSettings(db)
+}
+
+/** 按微博 id 条件增减：EXISTS 在该语句执行时刻求值——软删**前**传 -1（行还活着）、
+ *  恢复**后**传 +1（行已复活）；行不存在 / 非已发布 / 键未播种都自动 no-op，
+ *  省一次 getWeiboById 前置查询 */
+export async function bumpWeiboCountById(db: D1Database, delta: number, id: number): Promise<void> {
+  if (!delta) return
+  await db
+    .prepare(
+      `UPDATE settings SET value = CAST(CAST(value AS INTEGER) + CAST(? AS INTEGER) AS TEXT)
+       WHERE key = '${WB_PUB_COUNT_KEY}'
+         AND EXISTS (SELECT 1 FROM weibo WHERE id = ? AND status = 'published' AND deleted_at IS NULL)`
+    )
+    .bind(delta, id)
+    .run()
+  await invalidateSharedSettings(db)
 }
 
 /**
@@ -1188,6 +1275,9 @@ const SCHEMA_TRIGGERS = [
     INSERT INTO weibo_fts(rowid, content) VALUES (new.id, new.content);
   END`,
 ]
+/** FTS 索引非空复核的节流间隔（ensureSchema）：6 小时一次，见该块注释 */
+const FTS_CHECK_INTERVAL_MS = 6 * 60 * 60_000
+
 // 导出供 tests/feed-index.test.ts 做双份登记镜像守卫
 export const SCHEMA_INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_comments_weibo ON comments (weibo_id, created_at)',
@@ -1220,6 +1310,10 @@ export const SCHEMA_INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_weibo_feed ON weibo (status, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL',
   'CREATE INDEX IF NOT EXISTS idx_weibo_feed_pinned ON weibo (status, pinned DESC, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL',
   'CREATE INDEX IF NOT EXISTS idx_posts_feed ON posts (status, pinned DESC, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL',
+  // 相邻文章（上一篇/下一篇）专用：查询按纯时间排序、不带 pinned，idx_posts_feed 的 pinned
+  // 前缀排不了纯时间序（SQLite 结构匹配失败 → 全表扫 + 临时 B-tree，实测每篇文页 330 行读）。
+  // 与 idx_posts_feed 同 WHERE、少 pinned 一列——多这一个索引的写放大可忽略（posts 写频极低）
+  'CREATE INDEX IF NOT EXISTS idx_posts_chrono ON posts (status, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL',
 ]
 
 /** 表列清单（PRAGMA table_info）：ensureSchema 迁移与整站包版本比对共用。
@@ -1269,10 +1363,26 @@ export async function ensureSchema(db: D1Database): Promise<void> {
   // 会让 ≥3 码点搜索静默无结果，这一探测兜住所有恢复路径（posts_fts_docsize 每个已索引
   // 文档恰好一行，空索引恒为 0；直接查 posts_fts 读的是原表，测不出索引空）。触发器要在场
   // 才能保证增量，所以这步必须排在 SCHEMA_TRIGGERS 之后。
+  //
+  // 复核按 ftsCheckedAt 节流（2026-10-18 读放大治理）：docsize COUNT 对每个 isolate 冷启动
+  // 各一发，实测 217 篇文章时 2290 次冷启动/天 = 50 万行读（当日额度 10%）。记账位在场时
+  // 每 6 小时才真复核一次——空索引的成因是「settings 回来了、FTS 表没回来」的恢复类操作，
+  // 整站包导入 / 清空本站收尾各有重播种兜底，手工 D1 恢复最多延迟 6h 自愈，可接受。
   let needFtsRebuild = !(await db.prepare("SELECT value FROM settings WHERE key = 'ftsSeeded'").first<{ value: string }>())
   if (!needFtsRebuild) {
-    const docsize = await db.prepare('SELECT COUNT(*) AS n FROM posts_fts_docsize').first<{ n: number }>().catch(() => ({ n: 0 }))
-    needFtsRebuild = !docsize || docsize.n === 0
+    const checkedAt = Number((await db.prepare("SELECT value FROM settings WHERE key = 'ftsCheckedAt'").first<{ value: string }>())?.value)
+    if (!(Number.isFinite(checkedAt) && checkedAt > 0 && Date.now() - checkedAt < FTS_CHECK_INTERVAL_MS)) {
+      const docsize = await db.prepare('SELECT COUNT(*) AS n FROM posts_fts_docsize').first<{ n: number }>().catch(() => ({ n: 0 }))
+      if (!docsize || docsize.n === 0) {
+        needFtsRebuild = true
+      } else {
+        // 复核通过才记账：空索引走 rebuild，下个冷启动再复核直到索引真的有了
+        await db
+          .prepare("INSERT INTO settings (key, value) VALUES ('ftsCheckedAt', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+          .bind(String(Date.now()))
+          .run()
+      }
+    }
   }
   if (needFtsRebuild) {
     try {

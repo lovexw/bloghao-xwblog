@@ -287,6 +287,8 @@ test('BUNDLE_SETTINGS_SKIP：密钥与实例态键一律不进包', () => {
     assert.ok(BUNDLE_SETTINGS_SKIP.includes(k), k)
   }
   for (const k of ['siteUrl', 'pageCacheEpoch', 'bundleImport']) assert.ok(BUNDLE_SETTINGS_SKIP.includes(k), k)
+  // 运行时派生快照（2026-10-18 读放大治理）：带着旧实例的值走反而是错的，导入收尾各有重算兜底
+  for (const k of ['wbPubCount', 'onThisDay', 'ftsCheckedAt']) assert.ok(BUNDLE_SETTINGS_SKIP.includes(k), k)
   // users 是实例身份，不进包（备份表清单里有它，整站包故意去掉）
   assert.equal((BUNDLE_TABLES as readonly string[]).includes('users'), false)
   assert.equal((BUNDLE_TABLES as readonly string[]).includes('settings'), true)

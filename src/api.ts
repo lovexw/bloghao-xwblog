@@ -32,6 +32,8 @@ import {
   createCategory,
   categoryNameMap,
   createMember,
+  bumpWeiboCount,
+  bumpWeiboCountById,
   DEFAULT_SETTINGS,
   getCategoryById,
   getFriendLinkById,
@@ -1231,6 +1233,8 @@ api.post('/admin/weibo', async (c) => {
     )
     .run()
   const row = await getWeiboById(c.env.DB, Number(res.meta.last_row_id))
+  // 微博总数记账位（settings.wbPubCount）：listWeibo 分页 COUNT 的读放大治理，见 db.ts
+  if (p.status === 'published') await bumpWeiboCount(c.env.DB, 1)
   // 广播微博发布事件（服务端插件钩子，见 src/hooks.ts）：新建即发布才算
   if (p.status === 'published' && row) {
     c.executionCtx.waitUntil(
@@ -1258,6 +1262,9 @@ api.put('/admin/weibo/:id', async (c) => {
   )
     .bind(p.content, JSON.stringify(p.images), video, JSON.stringify(p.topics), p.status, pinned, publishedAt, Date.now(), id)
     .run()
+  // 微博总数记账位：状态跃迁才增减（草稿→发布 +1，发布→草稿 -1），原状态不变不扰
+  if (p.status === 'published' && existing.status !== 'published') await bumpWeiboCount(c.env.DB, 1)
+  else if (existing.status === 'published' && p.status !== 'published') await bumpWeiboCount(c.env.DB, -1)
   // 编辑已发布微博（含转回草稿）→ 页面边缘缓存作废；草稿→发布的跃迁由 fireWeiboPublished 附带清理
   if (existing.status === 'published') c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   const row = await getWeiboById(c.env.DB, id)
@@ -1300,6 +1307,9 @@ api.post('/admin/weibo/:id/pin', async (c) => {
 api.delete('/admin/weibo/:id', async (c) => {
   const id = parseId(c.req.param('id'))
   if (!id) return jsonError('这条微博不存在', 404)
+  // 微博总数记账位：条件增减按「本语句执行时刻」求值，必须排在软删**之前**（删后行就不是
+  // published 存活态了，EXISTS 判不中）；行非已发布时自动 no-op
+  await bumpWeiboCountById(c.env.DB, -1, id)
   // 软删进回收站（src/trash.ts）：评论保留，恢复时一并跟回；彻底删除才级联清掉
   await c.env.DB.prepare('UPDATE weibo SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').bind(Date.now(), id).run()
   // 广场下架广播：微博若曾同步 hub（ref = 微博 id），软删后摘除（未收录时 hub 空删幂等）
@@ -1738,6 +1748,9 @@ api.post('/admin/trash/:type/:id/restore', async (c) => {
       .bind(id)
       .run()
     if ((res.meta.changes ?? 0) !== 1) return jsonError('回收站里没有这条内容', 404)
+    // 微博总数记账位：条件增减按「本语句执行时刻」求值，必须排在恢复**之后**（此时行已复活，
+    // published 存活态判得中）；行非已发布时自动 no-op
+    await bumpWeiboCountById(c.env.DB, 1, id)
   } else {
     const res = await c.env.DB
       .prepare(`UPDATE ${table} SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL`)

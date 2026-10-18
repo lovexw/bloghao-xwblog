@@ -19,7 +19,7 @@ import { siteBase } from './render'
 import { buildRobotsTxt, readAiPolicy } from './seo'
 import { purgeVisits } from './stats'
 import { purgeTrash } from './trash'
-import { refreshFootStats } from './db'
+import { recountWeiboCount, refreshFootStats, refreshOnThisDay } from './db'
 import type { Env, SessionUser } from './types'
 import { fmtDate, isDemo, siteVisibleCutoff } from './utils'
 
@@ -415,6 +415,10 @@ export default {
           await purgeTrash(env.DB).catch((e) => console.error('purgeTrash failed:', e))
           // 页脚「站点足迹」统计夜更（db.ts refreshFootStats，页脚名片读 settings.siteFoot）
           await refreshFootStats(env.DB).catch((e) => console.error('refreshFootStats failed:', e))
+          // 派生记账位夜更校准（2026-10-18 读放大治理）：wbPubCount 对增量计数做全量校准防漂移；
+          // onThisDay 顺带重算，覆盖当天对往年内容的编辑（首页渲染平时只读快照不查询）
+          await recountWeiboCount(env.DB).catch((e) => console.error('recountWeiboCount failed:', e))
+          await refreshOnThisDay(env.DB).catch((e) => console.error('refreshOnThisDay failed:', e))
         }
       })()
     )

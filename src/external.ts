@@ -13,7 +13,7 @@
  */
 import { Hono } from 'hono'
 import { randomToken, rateLimit, safeEqual } from './auth'
-import { getSettings, getWeiboById, saveSettings, WEIBO_MAX_CHARS, WEIBO_MAX_IMAGES } from './db'
+import { bumpWeiboCount, getSettings, getWeiboById, saveSettings, WEIBO_MAX_CHARS, WEIBO_MAX_IMAGES } from './db'
 import { fireWeiboPublished } from './hooks'
 import { siteBase } from './render'
 import { imageExtOf, MAX_UPLOAD_BYTES, saveUpload, sniffImageExt } from './store'
@@ -63,6 +63,8 @@ export async function insertWeibo(db: D1Database, content: string, images: strin
     .prepare('INSERT INTO weibo (content, images, topics, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .bind(content, JSON.stringify(images), JSON.stringify(extractWeiboTopics(content)), status, status === 'published' ? now : null, now, now)
     .run()
+  // 微博总数记账位（settings.wbPubCount）：listWeibo 分页 COUNT 的读放大治理，见 db.ts
+  if (status === 'published') await bumpWeiboCount(db, 1)
   const row = await getWeiboById(db, Number(res.meta.last_row_id))
   if (!row) throw new Error('微博写入失败')
   return row

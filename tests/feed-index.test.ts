@@ -20,6 +20,9 @@ const FEED_INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_weibo_feed ON weibo (status, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL',
   'CREATE INDEX IF NOT EXISTS idx_weibo_feed_pinned ON weibo (status, pinned DESC, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL',
   'CREATE INDEX IF NOT EXISTS idx_posts_feed ON posts (status, pinned DESC, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL',
+  // 相邻文章专用（2026-10-18）：查询按纯时间排序、不带 pinned，idx_posts_feed 的 pinned 前缀
+  // 排不了纯时间序 → 全表扫 + 临时 B-tree（实测每篇文页 ~330 行读）。少 pinned 一列即结构匹配
+  'CREATE INDEX IF NOT EXISTS idx_posts_chrono ON posts (status, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL',
 ]
 
 const norm = (s: string) => s.replace(/\s+/g, ' ').trim()
@@ -115,6 +118,23 @@ test('EXPLAIN：posts 标签筛选（前导通配 LIKE）仍走 idx_posts_feed�
     "SELECT * FROM posts WHERE deleted_at IS NULL AND status = 'published' AND tags LIKE ? ESCAPE '\\' ORDER BY pinned DESC, COALESCE(published_at, created_at) DESC LIMIT 10 OFFSET 0"
   )
   assertUsesIndex(plan, 'idx_posts_feed')
+})
+
+test('EXPLAIN：相邻文章（上一篇/下一篇，纯时间序不带 pinned）走 idx_posts_chrono、无临时排序', () => {
+  // 2026-10-18 前这条查询是全表扫 + TEMP B-TREE（ORDER BY 纯时间与 idx_posts_feed 的
+  // pinned 前缀结构不匹配），每篇文页 ~330 行读；idx_posts_chrono 让它变成 ~1 行的 range scan
+  const db = seedDb(true)
+  const where = "FROM posts WHERE status = 'published' AND deleted_at IS NULL AND id != ? AND COALESCE(published_at, created_at)"
+  const prev = planOf(
+    db,
+    `SELECT slug, title ${where} < ? ORDER BY COALESCE(published_at, created_at) DESC LIMIT 1`
+  )
+  const next = planOf(
+    db,
+    `SELECT slug, title ${where} > ? ORDER BY COALESCE(published_at, created_at) ASC LIMIT 1`
+  )
+  assertUsesIndex(prev, 'idx_posts_chrono')
+  assertUsesIndex(next, 'idx_posts_chrono')
 })
 
 /* ── 评论计数强制索引（P0-3，D1 读放大优化，2026-10-15 生产实测）──
