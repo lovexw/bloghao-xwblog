@@ -4,7 +4,7 @@ import { runScheduledPublish } from './scheduler'
 import { api } from './api'
 import { cleanBotPath, identifyBot, purgeBots, recordBot, shouldRecordBot } from './bots'
 import { siteClosedResponse } from './closed'
-import { clientIp, getCookie, getSessionUser, rateLimit } from './auth'
+import { clientIp, getCookie, getMemberUser, getSessionUser, rateLimit } from './auth'
 import { ensureSchema, getPostBySlug, getSettings, listCategories, listPages, listPosts, listSitemapCategoryLastmod, listSitemapPages, listSitemapPosts, listWeiboLastmod } from './db'
 import { isEn, recordEditionFailure } from './i18n'
 import { buildLlmsFullTxt, buildLlmsStub, buildLlmsTxt } from './llms'
@@ -21,7 +21,7 @@ import { purgeVisits } from './stats'
 import { purgeTrash } from './trash'
 import { recountWeiboCount, refreshFootStats, refreshOnThisDay } from './db'
 import type { Env, SessionUser } from './types'
-import { fmtDate, isDemo, siteVisibleCutoff } from './utils'
+import { fmtDate, isDemo, siteVisibleCutoff, visibleRangeAppliesToMembers, weiboVisibleCutoff } from './utils'
 
 const app = new Hono<{ Bindings: Env; Variables: { user: SessionUser | null } }>()
 
@@ -133,9 +133,11 @@ app.get('/search', enGuard(renderSearch))
 
 // 随机来一篇：从已发布文章里随机挑一篇跳过去（加密文章不进随机池——落上去就是一堵密码墙）
 app.get('/random', async (c) => {
-  // 站点可见窗口：随机入口同样只在窗口内抽（抽到窗口外文章 = 直链 404 死链）
+  // 站点可见窗口：随机入口同样只在窗口内抽（抽到窗口外文章 = 直链 404 死链）；
+  // 站点选择「不限制会员」时，已登录会员从全量里抽（与页面口径一致）
   const settings = await getSettings(c.env.DB)
-  const cutoff = siteVisibleCutoff(settings)
+  let cutoff = siteVisibleCutoff(settings)
+  if (cutoff && !visibleRangeAppliesToMembers(settings) && settings.membersEnabled === '1' && (await getMemberUser(c.env.DB, c.req.raw))) cutoff = 0
   const vis = cutoff ? 'AND COALESCE(published_at, created_at) >= ?' : ''
   const row = await c.env.DB.prepare(
     `SELECT slug FROM posts WHERE status = 'published' AND deleted_at IS NULL ${vis} AND (password_hash IS NULL OR password_hash = '') ORDER BY RANDOM() LIMIT 1`
@@ -249,7 +251,8 @@ app.get('/sitemap.xml', async (c) => {
     listCategories(c.env.DB),
     listSitemapCategoryLastmod(c.env.DB),
     listSitemapPages(c.env.DB),
-    listWeiboLastmod(c.env.DB),
+    // 微博窗口只管微博：/weibo 条目的 lastmod 同样按游客口径收口（文章窗口与微博窗口已分列）
+    listWeiboLastmod(c.env.DB, weiboVisibleCutoff(settings)),
   ])
   const siteUrl = siteBase(settings, new URL(c.req.url).origin)
   const lastmodBySlug = new Map(catLastmod.map((r) => [r.slug, r.lastmod]))

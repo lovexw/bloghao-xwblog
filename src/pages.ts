@@ -66,7 +66,7 @@ import { getTheme, THEMES } from './themes/registry'
 import type { MemberData, RankData } from './themes/registry'
 import type { Env, PostRow, SessionUser, SettingsMap } from './types'
 import { packMatrix, qrMatrix } from './qrcode'
-import { clampInt, esc, excerpt, isDemo, readingMinutes, siteVisibleCutoff, teaserHtml } from './utils'
+import { clampInt, esc, excerpt, isDemo, readingMinutes, siteVisibleCutoff, teaserHtml, visibleRangeAppliesToMembers, weiboVisibleCutoff } from './utils'
 import { analyticsOrigin, breadcrumbJsonLd, isSpeculativeRequest, readAiPolicy } from './seo'
 import { needsFontSrc } from './skinpack'
 
@@ -251,10 +251,16 @@ async function renderList(
   // 随机排序用 seed 稳住一组顺序：URL 没带就现生成一个，翻页链接会带上它
   const seed =
     sort === 'random' ? clampInt(url.searchParams.get('seed'), 1, 999999999, 0) || 1 + Math.floor(Math.random() * 999999998) : 0
-  // 站点可见窗口（朋友圈式 N 天可见，settings.contentVisibleRange）：全部公开列表统一收口——
-  // cutoff 由服务端按档位白名单计算（utils.siteVisibleCutoff），URL 传什么都改变不了窗口口径；
-  // 历史上的今天在开窗期间整体隐藏（本质是展示往年内容，与窗口直接冲突）
-  const siteCutoff = siteVisibleCutoff(settings)
+  // 站点可见窗口（朋友圈式 N 天可见）：文章与微博各读各的档位（settings.contentVisibleRangePosts /
+  // contentVisibleRangeWeibo，旧单键由 utils.visibleRangeOf 回落）；cutoff 由服务端按档位白名单计算，
+  // URL 传什么都改变不了窗口口径。站点选择「不限制会员」时，已登录会员按 0（不受限）处理。
+  // 历史上的今天在任一窗口开启期间整体隐藏（本质是展示往年内容，与窗口直接冲突）
+  const postCutoffBase = siteVisibleCutoff(settings)
+  const weiboCutoffBase = weiboVisibleCutoff(settings)
+  const memberMayBypass = !visibleRangeAppliesToMembers(settings) && membersEnabled(settings)
+  const earlyMember = memberMayBypass && (postCutoffBase || weiboCutoffBase) ? await getMemberUser(c.env.DB, c.req.raw) : null
+  const postCutoff = earlyMember ? 0 : postCutoffBase
+  const weiboCutoff = earlyMember ? 0 : weiboCutoffBase
 
   // 搜索模式不分页，直接取前 50 条；文章搜索走 FTS5（src/fts.ts，短词自动退回 LIKE 同口径）
   const [
@@ -272,7 +278,7 @@ async function renderList(
     wbSearch,
   ] = await Promise.all([
     opts.mode === 'search' && q
-      ? searchPosts(c.env.DB, q, 50, siteCutoff)
+      ? searchPosts(c.env.DB, q, 50, postCutoff)
       : listPosts(c.env.DB, {
           status: 'published',
           tag: opts.mode === 'home' ? tag : undefined,
@@ -282,28 +288,29 @@ async function renderList(
           limit: opts.mode === 'search' ? 50 : perPage,
           sort,
           seed,
-          afterTs: siteCutoff,
+          afterTs: postCutoff,
         }),
     navTags(c),
     navCategories(c),
     navPages(c),
     categorySlug ? getCategoryBySlug(c.env.DB, categorySlug) : Promise.resolve(null),
-    // 首页微博入口卡（博客+微博模式）：最新两条随手记摘要（吃站点可见窗口）
+    // 首页微博入口卡（博客+微博模式）：最新两条随手记摘要（吃微博可见窗口）
     opts.mode === 'home' && mode === 'blog-weibo'
-      ? listWeibo(c.env.DB, { status: 'published', page: 1, limit: 2, afterTs: siteCutoff })
+      ? listWeibo(c.env.DB, { status: 'published', page: 1, limit: 2, afterTs: weiboCutoff })
       : Promise.resolve(null),
-    // 首页微博流（微博+博客模式）：完整卡片先行，管理员键与评论照常可用（吃站点可见窗口）
+    // 首页微博流（微博+博客模式）：完整卡片先行，管理员键与评论照常可用（吃微博可见窗口）
     opts.mode === 'home' && mode === 'weibo-blog'
-      ? listWeibo(c.env.DB, { status: 'published', page: 1, limit: HOME_WEIBO_FEED_LIMIT, pinnedFirst: true, afterTs: siteCutoff })
+      ? listWeibo(c.env.DB, { status: 'published', page: 1, limit: HOME_WEIBO_FEED_LIMIT, pinnedFirst: true, afterTs: weiboCutoff })
       : Promise.resolve(null),
     opts.mode === 'home' && mode === 'weibo-blog' ? getSessionUser(c.env.DB, c.req.raw) : Promise.resolve(null),
-    // 历史上的今天：仅首页第一页且未带筛选时查（有内部按天缓存）；站点可见窗口开启时整体隐藏
+    // 历史上的今天：仅首页第一页且未带筛选时查（有内部按天缓存）；任一可见窗口开启时整体隐藏
     // ——该模块本质是展示往年内容，与「N 天可见」直接冲突
-    opts.mode === 'home' && pageNum === 1 && !tag && !q && !siteCutoff ? listOnThisDay(c.env.DB) : Promise.resolve(null),
-    // 会员会话（首页微博流的 memberName 用；未开启时省一次查询，无 Cookie 时是纯内存快路径）
-    membersEnabled(settings) ? getMemberUser(c.env.DB, c.req.raw) : Promise.resolve(null),
-    // 搜索页微博结果（ROADMAP B4）：长词走 weibo_fts、短词 LIKE 扫微博表，都在 fts.ts 内部定（吃可见窗口）
-    opts.mode === 'search' && q ? searchWeibo(c.env.DB, q, 20, siteCutoff) : Promise.resolve(null),
+    opts.mode === 'home' && pageNum === 1 && !tag && !q && !postCutoff && !weiboCutoff ? listOnThisDay(c.env.DB) : Promise.resolve(null),
+    // 会员会话（首页微博流的 memberName 用；未开启时省一次查询，无 Cookie 时是纯内存快路径）。
+    // 上面为会员豁免提前查过就直接复用，避免同一请求查两次
+    earlyMember ? Promise.resolve(earlyMember) : membersEnabled(settings) ? getMemberUser(c.env.DB, c.req.raw) : Promise.resolve(null),
+    // 搜索页微博结果（ROADMAP B4）：长词走 weibo_fts、短词 LIKE 扫微博表，都在 fts.ts 内部定（吃微博可见窗口）
+    opts.mode === 'search' && q ? searchWeibo(c.env.DB, q, 20, weiboCutoff) : Promise.resolve(null),
   ])
   if (opts.mode === 'category' && !category) return renderNotFound(c)
   // 页码跳转可能输入越界，回到最后一页重新取一次
@@ -316,7 +323,7 @@ async function renderList(
       limit: perPage,
       sort,
       seed,
-      afterTs: siteCutoff,
+      afterTs: postCutoff,
     })
     Object.assign(r, fixed)
   }
@@ -564,10 +571,17 @@ export async function renderPost(c: C): Promise<Response> {
   const theme = getTheme(settings.theme)
   const slug = c.req.param('slug') ?? ''
   const row = await getPostBySlug(c.env.DB, slug)
+  // 文章可见窗口（settings.contentVisibleRangePosts，旧单键由 utils 回落）。会员豁免只在
+  // 「站点选择不限制会员」且会员已登录时生效；管理员仍走原有登录预览路
+  const baseCutoff = siteVisibleCutoff(settings)
+  const memberMayBypass = !visibleRangeAppliesToMembers(settings) && membersEnabled(settings)
   if (!row) {
     // 旧 slug 301（B22）：改过 slug 的文章，旧地址永久跳新地址——判定与 404 同口径
-    // （现存已发布 + 站点可见窗口内），回收站 / 草稿 / 窗口外保持 404 不透露存在性
-    const hit = await findPublishedByOldSlug(c.env.DB, slug, siteVisibleCutoff(settings))
+    // （现存已发布 + 站点可见窗口内），回收站 / 草稿 / 窗口外保持 404 不透露存在性；
+    // 会员豁免时窗口外文章也允许 301（会员点开内容不该落 404）
+    let lookupCutoff = baseCutoff
+    if (lookupCutoff && memberMayBypass && (await getMemberUser(c.env.DB, c.req.raw))) lookupCutoff = 0
+    const hit = await findPublishedByOldSlug(c.env.DB, slug, lookupCutoff)
     if (hit && hit.slug !== slug) return c.redirect(`/post/${hit.slug}`, 301)
     return renderNotFound(c)
   }
@@ -578,17 +592,21 @@ export async function renderPost(c: C): Promise<Response> {
     const user = await getSessionUser(c.env.DB, c.req.raw)
     if (!isPreview || !user) return renderNotFound(c)
   }
-  // 站点可见窗口（朋友圈式 N 天可见）：窗口外文章对游客/会员不可见——直链即 404（内容仍在库，
-  // 后台管理与备份不受影响）；管理员登录放行预览。解锁 Cookie 不豁免：时间门是第一道门
-  const visibleCutoff = siteVisibleCutoff(settings)
+  // 站点可见窗口（朋友圈式 N 天可见）：窗口外文章对游客不可见——直链即 404（内容仍在库，
+  // 后台管理与备份不受影响）；管理员登录放行预览。解锁 Cookie 不豁免：时间门是第一道门。
+  // 站点「不限制会员」时，已登录会员同样放行（visibleCutoff 归 0，相关/相邻文章也随之放开）
+  let visibleCutoff = baseCutoff
   if (visibleCutoff && (row.published_at ?? row.created_at ?? 0) < visibleCutoff) {
     const user = await getSessionUser(c.env.DB, c.req.raw)
-    if (!user) return renderNotFound(c)
+    const memberOk = !user && memberMayBypass && !!(await getMemberUser(c.env.DB, c.req.raw))
+    if (!user && !memberOk) return renderNotFound(c)
+    // 放行者（管理员预览 / 会员豁免）看的是全量：相关与相邻文章不再受窗口收口
+    visibleCutoff = 0
   }
 
   const [comments, related, categories, categoryId, user, tags, pages, commentTotal, member, neighbors] = await Promise.all([
     listApprovedComments(c.env.DB, row.id),
-    relatedPosts(c.env.DB, row),
+    relatedPosts(c.env.DB, row, 3, visibleCutoff),
     navCategories(c),
     getPostCategoryId(c.env.DB, row.id),
     getSessionUser(c.env.DB, c.req.raw),
@@ -598,9 +616,9 @@ export async function renderPost(c: C): Promise<Response> {
     commentCount(c, row.id),
     // 会员会话（付费墙可见判定用；membersEnabled 关闭时不查——关着的时候锁文对所有人生效）
     membersEnabled(settings) ? getMemberUser(c.env.DB, c.req.raw) : Promise.resolve(null),
-    // 上一篇/下一篇（prev = 更早、next = 更新）：草稿预览不出
+    // 上一篇/下一篇（prev = 更早、next = 更新）：草稿预览不出，窗口外的邻居也不出（点了就是 404）
     row.status === 'published'
-      ? adjacentPosts(c.env.DB, row.published_at ?? row.created_at, row.id)
+      ? adjacentPosts(c.env.DB, row.published_at ?? row.created_at, row.id, visibleCutoff)
       : Promise.resolve({ prev: null, next: null }),
   ])
   const categoryRow = categoryId ? await c.env.DB.prepare('SELECT name, slug FROM categories WHERE id = ?').bind(categoryId).first<{ name: string; slug: string }>() : null
@@ -834,13 +852,19 @@ export async function renderArchive(c: C): Promise<Response> {
   baseHeaders(c, settings)
   const theme = getTheme(settings.theme)
   const en = isEn(settings)
+  // 文章可见窗口：归档页也是公开面——窗口外文章不列（列表 / 年度统计 / 热力图三处同一口径），
+  // 否则直链 404 的文章仍能从归档点过去。站点选择「不限制会员」时，已登录会员看全量
+  const postCutoffBase = siteVisibleCutoff(settings)
+  const memberMayBypass = !visibleRangeAppliesToMembers(settings) && membersEnabled(settings)
+  const earlyMember = memberMayBypass && postCutoffBase ? await getMemberUser(c.env.DB, c.req.raw) : null
+  const postCutoff = earlyMember ? 0 : postCutoffBase
   const [rows, categories, tags, pages, yearStats, heatmap] = await Promise.all([
-    listAllPublishedArchives(c.env.DB),
+    listAllPublishedArchives(c.env.DB, postCutoff),
     navCategories(c),
     navTags(c),
     navPages(c),
-    yearArchiveStats(c.env.DB),
-    postHeatmap(c.env.DB),
+    yearArchiveStats(c.env.DB, postCutoff),
+    postHeatmap(c.env.DB, postCutoff),
   ])
   const html = theme.archives({
     settings,
@@ -937,8 +961,12 @@ export async function renderWeibo(c: C, asHome = false): Promise<Response> {
   const url = new URL(c.req.url)
   const perPage = 15
   const topic = (url.searchParams.get('topic') || '').trim().slice(0, 24)
-  // 站点可见窗口（settings.contentVisibleRange）：微博流统一收口，与话题筛选叠加
-  const rangeAfterTs = siteVisibleCutoff(settings)
+  // 微博可见窗口（settings.contentVisibleRangeWeibo，旧单键由 utils 回落）：微博流统一收口，与话题筛选叠加。
+  // 站点选择「不限制会员」时，已登录会员不受限（cutoff 归 0）
+  const weiboCutoffBase = weiboVisibleCutoff(settings)
+  const memberMayBypass = !visibleRangeAppliesToMembers(settings) && membersEnabled(settings)
+  const earlyMember = memberMayBypass && weiboCutoffBase ? await getMemberUser(c.env.DB, c.req.raw) : null
+  const rangeAfterTs = earlyMember ? 0 : weiboCutoffBase
   const pageParam = clampInt(url.searchParams.get('page'), 1, 1000, 1)
   // ?wb=<id> 深链定位：历史上的今天、首页入口卡、TG 通知都链到 /weibo?wb=x#wb-x，而目标条目常不在第 1
   // 页——服务端先算出所在页直接渲染，浏览器原生锚点才滚动得到；定位失败（已删/非已发布）回退 ?page=
@@ -963,7 +991,7 @@ export async function renderWeibo(c: C, asHome = false): Promise<Response> {
     getSessionUser(c.env.DB, c.req.raw),
     navTags(c),
     navPages(c),
-    membersEnabled(settings) ? getMemberUser(c.env.DB, c.req.raw) : Promise.resolve(null),
+    earlyMember ? Promise.resolve(earlyMember) : membersEnabled(settings) ? getMemberUser(c.env.DB, c.req.raw) : Promise.resolve(null),
   ])
   // 页码越界时回到最后一页重取一次
   if (r.page > r.totalPages && r.total > 0) {

@@ -28,9 +28,14 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   // 站点模式：blog-weibo（博客+微博，博客优先，默认）/ weibo-blog（微博+博客，微博优先）/
   // blog（纯博客）/ weibo（纯微博）——前台模块显隐与首页优先级，见 src/render.ts siteMode()
   siteMode: 'blog-weibo',
-  // 站点可见窗口（朋友圈式 N 天可见）：'' = 全部可见（默认，老站零打扰）；'3d'/'1m'/'6m'/'1y' =
-  // 窗口外内容对游客/会员不可见（列表/直链/搜索/RSS/sitemap 全面收口），后台与备份不受影响。
-  // 档位白名单与窗口天数唯一来源 utils.LIST_RANGES，校验在 api.ts 设置 PUT
+  // 站点可见窗口（朋友圈式 N 天可见）：文章与微博各自一档，'' = 全部可见（默认，老站零打扰）；
+  // '3d'/'1m'/'6m'/'1y' = 窗口外内容彻底不可见（列表/直链/搜索/RSS/sitemap/llms 全面收口），
+  // 后台与备份不受影响。档位白名单与窗口天数唯一来源 utils.LIST_RANGES，校验在 api.ts 设置 PUT。
+  // 旧键 contentVisibleRange 只作升级期回落（见 utils.visibleRangeOf），保存新键时由 PUT 清空。
+  contentVisibleRangePosts: '',
+  contentVisibleRangeWeibo: '',
+  // 窗口是否同样限制会员：'1' = 会员也受限（默认，与旧版一致）；'0' = 只挡游客，会员登录后可见全部
+  contentVisibleForMembers: '1',
   contentVisibleRange: '',
   siteUrl: '',
   // 主题外观变量（B9 · 内测）：扁平 JSON（角色键 → 色值 + font/fontSize），渲染期按当前主题
@@ -421,33 +426,39 @@ export async function listGuestbookComments(db: D1Database): Promise<CommentRow[
   return results ?? []
 }
 
-/** 文章归档（/archives）：全部已发布文章的标题与时间，按时间倒序（上限 2000 篇） */
-export async function listAllPublishedArchives(db: D1Database): Promise<{ slug: string; title: string; ts: number }[]> {
-  const { results } = await db
-    .prepare(
-      "SELECT slug, title, COALESCE(published_at, created_at) AS ts FROM posts WHERE status = 'published' AND deleted_at IS NULL ORDER BY ts DESC LIMIT 2000"
-    )
-    .all<{ slug: string; title: string; ts: number }>()
+/** 文章归档（/archives）：全部已发布文章的标题与时间，按时间倒序（上限 2000 篇）。
+ *  afterTs = 站点可见窗口 cutoff（0 = 不过滤）：归档页同样只列窗口内文章——窗口外的文章直链
+ *  已经是 404，归档里再露出标题与链接等于给死链，也泄漏「有这篇（这个月份）」 */
+export async function listAllPublishedArchives(
+  db: D1Database,
+  afterTs = 0
+): Promise<{ slug: string; title: string; ts: number }[]> {
+  const vis = afterTs > 0 ? 'AND COALESCE(published_at, created_at) >= ?' : ''
+  const stmt = db.prepare(
+    `SELECT slug, title, COALESCE(published_at, created_at) AS ts FROM posts WHERE status = 'published' AND deleted_at IS NULL ${vis} ORDER BY ts DESC LIMIT 2000`
+  )
+  const { results } = await (afterTs > 0 ? stmt.bind(afterTs) : stmt).all<{ slug: string; title: string; ts: number }>()
   return results ?? []
 }
 
 /** 归档页「今年已写」统计：当前北京时间年份的已发布篇数与正文字符量。
- * LENGTH() 对 TEXT 计字符数，含 Markdown 标记——展示口径用「约」；年份聚合按惯例 +28800 取北京墙上年 */
-export async function yearArchiveStats(db: D1Database): Promise<{ count: number; chars: number }> {
+ * LENGTH() 对 TEXT 计字符数，含 Markdown 标记——展示口径用「约」；年份聚合按惯例 +28800 取北京墙上年。
+ * afterTs = 可见窗口 cutoff（0 = 不过滤）：窗口外文章不参与统计，与归档列表同一口径 */
+export async function yearArchiveStats(db: D1Database, afterTs = 0): Promise<{ count: number; chars: number }> {
   const year = String(cstDate(Date.now()).getUTCFullYear())
-  const row = await db
-    .prepare(
-      "SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(content)), 0) AS c FROM posts WHERE status = 'published' AND deleted_at IS NULL AND strftime('%Y', COALESCE(published_at, created_at) / 1000 + 28800, 'unixepoch') = ?"
-    )
-    .bind(year)
-    .first<{ n: number; c: number }>()
+  const vis = afterTs > 0 ? 'AND COALESCE(published_at, created_at) >= ?' : ''
+  const stmt = db.prepare(
+    `SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(content)), 0) AS c FROM posts WHERE status = 'published' AND deleted_at IS NULL AND strftime('%Y', COALESCE(published_at, created_at) / 1000 + 28800, 'unixepoch') = ? ${vis}`
+  )
+  const row = await (afterTs > 0 ? stmt.bind(year, afterTs) : stmt.bind(year)).first<{ n: number; c: number }>()
   return { count: row?.n ?? 0, chars: row?.c ?? 0 }
 }
 
 /** 归档页创作热力图数据：过去一年（约 366 天）按北京日聚合的已发布篇数。
- * 只返回有文章的日期（空日由渲染端补零），total 为合计；日聚合按惯例 +28800 取北京墙上年月日 */
-export async function postHeatmap(db: D1Database): Promise<{ days: { day: string; count: number }[]; total: number }> {
-  const since = Date.now() - 366 * 86_400_000
+ * 只返回有文章的日期（空日由渲染端补零），total 为合计；日聚合按惯例 +28800 取北京墙上年月日。
+ * afterTs = 可见窗口 cutoff：起点取「过去一年」与「窗口起点」中更晚者（更严者），窗口外不计数 */
+export async function postHeatmap(db: D1Database, afterTs = 0): Promise<{ days: { day: string; count: number }[]; total: number }> {
+  const since = Math.max(Date.now() - 366 * 86_400_000, afterTs)
   const { results } = await db
     .prepare(
       "SELECT strftime('%Y-%m-%d', COALESCE(published_at, created_at) / 1000 + 28800, 'unixepoch') AS day, COUNT(*) AS n FROM posts WHERE status = 'published' AND deleted_at IS NULL AND COALESCE(published_at, created_at) >= ? GROUP BY day"
@@ -509,11 +520,15 @@ export async function listSitemapCategoryLastmod(db: D1Database): Promise<{ slug
   return results ?? []
 }
 
-/** sitemap 用：最新一条已发布微博的时间（/weibo 页的 lastmod） */
-export async function listWeiboLastmod(db: D1Database): Promise<number> {
-  const row = await db
-    .prepare("SELECT MAX(COALESCE(published_at, created_at)) AS ts FROM weibo WHERE status = 'published' AND deleted_at IS NULL")
-    .first<{ ts: number | null }>()
+/** sitemap 用：最新一条已发布微博的时间（/weibo 页的 lastmod）。
+ *  afterTs = 微博可见窗口 cutoff（0 = 不过滤）：sitemap 是机器可读面，恒游客口径——
+ *  窗口外的微博不参与 lastmod（全出窗时回 0，条目照旧列出但不带 lastmod） */
+export async function listWeiboLastmod(db: D1Database, afterTs = 0): Promise<number> {
+  const vis = afterTs > 0 ? 'AND COALESCE(published_at, created_at) >= ?' : ''
+  const stmt = db.prepare(
+    `SELECT MAX(COALESCE(published_at, created_at)) AS ts FROM weibo WHERE status = 'published' AND deleted_at IS NULL ${vis}`
+  )
+  const row = await (afterTs > 0 ? stmt.bind(afterTs) : stmt).first<{ ts: number | null }>()
   return row?.ts ?? 0
 }
 

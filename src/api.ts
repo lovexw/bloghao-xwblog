@@ -146,7 +146,7 @@ import { fetchLinkMeta, fetchableUrl } from './linkmeta'
 import { BROWSER_UA, buildCardHtml, coverProxyHostOk, coverReferer, fetchDoubanDetail, probeRelay, resolveCardCover, sanitizeMediaItem, searchMedia, subjectIdFromUrl, validateRelay, type MediaItem } from './douban'
 import { THEMES } from './themes/registry'
 import type { CommentRow, Env, MemberRow, MemberTier, PostRow, SessionUser } from './types'
-import { appendOldSlug, clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extractWeiboTopics, fmtDateCN, isDemo, isValidQQ, jsonItemLikePattern, LIST_RANGES, listRangeCutoff, nicknameCooldown, normalizeLinkUrl, siteVisibleCutoff, slugify } from './utils'
+import { appendOldSlug, clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extractWeiboTopics, fmtDateCN, isDemo, isValidQQ, jsonItemLikePattern, LIST_RANGES, listRangeCutoff, nicknameCooldown, normalizeLinkUrl, siteVisibleCutoff, slugify, weiboVisibleCutoff } from './utils'
 
 type AppEnv = { Bindings: Env; Variables: { user: SessionUser } }
 
@@ -2158,10 +2158,17 @@ api.put('/admin/settings', async (c) => {
       patch[key] = SITE_MODE_VALUES.includes(v as SiteMode) ? v : 'blog-weibo'
       continue
     }
-    if (key === 'contentVisibleRange') {
+    if (key === 'contentVisibleRange' || key === 'contentVisibleRangePosts' || key === 'contentVisibleRangeWeibo') {
       // 站点可见窗口（朋友圈式 N 天可见）：写路径严格白名单——脏值 400 而不是静默降级，
-      // 站长得知道「保存了但没生效」是输入问题；'' = 全部可见
+      // 站长得知道「保存了但没生效」是输入问题；'' = 全部可见。旧单键仅为升级期兼容，
+      // 新键保存后下方统一清空旧键（避免旧值继续回落）
       if (v !== '' && !Object.prototype.hasOwnProperty.call(LIST_RANGES, v)) return jsonError('可见范围档位不正确')
+      patch[key] = v
+      continue
+    }
+    if (key === 'contentVisibleForMembers') {
+      // 会员是否同样受可见窗口限制：只认 '0' / '1'，脏值 400
+      if (v !== '0' && v !== '1') return jsonError('会员可见范围档位不正确')
       patch[key] = v
       continue
     }
@@ -2323,6 +2330,9 @@ api.put('/admin/settings', async (c) => {
   }
   // 演示站不允许闭站：有人开了开关，整个重置周期内所有体验者都会看到 503
   if (isDemo(c.env)) patch.siteClosed = '0'
+  // 可见窗口新键一旦提交，旧单键 contentVisibleRange 同步清空：旧键只服务「升级后没动过设置」的
+  // 回落期（utils.visibleRangeOf），留着会让新键的 ''（全部可见）被旧值覆盖
+  if (patch.contentVisibleRangePosts !== undefined || patch.contentVisibleRangeWeibo !== undefined) patch.contentVisibleRange = ''
   await saveSettings(c.env.DB, patch)
   const saved = seoDisplaySettings(await getSettings(c.env.DB))
   // 与 GET 同口径：密钥只在生成时返回一次明文，此后任何回显都打码（防代理/扩展被动收集）
@@ -2911,7 +2921,7 @@ api.get('/public/weibo', async (c) => {
   const r = await listWeibo(c.env.DB, {
     status: 'published',
     limit: clampInt(c.req.query('limit'), 1, 50, 20),
-    afterTs: siteVisibleCutoff(settings),
+    afterTs: weiboVisibleCutoff(settings),
   })
   const origin = new URL(c.req.url).origin
   return c.json({
