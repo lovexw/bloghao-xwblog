@@ -1,6 +1,7 @@
 import * as bitcoin from './bitcoin'
 import * as journal from './journal'
 import * as midnight from './midnight'
+import * as news from './news'
 import * as minimal from './minimal'
 import * as paper from './paper'
 import * as rednote from './rednote'
@@ -132,11 +133,14 @@ export interface PostData {
     cover: string
     tags: string[]
     published_at: number | null
+  /** 多作者署名（3.0-M1）：author 角色的展示名；单作者站（admin 执笔）为 undefined，主题 meta 行不显示 */
+  authorName?: string
     views: number
     likes: number
     readingMinutes: number
-    /** 谁能看档位（编辑器「谁能看」选择，缺省 'all' 全员可见；'member' = 登录会员可见） */
-    minTier?: 'all' | 'member' | 'coffee' | 'top'
+    /** 谁能看档位（编辑器「谁能看」选择，缺省 'all' 全员可见；'member' = 登录会员可见；
+     *  会员 3.0 预备起也可以是自定义档位 key（settings.memberTiers），付费墙文案由 paywallHtml 按 settings 解析） */
+    minTier?: string
     /** true = 当前访客不可读全文：contentHtml 已被服务端截断为试读段，主题在正文后渲染付费墙遮挡卡（paywallHtml），不得自行补全内容 */
     locked?: boolean
     /** true = 作者在编辑器「更多」勾选了「AI 生成」（自愿申报）：meta 行尾部输出 AI 生成标识；缺省不渲染，输出字节级不变 */
@@ -318,6 +322,13 @@ export const THEMES: Record<string, ThemeModule> = {
     name: '小红书',
     description: '发现页瀑布流笔记卡 + 品牌红点缀，把博客写成一册生活指南',
     colors: ['#f7f8fa', '#ff2442', '#ffffff', '#ffeef0', '#f5f6f7'],
+  },
+  news: {
+    ...news,
+    id: 'news',
+    name: '快讯',
+    description: '新闻纸风资讯站：头条大卡 + 快讯时间流 + 晚报式文章排版（3.0 原型）',
+    colors: ['#fafaf7', '#c0392b', '#ffffff', '#f2f0ea', '#efede8'],
   },
 }
 

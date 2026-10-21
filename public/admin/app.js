@@ -47,6 +47,14 @@ function fmtDateTime(ts) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
+/** 档位有效期用短格式（YYYY-MM-DD，本地时区即可——展示口径，服务端按北京时间收口） */
+function fmtDateShort(ts) {
+  if (!ts) return '—'
+  const d = new Date(ts)
+  const p = (x) => String(x).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
 /** 定时徽章用短格式：当年省略年份 */
 function fmtScheduleShort(ts) {
   if (!ts) return '未设时间'
@@ -159,7 +167,7 @@ const MENU = [
   { type: 'cta', id: 'editor', href: '#/editor/new', label: '写作', icon: 'edit' },
   { type: 'group', label: '数据' },
   { id: 'home', href: '#/', label: '概览', icon: 'home' },
-  { id: 'stats', href: '#/stats', label: '统计', icon: 'chart' },
+  { id: 'stats', href: '#/stats', label: '统计', icon: 'chart', adminOnly: true },
   { type: 'group', label: '内容' },
   { id: 'posts', href: '#/posts', label: '文章', icon: 'post' },
   { id: 'weibo', href: '#/weibo', label: '微博', icon: 'weibo' },
@@ -167,13 +175,13 @@ const MENU = [
   { id: 'media', href: '#/media', label: '媒体', icon: 'image' },
   { type: 'group', label: '互动' },
   { id: 'comments', href: '#/comments', label: '评论', icon: 'comment', badge: () => state.pendingComments || 0 },
-  { id: 'members', href: '#/members', label: '会员', icon: 'member' },
+  { id: 'members', href: '#/members', label: '会员', icon: 'member', adminOnly: true },
   { id: 'links', href: '#/links', label: '友链', icon: 'link', badge: () => state.pendingLinks || 0 },
   { type: 'group', label: '系统' },
-  { id: 'trash', href: '#/trash', label: '回收站', icon: 'trash' },
-  { id: 'appearance', href: '#/appearance', label: '皮肤', icon: 'palette' },
-  { id: 'plugins', href: '#/plugins', label: '插件', icon: 'plug' },
-  { id: 'settings', href: '#/settings', label: '设置', icon: 'gear' },
+  { id: 'trash', href: '#/trash', label: '回收站', icon: 'trash', adminOnly: true },
+  { id: 'appearance', href: '#/appearance', label: '皮肤', icon: 'palette', adminOnly: true },
+  { id: 'plugins', href: '#/plugins', label: '插件', icon: 'plug', adminOnly: true },
+  { id: 'settings', href: '#/settings', label: '设置', icon: 'gear', adminOnly: true },
 ]
 
 /* 移动端底部栏固定项（其余入口收进「更多」抽屉） */
@@ -261,14 +269,26 @@ function sideItemHtml(item, active) {
 
 /** 桌面侧栏与移动端「更多」抽屉共用同一份 MENU 渲染（分组标签 + 外链 + 写作 CTA） */
 function sideNavHtml(active) {
-  return MENU.map((m) => {
-    if (m.type === 'group') return `<div class="side-group">${m.label}</div>`
+  const author = state.user && state.user.role === 'author'
+  const items = MENU.filter((m) => !(author && m.adminOnly))
+  // 作者视角隐藏空分组标签：先渲染草稿再剔除「后面没有可见项」的分组
+  const out = []
+  for (let i = 0; i < items.length; i++) {
+    const m = items[i]
+    if (m.type === 'group') {
+      const next = items.slice(i + 1).find((x) => x.type !== 'group')
+      if (next) out.push(`<div class="side-group">${m.label}</div>`)
+      continue
+    }
     if (m.type === 'ext')
-      return `<a class="side-item side-item-home" href="${m.href}" target="_blank" rel="noopener" title="${m.label}">${I[m.icon]}<span>${m.label}</span></a><div class="side-sep"></div>`
-    if (m.type === 'cta') return `<a class="side-cta" href="${m.href}" title="${m.label}">${I[m.icon]}<span>${m.label}</span></a>`
-    return sideItemHtml(m, active)
-  }).join('')
+      out.push(`<a class="side-item side-item-home" href="${m.href}" target="_blank" rel="noopener" title="${m.label}">${I[m.icon]}<span>${m.label}</span></a><div class="side-sep"></div>`)
+    else if (m.type === 'cta') out.push(`<a class="side-cta" href="${m.href}" title="${m.label}">${I[m.icon]}<span>${m.label}</span></a>`)
+    else out.push(sideItemHtml(m, active))
+  }
+  return out.join('')
 }
+
+
 
 async function shellView(active, contentHTML) {
   if (!state.user) return
@@ -2010,7 +2030,13 @@ async function viewTrash() {
 }
 
 /** 会员管理页：列表 / 搜用户名邮箱 / 改档位 / 封禁解封（API 形状见 DEVPLAN-2026-10-07 附录 A5） */
-const MEMBER_TIER_LABEL = { normal: '普通会员', coffee: '咖啡会员', top: '顶级会员' }
+const MEMBER_TIER_LABEL = { normal: '普通会员', coffee: '咖啡会员', top: '付费会员' }
+
+/** 档位展示名：优先自定义定义（GET /admin/members 随列表下发 tiers），缺省回落历史三档 */
+function memberTierName(tiers, key) {
+  const def = (tiers || []).find((t) => t.key === key)
+  return def ? def.name : MEMBER_TIER_LABEL[key] || key
+}
 
 async function viewMembers() {
   const q = new URLSearchParams(location.hash.split('?')[1] || '')
@@ -2023,22 +2049,31 @@ async function viewMembers() {
   } catch (e) {
     return handleApiErr(e)
   }
+  const tiers = d.tiers || []
+  const tierDef = (key) => tiers.find((t) => t.key === key) || null
+  const now = Date.now()
 
-  const tierChip = (t) =>
-    t === 'top'
-      ? '<span class="chip chip-warn">顶级会员</span>'
-      : t === 'coffee'
-        ? '<span class="chip chip-green">咖啡会员</span>'
-        : '<span class="chip chip-gray">普通会员</span>'
+  const tierChip = (m) => {
+    const def = tierDef(m.tier)
+    const expired = def && !def.permanent && m.tier_expires_at && m.tier_expires_at <= now
+    const label = memberTierName(tiers, m.tier)
+    if (expired) return `<span class="chip chip-gray">${esc(label)} · 已过期</span>`
+    const cls = def ? (def.permanent ? 'chip-gray' : 'chip-warn') : m.tier === 'top' ? 'chip-warn' : m.tier === 'coffee' ? 'chip-green' : 'chip-gray'
+    return `<span class="chip ${cls}">${esc(label)}</span>`
+  }
   const rows = d.items
     .map(
       (m) => `<div class="post-row" data-id="${m.id}">
       <div class="post-main">
-        <div class="post-title">${esc(m.username)}${tierChip(m.tier)}${m.status === 'banned' ? '<span class="chip chip-gray">已封禁</span>' : ''}</div>
-        <div class="post-meta"><span>积分 ${m.points}</span>${m.email ? `<span>·</span><span>${esc(m.email)}</span>` : ''}<span>·</span><span>注册于 ${fmtDateTime(m.created_at)}</span></div>
+        <div class="post-title">${esc(m.username)}${tierChip(m)}${m.status === 'banned' ? '<span class="chip chip-gray">已封禁</span>' : ''}</div>
+        <div class="post-meta"><span>积分 ${m.points}</span>${m.email ? `<span>·</span><span>${esc(m.email)}</span>` : ''}${
+        m.tier_expires_at && !(tierDef(m.tier) || { permanent: m.tier === 'normal' }).permanent
+          ? `<span>·</span><span>${m.tier_expires_at <= now ? '已于' : '有效期至'} ${fmtDateShort(m.tier_expires_at)}</span>`
+          : ''
+      }<span>·</span><span>注册于 ${fmtDateTime(m.created_at)}</span></div>
       </div>
       <div class="post-ops">
-        <button class="btn btn-ghost btn-sm" data-act="tier">改档位</button>
+        <button class="btn btn-ghost btn-sm" data-act="tier">分配档位</button>
         <button class="btn btn-ghost btn-sm${m.status === 'banned' ? '' : ' btn-danger'}" data-act="ban">${m.status === 'banned' ? '解除封禁' : '封禁'}</button>
       </div>
     </div>`
@@ -2075,7 +2110,7 @@ async function viewMembers() {
   $app.querySelectorAll('.post-row').forEach((row) => {
     const id = Number(row.dataset.id)
     const member = d.items.find((x) => x.id === id)
-    row.querySelector('[data-act=tier]').addEventListener('click', () => memberTierModal(member))
+    row.querySelector('[data-act=tier]').addEventListener('click', () => memberTierModal(member, tiers))
     row.querySelector('[data-act=ban]').addEventListener('click', async (e) => {
       const btn = e.currentTarget
       if (btn.disabled) return
@@ -2094,23 +2129,48 @@ async function viewMembers() {
   })
 }
 
-/** 会员档位调整弹窗：PUT /admin/members/:id 缺键即保留，这里只发 tier */
-function memberTierModal(member) {
-  const m = modal(`<div class="modal-head"><span>调整档位 — ${esc(member.username)}</span><button class="modal-close" data-close>×</button></div>
+/** 分配档位弹窗（会员 3.0 预备）：档位来自自定义定义（tiers），非永久档可带有效期——
+ *  到期后会员前台自动按基础档生效；留空日期 = 清除有效期（转永久）。PUT 缺键即保留 */
+function memberTierModal(member, tiers) {
+  const list = tiers && tiers.length ? tiers : Object.keys(MEMBER_TIER_LABEL).map((k) => ({ key: k, name: MEMBER_TIER_LABEL[k], permanent: k === 'normal', days: 0 }))
+  const def = list.find((t) => t.key === member.tier) || list[0]
+  const defaultExpire = () => {
+    const dt = new Date(Date.now() + (def.days || 365) * 86400000)
+    const p = (x) => String(x).padStart(2, '0')
+    return `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())}`
+  }
+  const currentExpire = member.tier_expires_at ? fmtDateShort(member.tier_expires_at) : ''
+  const m = modal(`<div class="modal-head"><span>分配档位 — ${esc(member.username)}</span><button class="modal-close" data-close>×</button></div>
     <div class="modal-body">
       <label class="auth-field"><label>会员档位</label>
         <select class="input" id="mb-tier">
-          ${['normal', 'coffee', 'top'].map((t) => `<option value="${t}"${member.tier === t ? ' selected' : ''}>${MEMBER_TIER_LABEL[t]}</option>`).join('')}
+          ${list.map((t) => `<option value="${esc(t.key)}"${member.tier === t.key ? ' selected' : ''}>${esc(t.name)}${t.permanent ? '（永久）' : '（可设有效期）'}</option>`).join('')}
         </select>
       </label>
-      <div style="font-size:12px;color:var(--sub);margin-top:8px;">咖啡会员可读「咖啡会员及以上」的专属文章，顶级会员可读全部会员内容；档位不影响积分累计。</div>
+      <label class="auth-field" style="margin-top:10px;" id="mb-expire-row"><label>有效期至（留空 = 永久 / 清除）</label>
+        <input class="input" type="date" id="mb-expire" value="${esc(currentExpire)}">
+      </label>
+      <div style="font-size:12px;color:var(--sub);margin-top:8px;">档位越高可读的专属文章越多（编辑器「谁能看」按档位设置）；档位不影响积分累计。过期会员自动按「${esc(list[0].name)}」生效，改一次有效期即续期。</div>
     </div>
     <div class="modal-foot"><button class="btn" data-close>取消</button><button class="btn btn-primary" id="mb-tier-save">保存</button></div>`)
+  const expireRow = m.mask.querySelector('#mb-expire-row')
+  const expireInput = m.mask.querySelector('#mb-expire')
+  const syncExpireRow = () => {
+    const t = list.find((x) => x.key === m.mask.querySelector('#mb-tier').value)
+    expireRow.style.display = t && t.permanent ? 'none' : ''
+    if (t && !t.permanent && !expireInput.value) expireInput.value = defaultExpire()
+  }
+  syncExpireRow()
+  m.mask.querySelector('#mb-tier').addEventListener('change', syncExpireRow)
   m.mask.querySelector('#mb-tier-save').addEventListener('click', async () => {
     const btn = m.mask.querySelector('#mb-tier-save')
     btn.disabled = true
+    const tier = m.mask.querySelector('#mb-tier').value
+    const t = list.find((x) => x.key === tier)
+    const body = { tier }
+    if (t && !t.permanent) body.tierExpiresAt = expireInput.value || null
     try {
-      await api(`/admin/members/${member.id}`, { method: 'PUT', body: { tier: m.mask.querySelector('#mb-tier').value } })
+      await api(`/admin/members/${member.id}`, { method: 'PUT', body })
       toast('档位已更新')
       m.close()
       navigate() // 操作后重渲染当前路由（经 navigate 守卫，用户已切页时不拽回）
@@ -3332,6 +3392,73 @@ async function viewPlugins() {
 /* 设置页当前页签：页内记忆（不进 hash——hashchange 会触发 navigate 重挂视图，丢未保存输入） */
 let settingsTab = 'site'
 
+/* ---------------- 会员档位编辑器（设置页「会员」面板，会员 3.0 预备） ----------------
+ * 草稿态编辑：行内改名/选色/切永久/改默认天数，上移下移调等级，增删档位；
+ * 校验与落库都在服务端（settings.memberTiers → src/tiers.ts cleanMemberTiers），这里只产出 JSON */
+
+function defaultMemberTiers() {
+  return [
+    { key: 'normal', name: '普通会员', color: '', permanent: true, days: 0 },
+    { key: 'coffee', name: '咖啡会员', color: '#c9803e', permanent: false, days: 365 },
+    { key: 'top', name: '付费会员', color: '#e0455a', permanent: false, days: 365 },
+  ]
+}
+
+let memberTierDraft = defaultMemberTiers()
+
+function loadMemberTierDraft(stored) {
+  try {
+    const arr = stored ? JSON.parse(stored) : null
+    memberTierDraft = Array.isArray(arr) && arr.length ? arr : defaultMemberTiers()
+  } catch {
+    memberTierDraft = defaultMemberTiers()
+  }
+}
+
+function renderMemberTierEditor() {
+  const box = document.getElementById('st-tier-editor')
+  if (!box) return
+  box.innerHTML = memberTierDraft
+    .map(
+      (t, i) => `<div class="st-tier-row" data-i="${i}" style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">
+      <input class="input" style="width:130px;" maxlength="12" value="${esc(t.name)}" data-tf="name" title="档位名称（前台直接显示）" ${i === 0 ? 'placeholder="基础档"' : ''}>
+      <input type="color" value="${esc(t.color || '#888888')}" data-tf="color" title="认证徽标颜色（第一档不出徽标）" style="width:34px;height:30px;padding:2px;border:1px solid var(--line);border-radius:6px;background:none;">
+      <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--sub);" title="永久档不设有效期（第一档必须永久）"><input type="checkbox" data-tf="permanent" ${t.permanent ? 'checked' : ''} ${i === 0 ? 'disabled' : ''}>永久</label>
+      <input class="input" type="number" min="0" max="3650" style="width:86px;" value="${t.days || 0}" data-tf="days" title="分配时的默认有效期（天），仅非永久档生效">
+      <button class="btn btn-ghost btn-sm" type="button" data-tact="up" ${i === 0 ? 'disabled' : ''} title="上移（等级更高）">↑</button>
+      <button class="btn btn-ghost btn-sm" type="button" data-tact="down" ${i === memberTierDraft.length - 1 ? 'disabled' : ''} title="下移（等级更低）">↓</button>
+      <button class="btn btn-ghost btn-sm" type="button" data-tact="del" ${memberTierDraft.length <= 2 ? 'disabled' : ''} title="删除档位（用此档的会员自动回落基础档）">删</button>
+      <span style="font-size:11px;color:var(--sub);">key: ${esc(t.key)}</span>
+    </div>`
+    )
+    .join('')
+  box.querySelectorAll('.st-tier-row').forEach((row) => {
+    const i = Number(row.dataset.i)
+    row.querySelectorAll('[data-tf]').forEach((el) => {
+      const f = el.dataset.tf
+      const ev = f === 'permanent' || f === 'color' ? 'change' : 'input'
+      el.addEventListener(ev, () => {
+        if (f === 'name') memberTierDraft[i].name = el.value.trim() || memberTierDraft[i].name
+        else if (f === 'color') memberTierDraft[i].color = el.value
+        else if (f === 'permanent') {
+          memberTierDraft[i].permanent = el.checked
+          if (el.checked) memberTierDraft[i].days = 0
+          renderMemberTierEditor()
+        } else if (f === 'days') memberTierDraft[i].days = Math.max(0, Math.min(3650, parseInt(el.value, 10) || 0))
+      })
+    })
+    row.querySelectorAll('[data-tact]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const act = btn.dataset.tact
+        if (act === 'up' && i > 0) memberTierDraft.splice(i - 1, 0, memberTierDraft.splice(i, 1)[0])
+        else if (act === 'down' && i < memberTierDraft.length - 1) memberTierDraft.splice(i + 1, 0, memberTierDraft.splice(i, 1)[0])
+        else if (act === 'del') memberTierDraft.splice(i, 1)
+        renderMemberTierEditor()
+      })
+    })
+  })
+}
+
 async function viewSettings() {
   try {
     state.settings = (await api('/admin/settings')).settings
@@ -3339,6 +3466,8 @@ async function viewSettings() {
     return handleApiErr(e)
   }
   const s = state.settings
+  // 会员档位编辑态（会员 3.0 预备）：存量定义载入草稿，行内增删排序，随「保存全部」提交
+  loadMemberTierDraft(s.memberTiers)
 
   await shellView(
     'settings',
@@ -3497,7 +3626,25 @@ async function viewSettings() {
           <div><div class="switch-label">开启会员体系</div><div class="switch-sub">开启后前台出现「会员」「排行榜」导航入口与 /member /rank 页；编辑器可设文章档位。关闭时这两个页面 404，已设档位的文章仍按档位生效</div></div>
           <label class="switch"><input type="checkbox" id="st-membersEnabled" ${s.membersEnabled === '1' ? 'checked' : ''}><span class="track"></span></label>
         </div>
+        <div class="switch-row">
+          <div><div class="switch-label">开放注册</div><div class="switch-sub">关闭后前台只保留登录（注册表单收起、注册接口拒绝），已有会员不受影响——适合邀请制的站</div></div>
+          <label class="switch"><input type="checkbox" id="st-memberRegOpen" ${s.memberRegOpen !== '0' ? 'checked' : ''}><span class="track"></span></label>
+        </div>
+        <div class="switch-row">
+          <div><div class="switch-label">开放排行榜</div><div class="switch-sub">关闭后 /rank 页显示为空榜（不展示会员名单），会员体系本身照常运行</div></div>
+          <label class="switch"><input type="checkbox" id="st-rankEnabled" ${s.rankEnabled !== '0' ? 'checked' : ''}><span class="track"></span></label>
+        </div>
+        <div class="switch-row">
+          <div><div class="switch-label">评论区会员徽标</div><div class="switch-sub">开启后评论与微博评论显示会员身份与档位认证徽标（带色 ✓ 标）；关闭则评论区不区分会员与游客</div></div>
+          <label class="switch"><input type="checkbox" id="st-showMemberBadge" ${s.showMemberBadge !== '0' ? 'checked' : ''}><span class="track"></span></label>
+        </div>
         <div class="form-item" style="max-width:180px;"><label>排行榜展示条数</label><input class="input" id="st-rankTopN" type="number" min="1" max="50" value="${esc(s.rankTopN || '10')}"></div>
+        <div class="form-item" style="max-width:560px;"><label>会员中心公告（选填）</label><input class="input" id="st-memberNotice" maxlength="200" placeholder="如：会员每周五晚直播答疑，欢迎加入" value="${esc(s.memberNotice || '')}"><div class="sec-desc" style="margin-top:4px;">显示在会员中心页顶部（纯文本，最长 200 字）</div></div>
+        <div class="form-item" style="max-width:640px;"><label>会员档位（等级从上到下，第一档为全体会员的兜底身份，必须永久）</label>
+          <div class="sec-desc" style="margin:4px 0 8px;">前台称呼、付费墙文案、认证徽标颜色都随这里改；「永久」外的档位在「会员管理」里分配时带有效期，过期会员自动按第一档生效。编辑器「谁能看」按档位 key 关联，改名字不影响已有文章</div>
+          <div id="st-tier-editor"></div>
+          <button class="btn btn-ghost btn-sm" id="st-tier-add" type="button" style="margin-top:8px;">+ 添加档位</button>
+        </div>
         <div class="form-item"><label>注册人机验证（Turnstile，选填）</label><div class="sec-desc" style="margin:4px 0 8px;">Cloudflare Dashboard → Turnstile 建个站点，两把钥匙成对填到这里（都留空 = 关闭）。启用后前台注册需先过人机验证，拦批量小号刷分；Secret 保存后只显示打码</div>
           <input class="input" id="st-turnstileSiteKey" placeholder="0x4AAAA…（Site Key，公开）" autocomplete="off" value="${esc(s.turnstileSiteKey || '')}" style="margin-bottom:8px;">
           <input class="input" id="st-turnstileSecret" placeholder="0x4AAAA…（Secret Key，保密）" autocomplete="off" value="${esc(s.turnstileSecret || '')}">
@@ -3788,6 +3935,13 @@ async function viewSettings() {
   const savedAiPolicy = ['seek', 'deny'].includes(s.aiPolicy) ? s.aiPolicy : 'allow'
   document.querySelector(`input[name="st-aiPolicy"][value="${savedAiPolicy}"]`).checked = true
 
+  // 会员档位编辑器：初渲染 + 「添加档位」（会员 3.0 预备）
+  renderMemberTierEditor()
+  document.getElementById('st-tier-add').addEventListener('click', () => {
+    memberTierDraft.push({ key: 't' + Date.now().toString(36), name: '新档位', color: '', permanent: false, days: 365 })
+    renderMemberTierEditor()
+  })
+
   document.getElementById('btn-save').addEventListener('click', async (e) => {
     const g = (id) => document.getElementById(id)
     const btn = e.currentTarget
@@ -3810,6 +3964,12 @@ async function viewSettings() {
       contentVisibleRange: g('st-contentVisibleRange').value,
       membersEnabled: g('st-membersEnabled').checked ? '1' : '0',
       rankTopN: g('st-rankTopN').value || '10',
+      // 会员 3.0 预备：注册/排行榜/徽标开关 + 会员公告 + 档位定义（JSON，服务端 cleanMemberTiers 校验）
+      memberRegOpen: g('st-memberRegOpen').checked ? '1' : '0',
+      rankEnabled: g('st-rankEnabled').checked ? '1' : '0',
+      showMemberBadge: g('st-showMemberBadge').checked ? '1' : '0',
+      memberNotice: g('st-memberNotice').value.trim(),
+      memberTiers: JSON.stringify(memberTierDraft),
       turnstileSiteKey: g('st-turnstileSiteKey').value.trim(),
       turnstileSecret: g('st-turnstileSecret').value.trim(),
       siteGrayscale: g('st-siteGrayscale').checked ? '1' : '0',

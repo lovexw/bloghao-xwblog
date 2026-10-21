@@ -930,8 +930,9 @@
     return authPromise
   }
 
-  // 平铺评论 → 楼中楼（父评论被删的回复按顶层展示）
-  function renderWeiboComments(panel, comments, isAdmin, adminAvatar) {
+  // 平铺评论 → 楼中楼（父评论被删的回复按顶层展示）。
+  // memberName（会员 3.0 预备）：接口随列表下发当前登录会员昵称，非空 = 渲染「回复」按钮（会员可回复楼中楼）
+  function renderWeiboComments(panel, comments, isAdmin, adminAvatar, memberName) {
     var listEl = panel.querySelector('[data-role=list]')
     if (!listEl) return
     var byParent = {}
@@ -959,18 +960,30 @@
       return '<span class="wb-cmt-avatar" aria-hidden="true">' + esc(ch) + '</span>'
     }
     function item(c, nested, floor) {
+      // 会员徽标（服务端解析好的展示串）：member_tier_name 非空 = 生效档位是非基础档，出带 ✓ 的
+      // 认证徽标（色值接口已过白名单）；否则回落「会员」普通徽标（member_name 在场才出）
+      var tierBadge = ''
+      if (c.member_tier_name) {
+        var tc = esc(c.member_tier_color || '')
+        tierBadge = '<span class="wb-cmt-badge"' + (tc ? ' style="color:' + tc + ';border-color:' + tc + '"' : '') + '>✓ ' + esc(c.member_tier_name) + '</span>'
+      } else if (c.member_name) {
+        tierBadge = '<span class="wb-cmt-badge">' + (EN ? 'Member' : '会员') + '</span>'
+      }
+      var replyBtn = '<button type="button" class="wb-cmt-reply-btn" data-reply="' + c.id + '" data-name="' + esc(c.nickname) + '">' + T('回复') + '</button>'
       var html =
         '<li class="wb-cmt-item' + (nested ? ' wb-cmt-nested' : '') + '" id="wbc-' + c.id + '">' +
         '<div class="wb-cmt-head">' + avatarHtml(c) + '<span class="wb-cmt-name">' + esc(c.nickname) +
-        (Number(c.is_admin) ? '<span class="wb-cmt-badge">' + T('楼主') + '</span>' : c.member_name ? '<span class="wb-cmt-badge">' + (EN ? 'Member' : '会员') + '</span>' : '') +
+        (Number(c.is_admin) ? '<span class="wb-cmt-badge">' + T('楼主') + '</span>' : tierBadge) +
         '</span><span class="wb-cmt-time">' + fmtTime(c.created_at) + '</span>' +
         // IP 属地：接口在 showCommentRegion 开启时才带 ip_region（已是服务端格式化好的标签），与楼号同款小灰字
         (c.ip_region ? '<span class="wb-cmt-region" style="font-size:11px;opacity:0.45">' + esc(c.ip_region) + '</span>' : '') +
         (floor ? '<span class="wb-cmt-floor" style="font-size:11px;opacity:0.45;font-variant-numeric:tabular-nums">#' + floor + '</span>' : '') +
         (isAdmin
-          ? '<button type="button" class="wb-cmt-reply-btn" data-reply="' + c.id + '" data-name="' + esc(c.nickname) + '">' + T('回复') + '</button>' +
+          ? replyBtn +
             '<button type="button" class="wb-cmt-del-btn" data-cmt-del="' + c.id + '" title="' + T('删除这条评论（其下回复一并删除，不可恢复）') + '">' + T('删除') + '</button>'
-          : '') +
+          : memberName
+            ? replyBtn
+            : '') +
         '</div><div class="wb-cmt-body">' + wxqReplace(esc(c.content)) + '</div>'
       var kids = byParent[c.id] || []
       if (kids.length) html += '<ul class="wb-cmt-children">' + kids.map(function (k) { return item(k, true) }).join('') + '</ul>'
@@ -986,7 +999,7 @@
     listEl.innerHTML = '<p class="wb-cmt-loading">' + T('加载中…') + '</p>'
     Promise.all([getJSON('/api/public/weibo/' + encodeURIComponent(wbId) + '/comments'), authState()])
       .then(function (rs) {
-        renderWeiboComments(panel, (rs[0] && rs[0].comments) || [], !!(rs[1] && rs[1].user), (rs[0] && rs[0].adminAvatar) || '')
+        renderWeiboComments(panel, (rs[0] && rs[0].comments) || [], !!(rs[1] && rs[1].user), (rs[0] && rs[0].adminAvatar) || '', (rs[0] && rs[0].memberName) || '')
       })
       .catch(function () {
         listEl.innerHTML = '<p class="wb-cmt-empty">' + T('评论加载失败，稍后再试') + '</p>'
@@ -3120,6 +3133,31 @@
         })
     })
   }
+
+  // 每日签到（铁粉体系 3.0-M1）：POST /api/member/checkin，成功刷新看新等级与积分
+  var memCheckinBtn = document.querySelector('[data-member-checkin-btn]')
+  if (memCheckinBtn)
+    memCheckinBtn.addEventListener('click', function () {
+      if (memCheckinBtn.disabled) return
+      var tip = document.querySelector('[data-member-checkin-tip]')
+      var card = document.querySelector('[data-member-checkin]')
+      memCheckinBtn.disabled = true
+      postJSON('/api/member/checkin', {})
+        .then(function (d) {
+          if (card) card.setAttribute('data-checked', '1')
+          memCheckinBtn.textContent = T('已签到')
+          memCheckinBtn.disabled = true
+          var extra = d.bonus ? T('，连续签到加成 +') + d.bonus : ''
+          if (tip) tip.textContent = T('签到成功 +') + d.delta + extra + T('，当前连续 ') + d.streak + T(' 天')
+          setTimeout(function () {
+            reloadFresh()
+          }, 1200)
+        })
+        .catch(function (err) {
+          if (tip) tip.textContent = err.message || T('签到失败，请重试')
+          memCheckinBtn.disabled = false
+        })
+    })
 
   var memLogout = document.querySelector('[data-member-logout]')
   if (memLogout)

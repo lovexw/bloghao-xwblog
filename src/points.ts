@@ -6,14 +6,20 @@
  * 记分一律走 awardPoints：自带单日上限（北京时间自然日）与同账本去重，调用点不得手写 INSERT/UPDATE。
  */
 import { cstDate } from './utils'
+import { fanDay } from './fanrank'
+import { canReadTiers, parseMemberTiers, TIER_KEY_RE } from './tiers'
 
-export type PointsReason = 'comment' | 'dailyLogin' | 'adminAdjust'
+export type PointsReason = 'comment' | 'dailyLogin' | 'checkin' | 'streakBonus' | 'adminAdjust'
 
 export const POINTS_RULES: Record<PointsReason, { delta: number; /** 单日最多计次（按额度算，不按调用次数） */ dailyCap: number; label: string }> = {
   // 评论 +2：过审才计（先审后展的挂到后台通过动作），同一评论只计一次（ref_id = 评论 id 去重）
   comment: { delta: 2, dailyCap: 10, label: '发表留言/评论' },
   // 每日登录 +1：当天重复登录不再计（cap=1 天然幂等）
   dailyLogin: { delta: 1, dailyCap: 1, label: '每日登录' },
+  // 每日签到 +2（铁粉体系 3.0-M1）：显式动作，ref_id = 北京日序号幂等；连续加成单独记账
+  checkin: { delta: 2, dailyCap: 1, label: '每日签到' },
+  // 连续签到加成 +1：连续 ≥7 天的当天额外计（断签清零重来，api.ts checkin 端点判定）
+  streakBonus: { delta: 1, dailyCap: 1, label: '连续签到加成' },
   // 管理员调整：delta 由调用方给定（可负），不受日上限约束（P1.5 后台接口落地时接入）
   adminAdjust: { delta: 0, dailyCap: 0, label: '管理员调整' },
 }
@@ -58,8 +64,14 @@ export async function awardPoints(
   // member_points_log 的 (member_id, reason, ref_id) 部分唯一索引兜底，见 db.ts SCHEMA_INDEXES / schema.sql）。
   // adminAdjust 代码层强制 refId=0（不进唯一索引）：手动调整允许任意次同值操作，防未来调用方
   // 误传 refId>0 被索引当成幂等键静默丢账（AGENTS 积分防线「别给 adminAdjust 传非 0 refId」的硬约束版）
+  // checkin / streakBonus 与 dailyLogin 同用北京日序号做幂等键（同日重复点击被唯一索引拦下）
+  const daySerial = Math.floor(cstDayStart() / 86400000)
   const refId =
-    reason === 'dailyLogin' ? Math.floor(cstDayStart() / 86400000) : reason === 'adminAdjust' ? 0 : opts.refId ?? 0
+    reason === 'dailyLogin' || reason === 'checkin' || reason === 'streakBonus'
+      ? daySerial
+      : reason === 'adminAdjust'
+        ? 0
+        : opts.refId ?? 0
   const capped = reason !== 'adminAdjust' && rule.dailyCap > 0
   const cap = rule.dailyCap * Math.abs(rule.delta)
   const dayStart = cstDayStart()
@@ -128,25 +140,41 @@ export async function awardCommentPoints(db: D1Database, memberId: number, comme
   await awardPoints(db, memberId, 'comment', { refId: commentId })
 }
 
-/* ---------------- 可见档位（契约 A0/A2：posts.min_tier，TEXT 'all'|'member'|'coffee'|'top'） ---------------- */
+/* ---------------- 可见档位（契约 A0/A2：posts.min_tier） ----------------
+ * 档位定义已升级为站长自定义（src/tiers.ts，settings.memberTiers）：这里保留历史常量与
+ * canRead 包装做兼容—— rank 解析 / 过期降级 / 自定义档位判定一律以 tiers.ts 为准 */
 
 export type MinTier = 'all' | 'member' | 'coffee' | 'top'
 
-export const MIN_TIER_VALUES: MinTier[] = ['all', 'member', 'coffee', 'top']
-
-/** 文章档位 → 所需等级：游客 0，登录会员 1，咖啡 2，顶级 3 */
+/** 文章档位 → 所需等级（历史口径）：游客 0，登录会员 1，咖啡 2，顶级 3 */
 export const MIN_TIER_RANK: Record<string, number> = { all: 0, member: 1, coffee: 2, top: 3 }
 /** 会员档位 → 等级（normal 与文章档 'member' 同级：登录即可看） */
 export const MEMBER_TIER_RANK: Record<string, number> = { normal: 1, coffee: 2, top: 3 }
 
-/** 脏值归一：min_tier 落库前/读取时统一过这里，未知值按公开兜底（宁可漏展示、不锁死站长自有内容） */
-export function normalizeMinTier(v: string | null | undefined): MinTier {
-  return MIN_TIER_VALUES.includes(v as MinTier) ? (v as MinTier) : 'all'
+/** 脏值归一：min_tier 落库前/读取时统一过这里。'all' / 'member' 直认；其余放行 TIER_KEY_RE
+ *  形态的自定义档位 key（rank 在读侧 minTierRank 解析，未知键当「登录会员可见」），
+ *  其他脏值按公开兜底（宁可漏展示、不锁死站长自有内容） */
+export function normalizeMinTier(v: string | null | undefined): MinTier | string {
+  const s = (v ?? '').trim()
+  if (!s || s === 'all') return 'all'
+  if (s === 'member') return 'member'
+  return TIER_KEY_RE.test(s) ? s : 'all'
 }
 
-/** 可见判定：会员等级 ≥ 文章档位即可读。游客按 0 */
+/** 可见判定：会员等级 ≥ 文章档位即可读。游客按 0。
+ *  兼容包装：走默认三档定义（自定义档位场景在调用方用 canReadTiers 传真实定义） */
 export function canRead(minTier: string | null | undefined, tier: string | null | undefined): boolean {
-  const need = MIN_TIER_RANK[normalizeMinTier(minTier)] ?? 0
-  if (need <= 0) return true
-  return (tier ? MEMBER_TIER_RANK[tier] ?? 0 : 0) >= need
+  return canReadTiers(parseMemberTiers(undefined), minTier, tier ? { tier } : null)
+}
+
+/** 活跃天数累计（铁粉体系 3.0-M1）：北京日条件更新幂等——同日重复登录/签到不重复计天。
+ *  挂在 dailyLogin 记账点与 checkin 端点；封禁会员的调用点已被上游挡（getMemberUser 查询层） */
+export async function bumpActiveDay(db: D1Database, memberId: number): Promise<void> {
+  const today = fanDay()
+  await db
+    .prepare(
+      "UPDATE members SET active_days = active_days + 1, last_active_day = ? WHERE id = ? AND (last_active_day IS NULL OR last_active_day = '' OR last_active_day < ?)"
+    )
+    .bind(today, memberId, today)
+    .run()
 }

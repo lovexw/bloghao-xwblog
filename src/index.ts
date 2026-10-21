@@ -4,7 +4,7 @@ import { runScheduledPublish } from './scheduler'
 import { api } from './api'
 import { cleanBotPath, identifyBot, purgeBots, recordBot, shouldRecordBot } from './bots'
 import { siteClosedResponse } from './closed'
-import { clientIp, getCookie, getSessionUser, rateLimit } from './auth'
+import { clientIp, getCookie, getSessionUser, isSecureRequest, rateLimit } from './auth'
 import { ensureSchema, getPostBySlug, getSettings, listCategories, listPages, listPosts, listSitemapCategoryLastmod, listSitemapPages, listSitemapPosts, listWeiboLastmod } from './db'
 import { isEn, recordEditionFailure } from './i18n'
 import { buildLlmsFullTxt, buildLlmsStub, buildLlmsTxt } from './llms'
@@ -19,7 +19,7 @@ import { siteBase } from './render'
 import { buildRobotsTxt, readAiPolicy } from './seo'
 import { purgeVisits } from './stats'
 import { purgeTrash } from './trash'
-import { refreshFootStats } from './db'
+import { purgeMemberVisits, refreshFootStats } from './db'
 import type { Env, SessionUser } from './types'
 import { fmtDate, isDemo, siteVisibleCutoff } from './utils'
 
@@ -195,7 +195,7 @@ app.post('/post/:slug/unlock', async (c) => {
   const password = body && typeof body === 'object' ? String((body as Record<string, unknown>)['password'] ?? '').slice(0, 64) : ''
   if (!(await verifyPostPassword(row.password_hash, password))) return c.redirect(`${back}?pwerr=1`, 303)
   const token = await mergeUnlockCookie(getCookie(c.req.raw, PP_COOKIE), row.id, row.password_hash, Date.now())
-  c.header('Set-Cookie', `${PP_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${PP_TTL_MS / 1000}`)
+  c.header('Set-Cookie', `${PP_COOKIE}=${token}; Path=/; HttpOnly;${isSecureRequest(c.req.raw) ? ' Secure;' : ''} SameSite=Lax; Max-Age=${PP_TTL_MS / 1000}`)
   return c.redirect(back, 303)
 })
 
@@ -411,6 +411,8 @@ export default {
           await purgeVisits(env.DB).catch((e) => console.error('purgeVisits failed:', e))
           // 爬虫日志滚动清理：bot_log 同为日志类数据不进备份（src/bots.ts）
           await purgeBots(env.DB).catch((e) => console.error('purgeBots failed:', e))
+          // 会员浏览足迹滚动清理：保留 90 天（会员 3.0 预备，db.ts purgeMemberVisits）
+          await purgeMemberVisits(env.DB).catch((e) => console.error('purgeMemberVisits failed:', e))
           // 回收站滚动清理：到期（30 天）的软删行彻底删除并级联评论（src/trash.ts）
           await purgeTrash(env.DB).catch((e) => console.error('purgeTrash failed:', e))
           // 页脚「站点足迹」统计夜更（db.ts refreshFootStats，页脚名片读 settings.siteFoot）

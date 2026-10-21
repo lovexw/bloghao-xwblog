@@ -223,13 +223,13 @@ export function post(d: PostData): string {
   <div class="wx-meta">
     <a class="wx-meta-avatar" href="/" aria-label="${en ? 'Back to home' : '返回首页'}">${avatar(s)}</a>
     <div class="wx-meta-main">
-      <a class="wx-account" href="/">${esc(tr(en, s.siteName))}</a>
+      <a class="wx-account" href="/">${esc(p.authorName ? tr(en, `${s.siteName} · ${p.authorName}`) : tr(en, s.siteName))}</a>
       <span class="wx-date">${en ? `${fmtDateEn(p.published_at)} · ${p.readingMinutes} min read${p.aiGenerated ? ' · AI-generated' : ''}` : `${fmtDateCN(p.published_at)} · ${p.readingMinutes} 分钟${p.aiGenerated ? ' · AI 生成' : ''}`}</span>
     </div>
   </div>
   ${p.cover ? `<div class="wx-cover"><img src="${esc(p.cover)}" alt=""></div>` : ''}
   <article class="rich" id="rich-content">${p.contentHtml}</article>
-  ${p.locked ? paywallHtml(p.minTier, en) : ''}
+  ${p.locked ? paywallHtml(p.minTier, en, d) : ''}
   ${tagChips || catChip ? `<div class="wx-tags">${catChip}${tagChips}</div>` : ''}
   <div class="wx-actions">
     ${likesBtn(p.slug, p.likes, en)}
@@ -375,7 +375,7 @@ export function member(d: MemberData): string {
     <h1 class="wb-page-title">${en ? 'Membership' : '会员中心'}</h1>
     <p class="wb-page-sub">${d.member ? (en ? 'Points, comments and members-only posts live here' : '留言、常回来，积分与专属内容都在这里') : en ? 'Log in or create an account to join' : '登录或注册，加入本站会员'}</p>
   </header>
-  <main class="wx-member">${d.member ? memberCardHtml(d.member, en) : memberAuthHtml(en)}</main>
+  <main class="wx-member">${d.member ? memberCardHtml(d.member, en) : memberAuthHtml(en, d)}</main>
   ${foot(s, footLinksFor(s, en).archive)}
 </div>`
 }

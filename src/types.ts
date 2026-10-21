@@ -11,6 +11,8 @@ export interface SessionUser {
   username: string
   display_name: string
   avatar: string
+  /** 多作者（3.0-M1）：admin = 站长；author = 作者（管理面 403，requireAdminRole 门槛） */
+  role?: 'admin' | 'author'
 }
 
 /* ---------------- 会员体系（访客注册身份，与 users 管理员彻底分离，契约见 docs/archive/DEVPLAN-2026-10-07.md 附录 A） ---------------- */
@@ -28,7 +30,10 @@ export interface MemberRow {
   avatar: string
   /** 绑定的 QQ 号（仅头像抓取记账位）；任何公开出参不携带，头像走站内转存 */
   qq: string
+  /** 档位 key（src/tiers.ts 自定义档位，settings.memberTiers 定义） */
   tier: MemberTier
+  /** 档位有效期（毫秒）；NULL = 永久/不失效。过期在读侧即时降级为基础档（src/tiers.ts effectiveTier） */
+  tier_expires_at?: number | null
   points: number
   status: 'active' | 'banned'
   created_at: number
@@ -36,6 +41,11 @@ export interface MemberRow {
   last_login_at: number | null
   /** 上次改昵称时间；null = 从未改过，首次修改不受 30 天窗口限制 */
   display_name_changed_at: number | null
+  /** 铁粉体系（DEVPLAN-3.0）：累计活跃天数 / 最近活跃日 / 连续签到 / 最近签到日（老库 ALTER 补列前可能缺省） */
+  active_days?: number
+  last_active_day?: string
+  checkin_streak?: number
+  last_checkin_day?: string
 }
 
 /** 会员会话身份（Cookie xw_member_session；banned 在查询层即视为未登录） */
@@ -115,6 +125,9 @@ export interface CommentRow {
   /** 会员徽标冗余字段：评论列表 LEFT JOIN members 带出（member_id > 0 时非空，契约 DEVPLAN 附录 A） */
   member_name?: string
   member_tier?: MemberTier
+  /** 档位有效期（毫秒，随评论 JOIN 带出）：读侧 effectiveTier 即时判过期（src/tiers.ts），
+   *  只在服务端参与徽标解析，任何公开出参不携带 */
+  member_tier_expires_at?: number | null
   /** 会员头像（站内 /images/ 转存地址）：评论头像位展示用；QQ 号本体永不出参 */
   member_avatar?: string
   /** 游客选填的 QQ 号（评论头像 C2）：仅头像抓取记账位，任何公开出参不携带 */

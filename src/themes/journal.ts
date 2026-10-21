@@ -167,7 +167,7 @@ export function post(d: PostData): string {
     <p class="jrn-meta"><time>${en ? fmtDateEn(p.published_at) : fmtDateCN(p.published_at)}</time><span>·</span><span>${en ? `about ${p.readingMinutes} min` : `约 ${p.readingMinutes} 分钟`}</span><span>·</span><span>${en ? `${fmtViews(p.views, en)} views` : `${fmtViews(p.views)} 阅读`}</span>${p.aiGenerated ? `<span>·</span><span>${en ? 'AI-generated' : 'AI 生成'}</span>` : ''}</p>
     ${p.cover ? `<figure class="jrn-cover"><img src="${esc(p.cover)}" alt=""><figcaption>${en ? `Taken on ${fmtDateEn(p.published_at)}` : `摄于 ${fmtDateCN(p.published_at)}`}</figcaption></figure>` : ''}
     <div class="rich">${p.contentHtml}</div>
-    ${p.locked ? paywallHtml(p.minTier, en) : ''}
+    ${p.locked ? paywallHtml(p.minTier, en, d) : ''}
     <div class="jrn-foot">
       ${likesBtn(p.slug, p.likes, en)}
       ${d.share ? shareBtn(d.share.url, d.share.qr, en) : ''}
@@ -318,7 +318,7 @@ export function member(d: MemberData): string {
   <main>
   <h1 class="jrn-title jrn-page-title">${en ? 'Membership' : '会员中心'}</h1>
   <p class="jrn-intro jrn-page-sub">${d.member ? (en ? 'Points, comments and members-only posts live here' : '留言、常回来，积分与专属内容都在这里') : en ? 'Sign your name and become a regular' : '署个名，成为这本手账的常客'}</p>
-  <section class="jrn-member">${d.member ? memberCardHtml(d.member, en) : memberAuthHtml(en)}</section>
+  <section class="jrn-member">${d.member ? memberCardHtml(d.member, en) : memberAuthHtml(en, d)}</section>
   </main>
   ${foot(s, en ? FOOT_LINKS_EN.archive : FOOT_LINKS.archive)}
 </div>`

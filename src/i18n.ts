@@ -130,7 +130,7 @@ const ZH_EN: Record<string, string> = {
   // 会员档位与会员中心
   '普通会员': 'Member',
   '咖啡会员': 'Coffee member',
-  '顶级会员': 'Top member',
+  '付费会员': 'Paid member',
   '积分': 'Points',
   '退出登录': 'Log out',
   '修改昵称': 'Change display name',

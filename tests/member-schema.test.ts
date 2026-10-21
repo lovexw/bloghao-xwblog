@@ -144,6 +144,8 @@ function makeFakeOldDb(): { db: D1Database; emitted: string[]; tables: Map<strin
       uploads: ['id', 'key', 'name', 'mime', 'size', 'created_at'],
       // categories 是 v0.1 起的原始表：老库必然有它，缺的只是 B23 的 description 列
       categories: ['id', 'name', 'slug', 'sort', 'created_at'],
+      // users 也是原始表（v0.1 起）：缺的只是多作者 3.0-M1 的 role 列
+      users: ['id', 'username', 'password_hash', 'salt', 'display_name', 'avatar', 'created_at', 'updated_at'],
     }).map(([t, cols]) => [t, new Set(cols)])
   )
   const emitted: string[] = []

@@ -345,11 +345,15 @@ test('canRead：档位判定矩阵（游客/normal/coffee/top × all/member/coff
   assert.equal(canRead('top', 'top'), true)
 })
 
-test('normalizeMinTier：脏值一律归 all（不锁死站长自有内容）', () => {
-  for (const dirty of [null, undefined, '', 'ALL', 'vip', 'constructor']) {
+test('normalizeMinTier：非法形态归 all；合法形态的自定义档位 key 放行（读侧解析 rank）', () => {
+  for (const dirty of [null, undefined, '', 'ALL', '9bad', '带 空格']) {
     assert.equal(normalizeMinTier(dirty), 'all', String(dirty))
   }
   assert.equal(normalizeMinTier('member'), 'member')
+  // 会员 3.0 预备：合法 key 形态的自定义档位原样放行——读侧 minTierRank 对未知键按
+  // 「登录会员可见」兜底，不会静默放成全网公开（tests/tiers.test.ts 守判定矩阵）
+  assert.equal(normalizeMinTier('gold'), 'gold')
+  assert.equal(normalizeMinTier('constructor'), 'constructor', '合法形态即放行：rank 解析走数组 find 与字面量比对，无原型链索引面')
 })
 
 test('teaserHtml：按可见文本截断、闭合未关标签、标签本身不计数', () => {

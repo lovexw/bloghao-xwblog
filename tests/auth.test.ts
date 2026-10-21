@@ -16,6 +16,7 @@ import {
   getMemberUser,
   getSessionUser,
   hashPassword,
+  isSecureRequest,
   MEMBER_SESSION_COOKIE,
   memberSessionCookie,
   purgeExpiredSessions,
@@ -182,6 +183,20 @@ test('sessionCookie：HttpOnly + Secure + SameSite=Lax 属性齐全', () => {
   const c = sessionCookie('tok')
   assert.match(c, /^bloghao_session=tok;/)
   for (const flag of ['HttpOnly', 'Secure', 'SameSite=Lax']) assert.ok(c.includes(flag), `缺 ${flag}`)
+})
+
+test('isSecureRequest + sessionCookie(secure)：明文 http（局域网联调）摘 Secure，https 恒带', () => {
+  // https 直连（Workers 生产）→ Secure
+  assert.equal(isSecureRequest(new Request('https://x.test/')), true)
+  // 明文 http（wrangler dev --ip 0.0.0.0 手机联调）→ 不带 Secure，否则浏览器丢弃 Cookie 全部登录态失效
+  assert.equal(isSecureRequest(new Request('http://192.168.1.8:8787/')), false)
+  const plain = sessionCookie('tok', false)
+  assert.ok(plain.includes('HttpOnly'))
+  assert.ok(!plain.includes('Secure'), '明文 http 不应带 Secure')
+  // 反代告知 https（Caddy 默认设 X-Forwarded-Proto）→ Secure 保持
+  assert.equal(isSecureRequest(new Request('http://10.0.0.2/', { headers: { 'X-Forwarded-Proto': 'https' } })), true)
+  // 反代告知 http（CF Flexible SSL 回源段）→ 不带 Secure（与 docker-poc resolveScheme 同口径）
+  assert.equal(isSecureRequest(new Request('http://10.0.0.2/', { headers: { 'X-Forwarded-Proto': 'http' } })), false)
 })
 
 test('destroyOtherSessions（管理员改密踢其他设备）：keepToken 哈希后比对，口径与会员侧一致', async () => {

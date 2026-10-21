@@ -25,8 +25,13 @@ import {
   listWeibo,
   listWeiboTopics,
   locateWeiboPage,
+  listMemberComments,
+  listMemberLikes,
+  listMemberReplies,
+  listMemberVisits,
   parseTags,
   postCommentCountMap,
+  recordMemberVisit,
   relatedPosts,
   weiboCommentCountMap,
   weiboImageList,
@@ -55,17 +60,20 @@ import {
   stripCoverDuplicate,
   tr,
   type CategoryLink,
+  type MemberActivityView,
   type NavPage,
   type RankEntryView,
   type WeiboItemView,
 } from './render'
 import { extractOgImage, sanitizeHtml } from './sanitize'
 import { hasValidUnlock, isProtected, PP_COOKIE, PP_CSS, passwordFormHtml, protectedDescription } from './protect'
-import { canRead, normalizeMinTier } from './points'
+import { normalizeMinTier } from './points'
+import { canReadTiers, effectiveTier, parseMemberTiers, type MemberTierDef } from './tiers'
 import { getTheme, THEMES } from './themes/registry'
 import type { MemberData, RankData } from './themes/registry'
 import type { Env, PostRow, SessionUser, SettingsMap } from './types'
 import { packMatrix, qrMatrix } from './qrcode'
+import { fanDay, fanLevel, fanLevelName } from './fanrank'
 import { clampInt, esc, excerpt, isDemo, readingMinutes, siteVisibleCutoff, teaserHtml } from './utils'
 import { analyticsOrigin, breadcrumbJsonLd, isSpeculativeRequest, readAiPolicy } from './seo'
 import { needsFontSrc } from './skinpack'
@@ -195,7 +203,7 @@ function themeMemberHtml(theme: ReturnType<typeof getTheme>, d: MemberData): str
   const en = isEn(d.settings)
   if (typeof theme.member === 'function') return theme.member(d)
   return `<div style="max-width:520px;margin:0 auto;padding:32px 20px 60px;">
-  ${d.member ? memberCardHtml(d.member, en) : memberAuthHtml(en)}
+  ${d.member ? memberCardHtml(d.member, en) : memberAuthHtml(en, d)}
   <p style="margin-top:32px;"><a href="/">← ${en ? 'Back to Home' : '返回首页'}</a></p>
 </div>`
 }
@@ -586,7 +594,7 @@ export async function renderPost(c: C): Promise<Response> {
     if (!user) return renderNotFound(c)
   }
 
-  const [comments, related, categories, categoryId, user, tags, pages, commentTotal, member, neighbors] = await Promise.all([
+  const [comments, related, categories, categoryId, user, tags, pages, commentTotal, member, neighbors, authorRow] = await Promise.all([
     listApprovedComments(c.env.DB, row.id),
     relatedPosts(c.env.DB, row),
     navCategories(c),
@@ -602,6 +610,10 @@ export async function renderPost(c: C): Promise<Response> {
     row.status === 'published'
       ? adjacentPosts(c.env.DB, row.published_at ?? row.created_at, row.id)
       : Promise.resolve({ prev: null, next: null }),
+    // 多作者署名（3.0-M1）：author 指向的账号（单作者站 author_id 指向 admin，署名行不显示）
+    row.author_id
+      ? c.env.DB.prepare('SELECT display_name, username, role FROM users WHERE id = ?').bind(row.author_id).first<{ display_name: string; username: string; role: string }>()
+      : Promise.resolve(null),
   ])
   const categoryRow = categoryId ? await c.env.DB.prepare('SELECT name, slug FROM categories WHERE id = ?').bind(categoryId).first<{ name: string; slug: string }>() : null
 
@@ -624,12 +636,19 @@ export async function renderPost(c: C): Promise<Response> {
   // 未解锁时一切止步于表单（正文连服务端都不处理）；解锁 Cookie 通过或管理员登录后，再走会员档判定。
   // 评论区对密码文照常开放（与会员锁文同口径）；?pwerr=1 / ?pwerr=slow 是解锁失败 303 回跳的错误态
   const pwerr = url.searchParams.get('pwerr')
-  const lockedError = pwerr === 'slow' ? 'slow' : pwerr ? 'wrong' : undefined
+  const lockedError = pwerr === 'slow' ? 'wrong' : pwerr ? 'slow' : undefined
   const pwLocked = !user && isProtected(row) && !(await hasValidUnlock(getCookie(c.req.raw, PP_COOKIE), row.id, row.password_hash || '', Date.now()))
   // 付费墙（契约 A2）：locked 时服务端把正文截成试读段再下发——浏览器拿不到的才真正拿不到。
-  // 管理员（作者本人预览）不受限；membersEnabled 关闭时无会员会话，锁文对所有人只出试读段
+  // 管理员（作者本人预览）不受限；membersEnabled 关闭时无会员会话，锁文对所有人只出试读段。
+  // 自定义档位（会员 3.0 预备）：canReadTiers 按生效档位判（过期会员即时降级基础档）
+  const tierDefs = parseMemberTiers(settings.memberTiers)
   const minTier = normalizeMinTier(row.min_tier)
-  const locked = !pwLocked && !user && !canRead(minTier, member?.tier)
+  const locked = !pwLocked && !user && !canReadTiers(tierDefs, row.min_tier, member, Date.now())
+  // 会员浏览足迹（会员 3.0 预备）：与阅读计数同一套真实访问口径（非预取、published、限频），
+  // 密码墙未解锁不记（没看到正文不算「浏览过」）；同文同日只留一行，写侧幂等
+  if (member && !pwLocked && row.status === 'published' && !isSpeculativeRequest(c.req.raw) && shouldCountView(clientIp(c.req.raw), row.id)) {
+    c.executionCtx.waitUntil(recordMemberVisit(c.env.DB, member.id, row.id, row.title, fanDay(), Date.now()))
+  }
   // 密码墙时正文一个字节都不出：连 sanitize 都不做，fullHtml 留空（teaser 分支不会被走到）。
   // 渲染路径传 origin：非白名单外链包 /go 中间页（存库/RSS/导出不传，保持原始 URL）
   const fullHtml = pwLocked ? '' : replaceEmoji(stripCoverDuplicate(sanitizeHtml(row.content, { origin: url.origin }), row.cover))
@@ -646,6 +665,9 @@ export async function renderPost(c: C): Promise<Response> {
       !user && member ? (member.display_name || member.username || '').slice(0, 24) : undefined,
     // 作者评论的头像位用站点头像（与微博卡同源），游客/会员评论不适用
     adminAvatar: settings.avatarUrl || undefined,
+    // 会员认证徽标（会员 3.0 预备）：档位定义解析 + 后台开关（关闭时评论区不出会员徽标）
+    tiers: tierDefs,
+    showBadge: settings.showMemberBadge !== '0',
     tip: settings.moderateComments === '1' && !user ? tr(en, '提交后审核通过即展示') : undefined,
     showRegion: settings.showCommentRegion === '1',
     en,
@@ -674,6 +696,8 @@ export async function renderPost(c: C): Promise<Response> {
       locked,
       // AI 生成标注（编辑器自愿申报）：<人工智能生成合成内容标识办法> 显式标识口径，meta 行输出
       aiGenerated: !!row.ai_generated,
+      // 多作者署名（3.0-M1）：author 角色的署名；单作者站（admin 执笔）保持无署名行
+      authorName: authorRow && authorRow.role === 'author' ? (authorRow.display_name || authorRow.username).slice(0, 24) : undefined,
     },
     category: categoryRow ? { name: categoryRow.name, slug: categoryRow.slug } : null,
     categories,
@@ -900,6 +924,9 @@ export async function renderGuestbook(c: C): Promise<Response> {
       adminName: user ? (user.display_name || user.username || '').slice(0, 24) : undefined,
       memberName: !user && member ? (member.display_name || member.username || '').slice(0, 24) : undefined,
       adminAvatar: settings.avatarUrl || undefined,
+      // 会员认证徽标（会员 3.0 预备）：与文章评论区同一套口径
+      tiers: parseMemberTiers(settings.memberTiers),
+      showBadge: settings.showMemberBadge !== '0',
       tip: settings.moderateComments === '1' && !user ? tr(en, '提交后审核通过即展示') : undefined,
       showRegion: settings.showCommentRegion === '1',
       guestbook: true,
@@ -1070,22 +1097,94 @@ function membersEnabled(settings: { membersEnabled?: string }): boolean {
 }
 
 /** 榜单行 → 视图条目：rank 服务端排好（1 起），isMe 标记当前访客本人行（契约 A1） */
-function toRankEntry(m: RankMemberRow, rank: number, sessionId: number | null): RankEntryView {
-  return {
-    rank,
-    nickname: (m.display_name || m.username).slice(0, 24),
-    tier: m.tier,
-    points: m.points,
-    avatarUrl: m.avatar || undefined,
-    isMe: sessionId !== null && sessionId === m.id,
-  }
-}
-
-/** 排行榜取数口径（/rank 页与首页挂件共用）：rankTopN 兜底 1-50 */
+/** 排行榜取数口径（/rank 页与首页挂件共用）：rankTopN 兜底 1-50。
+ *  榜单行带生效档位（自定义档位按 effectiveTier 解析展示名/徽标色，过期即时降级） */
 async function rankEntries(c: C, settings: SettingsMap, sessionId: number | null): Promise<RankEntryView[]> {
   const limit = clampInt(settings.rankTopN, 1, 50, 10)
   const rows = await listRankTop(c.env.DB, limit)
-  return rows.map((m, i) => toRankEntry(m, i + 1, sessionId))
+  const defs = parseMemberTiers(settings.memberTiers)
+  return rows.map((m, i) => {
+    const eff = effectiveTier(defs, m.tier, m.tier_expires_at)
+    return {
+      rank: i + 1,
+      nickname: (m.display_name || m.username).slice(0, 24),
+      tier: m.tier,
+      tierName: eff.name,
+      tierColor: eff.color,
+      tierIsBase: eff.isBase,
+      points: m.points,
+      fanName: fanLevelName(m.points, m.active_days ?? 0),
+      avatarUrl: m.avatar || undefined,
+      isMe: sessionId !== null && sessionId === m.id,
+    }
+  })
+}
+
+/** 会员活动中心数据（会员 3.0 预备）：四组查询转统一条目（href = 目标活链，目标已删只出文字）。
+ *  只服务会员本人（/member 页 SSR 直出），无公开出参 */
+async function memberActivity(db: D1Database, memberId: number): Promise<MemberActivityView> {
+  const [visits, likes, comments, replies] = await Promise.all([
+    listMemberVisits(db, memberId),
+    listMemberLikes(db, memberId),
+    listMemberComments(db, memberId),
+    listMemberReplies(db, memberId),
+  ])
+  const postHref = (slug: string | null) => (slug ? `/post/${encodeURIComponent(slug)}` : '')
+  return {
+    visits: visits.map((v) => ({
+      title: v.title || tr(false, '(无标题文章)'),
+      href: postHref(v.slug),
+      sub: '',
+      ts: v.ts,
+    })),
+    likes: likes.map((l) =>
+      l.targetType === 'post'
+        ? { title: l.title || tr(false, '(文章已删除)'), href: postHref(l.slug), sub: tr(false, '文章'), ts: l.ts }
+        : {
+            title: l.weiboContent ? excerpt(l.weiboContent, 40) : tr(false, '(微博已删除)'),
+            href: `/weibo?wb=${l.targetId}#wb-${l.targetId}`,
+            sub: tr(false, '微博'),
+            ts: l.ts,
+          }
+    ),
+    comments: comments.map((cm) => {
+      const isPost = cm.postId > 0
+      const isWeibo = cm.weiboId > 0
+      const href = isPost
+        ? cm.postSlug
+          ? `/post/${encodeURIComponent(cm.postSlug)}#cmt-${cm.id}`
+          : ''
+        : isWeibo
+          ? `/weibo?wb=${cm.weiboId}#wb-${cm.weiboId}`
+          : `/guestbook#cmt-${cm.id}`
+      const context = isPost
+        ? `《${cm.postTitle || tr(false, '文章已删除')}》`
+        : isWeibo
+          ? tr(false, '微博评论')
+          : tr(false, '留言板')
+      return {
+        title: excerpt(cm.content, 60),
+        href,
+        sub: context,
+        ts: cm.created_at,
+        pending: cm.status === 'pending',
+      }
+    }),
+    replies: replies.map((r) => {
+      const isPost = r.postId > 0
+      const context = isPost
+        ? `《${r.postTitle || tr(false, '文章已删除')}》`
+        : r.weiboId > 0
+          ? tr(false, '微博评论')
+          : tr(false, '留言板')
+      return {
+        title: excerpt(r.content, 60),
+        href: isPost ? postHref(r.postSlug) : r.weiboId > 0 ? `/weibo?wb=${r.weiboId}#wb-${r.weiboId}` : '/guestbook',
+        sub: `${r.isAdmin ? tr(false, '作者') : r.nickname} · ${context}`,
+        ts: r.created_at,
+      }
+    }),
+  }
 }
 
 /** 会员中心页（/member）：未登录渲染登录/注册双表单，已登录渲染会员中心卡 */
@@ -1111,6 +1210,9 @@ export async function renderMember(c: C): Promise<Response> {
     // 会话只有昵称/积分口径，email 等自见字段回表补齐（getMemberUser 已挡 banned）
     const row = await getMemberById(c.env.DB, session.id)
     if (row) {
+      const fan = fanLevel(row.points, row.active_days ?? 0)
+      // 生效档位（src/tiers.ts）：过期即时降级基础档；卡上带有效期与公告（会员 3.0 预备）
+      const eff = effectiveTier(parseMemberTiers(settings.memberTiers), row.tier, row.tier_expires_at)
       member = {
         nickname: (row.display_name || row.username).slice(0, 24),
         tier: row.tier,
@@ -1120,6 +1222,18 @@ export async function renderMember(c: C): Promise<Response> {
         qq: row.qq,
         createdAt: row.created_at,
         displayNameChangedAt: row.display_name_changed_at,
+        fanName: fan.name,
+        fanLevel: fan.level,
+        activeDays: row.active_days ?? 0,
+        checkinStreak: row.checkin_streak ?? 0,
+        checkedToday: row.last_checkin_day === fanDay(),
+        tierName: eff.name,
+        tierColor: eff.color,
+        tierIsBase: eff.isBase,
+        tierExpiresAt: row.tier_expires_at ?? null,
+        tierExpired: eff.expired,
+        notice: settings.memberNotice?.trim() || undefined,
+        activity: await memberActivity(c.env.DB, row.id),
       }
     }
   }
@@ -1153,7 +1267,7 @@ export async function renderRank(c: C): Promise<Response> {
     navPages(c),
     getMemberUser(c.env.DB, c.req.raw),
   ])
-  const entries = await rankEntries(c, settings, session?.id ?? null)
+  const entries = settings.rankEnabled === '0' ? [] : await rankEntries(c, settings, session?.id ?? null)
   const html = themeRankHtml(theme, {
     settings,
     categories,

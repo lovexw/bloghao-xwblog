@@ -20,6 +20,8 @@ const BACKUP_TABLES = [
   'users',
   'members',
   'member_points_log',
+  'member_visits',
+  'member_likes',
   'posts',
   'pages',
   'comments',

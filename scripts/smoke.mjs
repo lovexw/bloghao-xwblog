@@ -1574,7 +1574,9 @@ try {
       await raw('DELETE', `/api/admin/posts/${mdId}`, { headers: { Cookie: cookie } })
       await raw('DELETE', `/api/admin/trash/post/${mdId}`, { headers: { Cookie: cookie } })
       const llmsAfter = await (await raw('GET', '/llms.txt')).text()
-      const goneOk = !llmsAfter.includes(encodeURIComponent(mdSlug))
+      // 断言按「条目」匹配（/post/<slug>），不用裸子串——短 slug（如标题《冒烟：AI 镜像文章》
+      // 只留得下 'ai'）会撞上其它文章 URL 里的字母序列（weekend-hiking-tr**ai**l-notes）造成误报
+      const goneOk = !llmsAfter.includes(`/post/${encodeURIComponent(mdSlug)}`)
       results.push(['AI 面：软删后索引不再含该文', goneOk])
       console.log(`  ${goneOk ? '✓' : '✗'} AI 面：软删后索引不再含该文`)
     }

@@ -21,6 +21,7 @@ import {
   safeEqual,
   SESSION_COOKIE,
   sessionCookie,
+  isSecureRequest,
   tokenHash,
   memberSessionCookie,
 } from './auth'
@@ -56,6 +57,9 @@ import {
   parseWeiboVideo,
   postAdminView,
   invalidateSharedSettings,
+  recordMemberLike,
+  recordMemberVisit,
+  removeMemberLike,
   saveSettings,
   SECRET_SETTINGS,
   seedWelcomePost,
@@ -85,7 +89,9 @@ import {
   upsertInstalled,
 } from './pluginpkg'
 import { EMOJI_BASE, WECHAT_EMOJI } from './emoji'
-import { awardCommentPoints, awardPoints, normalizeMinTier } from './points'
+import { awardCommentPoints, awardPoints, bumpActiveDay, normalizeMinTier } from './points'
+import { fanDay, fanLevel, nextStreak } from './fanrank'
+import { cleanMemberTiers, effectiveTier, parseMemberTiers, tierByKey, type MemberTierDef } from './tiers'
 import { collectRoutes } from './collect'
 import { exportRoutes } from './export'
 import { adminExternalRoutes, externalRoutes, notifyAdminComment, telegramRoutes } from './external'
@@ -143,7 +149,7 @@ import { getBotStats } from './bots'
 import { fetchLinkMeta, fetchableUrl } from './linkmeta'
 import { BROWSER_UA, buildCardHtml, coverProxyHostOk, coverReferer, fetchDoubanDetail, probeRelay, resolveCardCover, sanitizeMediaItem, searchMedia, subjectIdFromUrl, validateRelay, type MediaItem } from './douban'
 import { THEMES } from './themes/registry'
-import type { CommentRow, Env, MemberRow, MemberTier, PostRow, SessionUser } from './types'
+import type { CommentRow, Env, MemberRow, PostRow, SessionUser } from './types'
 import { appendOldSlug, clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extractWeiboTopics, fmtDateCN, isDemo, isValidQQ, jsonItemLikePattern, LIST_RANGES, listRangeCutoff, nicknameCooldown, normalizeLinkUrl, siteVisibleCutoff, slugify } from './utils'
 
 type AppEnv = { Bindings: Env; Variables: { user: SessionUser } }
@@ -244,7 +250,7 @@ api.post('/auth/setup', async (c) => {
       .run()
     await invalidateSharedSettings(c.env.DB)
     const token = await createSession(c.env.DB, userId)
-    c.header('Set-Cookie', sessionCookie(token))
+    c.header('Set-Cookie', sessionCookie(token, isSecureRequest(c.req.raw)))
     return c.json({ ok: true, user: { id: userId, username, display_name: body?.displayName || username, avatar: '' } })
   } catch (e) {
     // 建号中途失败要释放锁，否则首次安装被永久卡死
@@ -286,6 +292,7 @@ api.post('/auth/login', async (c) => {
     salt: string
     display_name: string
     avatar: string
+    role?: 'admin' | 'author'
   }>()
   if (user) {
     const { hash } = await hashPassword(password, user.salt)
@@ -311,10 +318,10 @@ api.post('/auth/login', async (c) => {
         )
           .bind(user.id, over)
           .run()
-      c.header('Set-Cookie', sessionCookie(token))
+      c.header('Set-Cookie', sessionCookie(token, isSecureRequest(c.req.raw)))
       return c.json({
         ok: true,
-        user: { id: user.id, username: user.username, display_name: user.display_name, avatar: user.avatar },
+        user: { id: user.id, username: user.username, display_name: user.display_name, avatar: user.avatar, role: user.role },
       })
     }
   } else {
@@ -333,11 +340,18 @@ api.post('/auth/logout', async (c) => {
 
 /* ---------------- 会员（访客注册/登录，契约见 docs/archive/DEVPLAN-2026-10-07.md 附录 A） ---------------- */
 
-/** 对外视图裁剪：公开口径只有昵称/档位/积分；self = 本人视角（另给 email/username/createdAt），管理口径走 listMembersAdmin 原始行 */
-function memberView(m: MemberRow, self = false) {
+/** 对外视图裁剪：公开口径只有昵称/档位/积分；self = 本人视角（另给 email/username/createdAt），管理口径走 listMembersAdmin 原始行。
+ *  档位出参按生效档位（src/tiers.ts：过期即时降级基础档）解析——tierName/tierColor 供前台直接渲染认证徽标 */
+function memberView(m: MemberRow, self = false, defs: MemberTierDef[] = parseMemberTiers(undefined)) {
+  const eff = effectiveTier(defs, m.tier, m.tier_expires_at)
   const v: Record<string, unknown> = {
     nickname: (m.display_name || m.username).slice(0, 24),
     tier: m.tier,
+    tierName: eff.name,
+    tierColor: eff.color,
+    tierIsBase: eff.isBase,
+    tierExpiresAt: m.tier_expires_at ?? null,
+    tierExpired: eff.expired,
     points: m.points,
   }
   if (m.avatar) v.avatarUrl = m.avatar
@@ -347,6 +361,13 @@ function memberView(m: MemberRow, self = false) {
     v.qq = m.qq
     v.createdAt = m.created_at
     v.displayNameChangedAt = m.display_name_changed_at ?? null
+    // 铁粉体系（3.0-M1）：等级与签到状态本人视角可见（会员卡渲染签到按钮态）
+    const fan = fanLevel(m.points, m.active_days ?? 0)
+    v.fanLevel = fan.level
+    v.fanName = fan.name
+    v.activeDays = m.active_days ?? 0
+    v.checkinStreak = m.checkin_streak ?? 0
+    v.checkedToday = m.last_checkin_day === fanDay()
   }
   return v
 }
@@ -354,6 +375,8 @@ function memberView(m: MemberRow, self = false) {
 api.post('/member/register', async (c) => {
   const settings = await getSettings(c.env.DB)
   if (settings.membersEnabled !== '1') return jsonError('会员功能未开放', 404)
+  // 注册开关（会员 3.0 预备，settings.memberRegOpen）：关闭 = 老会员照常登录、新用户不再进人
+  if (settings.memberRegOpen === '0') return jsonError('本站暂不开放注册，稍后再来看看', 403)
   const ip = clientIp(c.req.raw)
   if (!rateLimit(`mreg:${ip}`, 5, 10 * 60_000)) return jsonError('注册太频繁，请稍后再试', 429)
   const body = await c.req.json<{ username?: string; password?: string; email?: string; nickname?: string; link?: string; turnstileToken?: string }>().catch(() => null)
@@ -383,8 +406,9 @@ api.post('/member/register', async (c) => {
     return jsonError('用户名已被占用') // 并发注册撞 UNIQUE 约束的兜底
   }
   const token = await createMemberSession(c.env.DB, memberId)
-  c.header('Set-Cookie', memberSessionCookie(token))
+  c.header('Set-Cookie', memberSessionCookie(token, isSecureRequest(c.req.raw)))
   await awardPoints(c.env.DB, memberId, 'dailyLogin')
+  await bumpActiveDay(c.env.DB, memberId)
   const row = await getMemberById(c.env.DB, memberId)
   return c.json({ ok: true, member: row ? memberView(row, true) : null })
 })
@@ -414,8 +438,9 @@ api.post('/member/login', async (c) => {
         )
           .bind(m.id, mover)
           .run()
-      c.header('Set-Cookie', memberSessionCookie(token))
+      c.header('Set-Cookie', memberSessionCookie(token, isSecureRequest(c.req.raw)))
       await awardPoints(c.env.DB, m.id, 'dailyLogin')
+      await bumpActiveDay(c.env.DB, m.id)
       await c.env.DB.prepare('UPDATE members SET last_login_at = ? WHERE id = ?').bind(Date.now(), m.id).run()
       return c.json({ ok: true, member: memberView(m, true) })
     }
@@ -466,6 +491,29 @@ async function fetchQQAvatar(env: Env, qq: string): Promise<string | null> {
   }
   return null
 }
+
+/** 每日签到（铁粉体系 3.0-M1）：+2 分、连续 ≥7 天当天额外 +1（streakBonus）、活跃天数同步累计。
+ *  幂等三道：前置查 last_checkin_day、ref_id 北京日序号唯一索引、日上限 cap=1——连点/并发都只记一次 */
+api.post('/member/checkin', async (c) => {
+  const settings = await getSettings(c.env.DB)
+  if (settings.membersEnabled !== '1') return jsonError('会员功能未开放', 404)
+  if (!rateLimit(`mcheckin:${clientIp(c.req.raw)}`, 10, 60_000)) return jsonError('操作太频繁，请稍后再试', 429)
+  const m = await getMemberUser(c.env.DB, c.req.raw)
+  if (!m) return jsonError('请先登录', 401)
+  const row = await getMemberById(c.env.DB, m.id)
+  if (!row || row.status === 'banned') return jsonError('账号不可用', 403)
+  const today = fanDay()
+  if (row.last_checkin_day === today) return jsonError('今天已经签到过啦，明天再来', 400)
+  const streak = nextStreak(row.last_checkin_day || '', today, fanDay(Date.now() - 86_400_000), row.checkin_streak ?? 0)
+  const res = await awardPoints(c.env.DB, m.id, 'checkin')
+  let bonus = 0
+  if (streak >= 7) bonus = (await awardPoints(c.env.DB, m.id, 'streakBonus')).delta
+  await c.env.DB.prepare('UPDATE members SET checkin_streak = ?, last_checkin_day = ? WHERE id = ?').bind(streak, today, m.id).run()
+  await bumpActiveDay(c.env.DB, m.id)
+  const after = await getMemberById(c.env.DB, m.id)
+  const fan = fanLevel(after?.points ?? 0, after?.active_days ?? 0)
+  return c.json({ ok: true, delta: res.delta, bonus, points: after?.points ?? 0, streak, level: fan.level, levelName: fan.name })
+})
 
 api.post('/member/profile', async (c) => {
   const settings = await getSettings(c.env.DB)
@@ -544,25 +592,79 @@ api.use('/admin/*', async (c, next) => {
   await next()
 })
 
+/* 多作者权限门槛（3.0-M1）：author 角色在管理面 403，内容面（posts/weibo/comments/uploads/pages/links 等）放行。
+ * 白名单用前缀常量写死——权限面越少越安全，别做成可配置。admin 角色不受限。 */
+const AUTHOR_ALLOWED_PREFIXES = [
+  '/admin/posts',
+  '/admin/weibo',
+  '/admin/comments',
+  '/admin/uploads',
+  '/admin/media',
+  '/admin/pages',
+  '/admin/categories',
+  '/admin/tags',
+  '/admin/links',
+  '/admin/upload',
+  '/admin/og-image',
+  // 编辑器内容辅助（MD 预览 / 粘贴净化 / 链接卡片 / 媒体搜索）：作者写文要用的同一批工具，
+  // 全是内容面助手（无站点配置语义），不放行会让作者的编辑器预览与插卡静默 403
+  '/admin/tools',
+]
+api.use('/admin/*', async (c, next) => {
+  const user = c.get('user')
+  if (user && user.role === 'author') {
+    // c.req.path 在测试薄壳（api 子应用直调）与生产挂载（/api 前缀）下形态不同——规范化后再匹配
+    const norm = c.req.path.startsWith('/api/') ? c.req.path.slice(4) : c.req.path
+    const allowed = AUTHOR_ALLOWED_PREFIXES.some((p) => norm === p || norm.startsWith(p + '/'))
+    if (!allowed) return jsonError('作者账号没有该管理面的权限（多作者权限矩阵见 docs/DEVPLAN-3.0.md）', 403)
+  }
+  await next()
+})
+
 /* 后台会员管理（PUT 缺键即保留，同 posts PUT 语义） */
 
-const MEMBER_TIERS: MemberTier[] = ['normal', 'coffee', 'top']
+/** 生成「某日期当天结束」的毫秒时间戳（北京时间口径）：后台日期输入 YYYY-MM-DD → 到期时刻。
+ *  非法输入返回 null（调用方按「清除有效期」处理） */
+function expiryDateToMs(date: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.trim())
+  if (!m) return null
+  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59) - 8 * 3600_000
+  return Number.isFinite(ms) && ms > 0 ? ms : null
+}
 
 api.get('/admin/members', async (c) => {
   const page = clampInt(c.req.query('page'), 1, 1_000_000, 1)
   const q = (c.req.query('q') || '').trim().slice(0, 50)
-  return c.json(await listMembersAdmin(c.env.DB, q, page))
+  const [list, settings] = await Promise.all([listMembersAdmin(c.env.DB, q, page), getSettings(c.env.DB)])
+  // tiers 随列表下发：后台「分配档位」弹窗与档位角标直接用（自定义档位的事实源是 settings.memberTiers）
+  return c.json({ ...list, tiers: parseMemberTiers(settings.memberTiers) })
 })
 
 api.put('/admin/members/:id', async (c) => {
   const id = parseId(c.req.param('id'))
   if (!id) return jsonError('会员不存在', 404)
-  const body = await c.req.json<{ tier?: string; status?: string }>().catch(() => null)
+  const body = await c.req.json<{ tier?: string; status?: string; tierExpiresAt?: unknown }>().catch(() => null)
   if (!body || typeof body !== 'object') return jsonError('请求格式错误')
-  const patch: { tier?: string; status?: string } = {}
+  const settings = await getSettings(c.env.DB)
+  const defs = parseMemberTiers(settings.memberTiers)
+  const patch: { tier?: string; status?: string; tierExpiresAt?: number | null } = {}
   if ('tier' in body) {
-    if (!MEMBER_TIERS.includes(body.tier as MemberTier)) return jsonError('未知档位')
-    patch.tier = body.tier
+    // 档位必须是自定义定义里的 key（脏值 400 不静默降级——与 contentVisibleRange 同口径）
+    if (!tierByKey(defs, String(body.tier || ''))) return jsonError('未知档位')
+    patch.tier = String(body.tier)
+    // 分配永久档 = 清除有效期；分配限时档且未显式给有效期 = 保持旧值（缺键即保留语义）
+    if (tierByKey(defs, patch.tier)?.permanent) patch.tierExpiresAt = null
+  }
+  if ('tierExpiresAt' in body) {
+    // null = 清除（转永久）；数字 = 到期毫秒；'YYYY-MM-DD' 字符串 = 当天结束（北京时间）
+    const v = body.tierExpiresAt
+    if (v === null) patch.tierExpiresAt = null
+    else if (typeof v === 'number' && Number.isFinite(v) && v > 0) patch.tierExpiresAt = Math.trunc(v)
+    else if (typeof v === 'string' && v.trim()) {
+      const ms = expiryDateToMs(v)
+      if (!ms) return jsonError('有效期格式不对')
+      patch.tierExpiresAt = ms
+    } else return jsonError('有效期格式不对')
   }
   if ('status' in body) {
     if (body.status !== 'active' && body.status !== 'banned') return jsonError('未知状态')
@@ -572,6 +674,12 @@ api.put('/admin/members/:id', async (c) => {
   // 拉黑即踢下线（getMemberUser 查询层已挡 banned，这里把会话 token 一并清掉）
   if (patch.status === 'banned') await destroyMemberSessionsByMember(c.env.DB, id)
   return c.json({ ok: true })
+})
+
+/** 档位定义只读出口（编辑器「谁能看」等管理面用）：定义本体走设置 PUT 的 memberTiers 键 */
+api.get('/admin/member-tiers', async (c) => {
+  const settings = await getSettings(c.env.DB)
+  return c.json({ tiers: parseMemberTiers(settings.memberTiers) })
 })
 
 /* 采集插件（公众号文章 → 草稿），见 src/collect.ts */
@@ -647,6 +755,51 @@ api.delete('/admin/sessions', async (c) => {
   const res = await c.env.DB.prepare('DELETE FROM sessions WHERE token = ? AND user_id = ?').bind(target, user.id).run()
   if (!res.meta.changes) return jsonError('会话不存在或已过期', 404)
   return c.json({ ok: true })
+})
+
+/* ---------------- 多作者（3.0-M1）：管理员创建作者账号 ---------------- */
+
+api.post('/admin/authors', async (c) => {
+  const user = c.get('user')
+  if (user.role !== 'admin') return jsonError('只有站长（admin）可以创建作者账号', 403)
+  if (!rateLimit(`authors:${clientIp(c.req.raw)}`, 10, 60_000)) return jsonError('操作太频繁，请稍后再试', 429)
+  const body = await c.req.json<{ username?: string; password?: string; displayName?: string }>().catch(() => null)
+  const username = String(body?.username || '').trim()
+  const password = String(body?.password || '')
+  const displayName = String(body?.displayName || '').trim().slice(0, 24)
+  if (!/^[a-zA-Z0-9_-]{2,24}$/.test(username)) return jsonError('用户名需 2-24 位字母、数字、_ 或 -')
+  if (password.length < 8 || password.length > 64) return jsonError('密码 8-64 位')
+  const dup = await c.env.DB.prepare('SELECT id FROM users WHERE username = ?').bind(username).first()
+  if (dup) return jsonError('用户名已被占用')
+  const { hash, salt } = await hashPassword(password)
+  const now = Date.now()
+  let res
+  try {
+    res = await c.env.DB
+      .prepare(
+        "INSERT INTO users (username, password_hash, salt, display_name, role, created_at, updated_at) VALUES (?, ?, ?, ?, 'author', ?, ?)"
+      )
+      .bind(username, hash, salt, displayName || username, now, now)
+      .run()
+  } catch (e) {
+    // 前置查与写入之间有并发窗口，同名作者撞 users.username UNIQUE 回可读的 400 而不是 500
+    if (e instanceof Error && /UNIQUE/i.test(e.message)) return jsonError('用户名已被占用')
+    throw e
+  }
+  return c.json({ ok: true, author: { id: Number(res.meta.last_row_id), username, displayName: displayName || username, role: 'author' } })
+})
+
+api.get('/admin/authors', async (c) => {
+  const user = c.get('user')
+  if (user.role !== 'admin') return jsonError('只有站长（admin）可以查看作者列表', 403)
+  const rows = await c.env.DB.prepare("SELECT id, username, display_name, role, created_at FROM users WHERE role = 'author' ORDER BY created_at DESC").all<{
+    id: number
+    username: string
+    display_name: string
+    role: string
+    created_at: number
+  }>()
+  return c.json({ ok: true, authors: rows.results ?? [] })
 })
 
 api.get('/admin/stats', async (c) => {
@@ -2106,6 +2259,10 @@ const BOOL_SETTINGS = [
   'siteClosed',
   'siteNoindex',
   'membersEnabled',
+  // 会员 3.0 预备：注册开关 / 排行榜开关 / 评论区认证徽标开关
+  'memberRegOpen',
+  'rankEnabled',
+  'showMemberBadge',
   // 新手引导记账位（db.ts DEFAULT_SETTINGS 同注释）：onboarding='1' 引导激活；
   // onboardingManual='1' 手册已打开。后台设置页「保存全部」不含这两键，别加进去——
   // 整表提交会把引导态重置
@@ -2150,6 +2307,30 @@ api.put('/admin/settings', async (c) => {
       // 站长得知道「保存了但没生效」是输入问题；'' = 全部可见
       if (v !== '' && !Object.prototype.hasOwnProperty.call(LIST_RANGES, v)) return jsonError('可见范围档位不正确')
       patch[key] = v
+      continue
+    }
+    if (key === 'memberTiers') {
+      // 会员档位定义（src/tiers.ts）：JSON 净化成规范化数组存库；非法整体 400（读侧脏 JSON
+      // 会兜底默认三档，但写路径必须让站长当场知道存坏了——与 appearance / customCss 同口径）
+      let raw: unknown = null
+      try {
+        raw = v.trim() ? JSON.parse(v) : null
+      } catch {
+        return jsonError('会员档位定义不是合法 JSON')
+      }
+      if (raw === null) {
+        patch[key] = ''
+        continue
+      }
+      const defs = cleanMemberTiers(raw)
+      if (!defs)
+        return jsonError('会员档位定义不合法：1-10 档、key 唯一（小写字母开头，all/member 保留）、第一档需为永久档、名称 1-12 字')
+      patch[key] = JSON.stringify(defs)
+      continue
+    }
+    if (key === 'memberNotice') {
+      // 会员中心公告：纯文本单行（换行折叠成空格），长度 200 封顶——渲染层 esc 后直出
+      patch[key] = v.replace(/\s+/g, ' ').trim().slice(0, 200)
       continue
     }
     if (key === 'appearance') {
@@ -2975,14 +3156,19 @@ async function publicComment(
 
   const parentId = Number(body?.parentId) || 0
   const now = Date.now()
-  if (user) {
-    // 作者发言（回复或自己留言）：直接展示，带「作者」徽标；parent 按同一归属过滤
+  // 回复目标校验（作者与会员两路共用）：parent 必须存在于同一归属下；
+  // 楼中楼扁平化沿用既有口径——回复一律挂线程根（parent.parent_id || parent.id）
+  let parent: CommentRow | null = null
+  if (parentId) {
+    // 会员 3.0 起放开会员回复；游客仍不可（匿名楼中楼是刷量面，也不利于「收到的回复」归账）
+    if (!user && !member) return jsonError(`登录后才能回复${o.noun}`, 403)
     const scopeCond = o.kind === 'post' ? 'post_id = ?' : o.kind === 'weibo' ? 'weibo_id = ?' : 'post_id = 0 AND weibo_id = 0'
     const scopeBind = o.kind === 'guestbook' ? [] : [o.kind === 'post' ? t.postId : t.weiboId]
-    const parent = parentId
-      ? await db.prepare(`SELECT * FROM comments WHERE id = ? AND ${scopeCond}`).bind(parentId, ...scopeBind).first<CommentRow>()
-      : null
-    if (parentId && !parent) return jsonError(`要回复的${o.noun}不存在`, 404)
+    parent = await db.prepare(`SELECT * FROM comments WHERE id = ? AND ${scopeCond}`).bind(parentId, ...scopeBind).first<CommentRow>()
+    if (!parent) return jsonError(`要回复的${o.noun}不存在`, 404)
+  }
+  if (user) {
+    // 作者发言（回复或自己留言）：直接展示，带「作者」徽标
     await db
       .prepare(
         "INSERT INTO comments (post_id, weibo_id, parent_id, is_admin, nickname, content, status, ip, ip_region, created_at) VALUES (?, ?, ?, 1, ?, ?, 'approved', ?, ?, ?)"
@@ -3003,16 +3189,26 @@ async function publicComment(
     return c.json({ ok: true })
   }
 
-  if (parentId) return jsonError(`只有作者可以回复${o.noun}`, 403)
   const pending = settings.moderateComments === '1'
   if (member) {
-    // 会员发言：身份来自会话，表单昵称/邮箱/网站字段一律忽略（契约 A5）；先审后展口径与游客一致
+    // 会员发言（评论或回复）：身份来自会话，表单昵称/邮箱/网站字段一律忽略（契约 A5）；先审后展口径与游客一致
     const nickname = (member.display_name || member.username).slice(0, 24)
     const ins = await db
       .prepare(
-        'INSERT INTO comments (post_id, weibo_id, parent_id, member_id, is_admin, nickname, content, status, ip, ip_region, created_at) VALUES (?, ?, 0, ?, 0, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO comments (post_id, weibo_id, parent_id, member_id, is_admin, nickname, content, status, ip, ip_region, created_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)'
       )
-      .bind(t.postId, t.weiboId, member.id, nickname, content, pending ? 'pending' : 'approved', ip, ipRegion, now)
+      .bind(
+        t.postId,
+        t.weiboId,
+        parent ? parent.parent_id || parent.id : 0,
+        member.id,
+        nickname,
+        content,
+        pending ? 'pending' : 'approved',
+        ip,
+        ipRegion,
+        now
+      )
       .run()
     // 新留言推送 TG 与插件广播（与游客同路，见下方游客分支注释）
     const base = siteBase(settings, new URL(c.req.url).origin)
@@ -3129,6 +3325,18 @@ async function likeDelta(
   return row?.likes ?? 0
 }
 
+/** 会员点赞记账（会员 3.0 预备，会员中心「我的点赞」）：登录会员的赞落 member_likes、取消赞删行。
+ *  异步不阻塞点赞响应；新增点赞的「目标存活」校验在调用点做（与 likeDelta 只对 published 行生效同口径） */
+async function trackMemberLike(c: Context<AppEnv>, targetType: 'post' | 'weibo', targetId: number, delta: number): Promise<void> {
+  const member = await getMemberUser(c.env.DB, c.req.raw)
+  if (!member) return
+  if (delta === -1) {
+    await removeMemberLike(c.env.DB, member.id, targetType, targetId)
+    return
+  }
+  await recordMemberLike(c.env.DB, member.id, targetType, targetId, Date.now())
+}
+
 api.post('/public/like/weibo/:id', async (c) => {
   // 限流防脚本刷赞刷踩（正常用户连点几条微博远够用）
   if (!rateLimit(`like:${clientIp(c.req.raw)}`, 30, 10 * 60_000)) return jsonError('操作太频繁了，休息一下吧', 429)
@@ -3136,7 +3344,14 @@ api.post('/public/like/weibo/:id', async (c) => {
   if (!id) return jsonError('参数错误')
   const body = await c.req.json<{ delta?: number }>().catch(() => null)
   const delta = body?.delta === -1 ? -1 : 1
-  return c.json({ ok: true, likes: await likeDelta(c.env.DB, 'weibo', 'id', String(id), delta) })
+  const likes = await likeDelta(c.env.DB, 'weibo', 'id', String(id), delta)
+  if (delta === 1) {
+    const wb = await getWeiboById(c.env.DB, id)
+    if (wb && wb.status === 'published') c.executionCtx.waitUntil(trackMemberLike(c, 'weibo', id, 1))
+  } else {
+    c.executionCtx.waitUntil(trackMemberLike(c, 'weibo', id, -1))
+  }
+  return c.json({ ok: true, likes })
 })
 
 api.get('/public/weibo/:id/comments', async (c) => {
@@ -3153,14 +3368,34 @@ api.get('/public/weibo/:id/comments', async (c) => {
     .prepare(
       `SELECT cm.id, cm.parent_id, cm.is_admin, cm.nickname, cm.content, cm.created_at, cm.avatar${
         showRegion ? ', cm.ip_region' : ''
-      }, m.display_name AS member_name, m.tier AS member_tier, m.avatar AS member_avatar FROM comments cm LEFT JOIN members m ON m.id = cm.member_id WHERE cm.weibo_id = ? AND cm.status = 'approved' ORDER BY cm.created_at ASC LIMIT 200`
+      }, m.display_name AS member_name, m.tier AS member_tier, m.tier_expires_at AS member_tier_expires_at, m.avatar AS member_avatar FROM comments cm LEFT JOIN members m ON m.id = cm.member_id WHERE cm.weibo_id = ? AND cm.status = 'approved' ORDER BY cm.created_at ASC LIMIT 200`
     )
     .bind(id)
     .all()
-  const comments = showRegion
-    ? (results ?? []).map((r: Record<string, unknown>) => ({ ...r, ip_region: ipRegionLabel(String(r.ip_region || ''), en) }))
-    : results ?? []
-  return c.json({ comments, allowComments: settings.allowComments === '1', adminAvatar: settings.avatarUrl || '' })
+  // 认证徽标（src/tiers.ts）在服务端解析成展示串：生效档位非基础档才给 tier_name/tier_color
+  // （基础档回落「会员」普通徽标，客户端按 member_name 渲染）——客户端零判定逻辑，改口径只动这里。
+  // tier_expires_at 只在服务端参与过期判定，出参前剥掉（有效期是会员本人视角的数据，不随公开评论外发）
+  const badgeOn = settings.showMemberBadge !== '0'
+  const defs = parseMemberTiers(settings.memberTiers)
+  const now = Date.now()
+  const comments = (results ?? []).map((r: Record<string, unknown>) => {
+    if (badgeOn && r.member_tier) {
+      const eff = effectiveTier(defs, String(r.member_tier), (r.member_tier_expires_at as number | null) ?? null, now)
+      r.member_tier_name = eff.isBase ? '' : eff.name
+      r.member_tier_color = eff.isBase ? '' : eff.color
+    }
+    delete r.member_tier_expires_at
+    return showRegion ? { ...r, ip_region: ipRegionLabel(String(r.ip_region || ''), en) } : r
+  })
+  // memberName 驱动微博评论的「回复」按钮（会员可回复，游客没有按钮）；匿名访客千人一面才配吃缓存，
+  // 会员 Cookie 在场时 pagecache 本就回源（pageCacheKeyFor 挡），不会串身份
+  const member = settings.membersEnabled === '1' ? await getMemberUser(c.env.DB, c.req.raw) : null
+  return c.json({
+    comments,
+    allowComments: settings.allowComments === '1',
+    adminAvatar: settings.avatarUrl || '',
+    memberName: member ? (member.display_name || member.username).slice(0, 24) : '',
+  })
 })
 
 api.post('/public/weibo/:id/comments', async (c) => {
@@ -3183,7 +3418,16 @@ api.post('/public/like/:slug', async (c) => {
   const slug = c.req.param('slug').slice(0, 100)
   const body = await c.req.json<{ delta?: number }>().catch(() => null)
   const delta = body?.delta === -1 ? -1 : 1
-  return c.json({ ok: true, likes: await likeDelta(c.env.DB, 'posts', 'slug', slug, delta) })
+  const likes = await likeDelta(c.env.DB, 'posts', 'slug', slug, delta)
+  // 会员点赞记账（member_likes 按文章 id 记，这里把 slug 换算回 id；取消赞删行）
+  if (delta === 1) {
+    const post = await getPostBySlug(c.env.DB, slug)
+    if (post && post.status === 'published') c.executionCtx.waitUntil(trackMemberLike(c, 'post', post.id, 1))
+  } else {
+    const post = await getPostBySlug(c.env.DB, slug)
+    if (post) c.executionCtx.waitUntil(trackMemberLike(c, 'post', post.id, -1))
+  }
+  return c.json({ ok: true, likes })
 })
 
 /* ---------------- 访客统计打点（公开，site.js 上报，见 src/stats.ts） ---------------- */

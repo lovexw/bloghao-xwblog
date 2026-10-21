@@ -139,7 +139,7 @@ export function post(d: PostData): string {
     <h1 class="md-title">${esc(p.title)}</h1>
     ${p.cover ? `<div class="md-cover"><img src="${esc(p.cover)}" alt=""></div>` : ''}
     <div class="rich">${p.contentHtml}</div>
-    ${p.locked ? paywallHtml(p.minTier, en) : ''}
+    ${p.locked ? paywallHtml(p.minTier, en, d) : ''}
     <div class="md-foot">
       ${likesBtn(p.slug, p.likes, en)}
       ${d.share ? shareBtn(d.share.url, d.share.qr, en) : ''}
@@ -299,7 +299,7 @@ export function member(d: MemberData): string {
     <h1>${en ? 'Membership' : '会员中心'}</h1>
     <p>${d.member ? (en ? '// Points, comments and members-only posts live here' : '// 留言、常回来，积分与专属内容都在这里') : en ? '// Log in or sign up and join the night crew' : '// 登录或注册，加入夜航船员'}</p>
   </section>
-  <main class="md-member">${d.member ? memberCardHtml(d.member, en) : memberAuthHtml(en)}</main>
+  <main class="md-member">${d.member ? memberCardHtml(d.member, en) : memberAuthHtml(en, d)}</main>
   ${foot(s, en ? FOOT_LINKS_EN.home : FOOT_LINKS.home)}
 </div>`
 }

@@ -162,7 +162,7 @@ export function post(d: PostData): string {
     <div class="pp-meta"><time>${en ? fmtDateEn(p.published_at) : fmtDate(p.published_at)}</time><span>·</span><span>${en ? `${p.readingMinutes} min read` : `${p.readingMinutes} 分钟读完`}</span><span>·</span><span>${en ? `${p.views} views` : `${p.views} 次阅读`}</span>${p.aiGenerated ? `<span>·</span><span>${en ? 'AI-generated' : 'AI 生成'}</span>` : ''}</div>
     ${p.cover ? `<div class="pp-cover"><img src="${esc(p.cover)}" alt=""></div>` : ''}
     <div class="pp-body rich">${p.contentHtml}</div>
-    ${p.locked ? paywallHtml(p.minTier, en) : ''}
+    ${p.locked ? paywallHtml(p.minTier, en, d) : ''}
     <div class="pp-end">
       <span class="pp-end-line"></span><span class="pp-end-word">${en ? 'End' : '终'}</span><span class="pp-end-line"></span>
     </div>
@@ -301,7 +301,7 @@ export function member(d: MemberData): string {
     <h1 class="wb-page-title">${en ? 'Membership' : '会员中心'}</h1>
     <p class="wb-page-sub">${d.member ? (en ? 'Points, comments and members-only posts live here' : '留言、常回来，积分与专属内容都在这里') : en ? 'Sign your name and join this site' : '落款留名，加入本站会员'}</p>
   </header>
-  <main class="pp-member">${d.member ? memberCardHtml(d.member, en) : memberAuthHtml(en)}</main>
+  <main class="pp-member">${d.member ? memberCardHtml(d.member, en) : memberAuthHtml(en, d)}</main>
   ${foot(s, en ? footLinksEn(s).archive : FOOT_LINKS.archive)}
 </div>`
 }

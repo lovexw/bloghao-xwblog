@@ -132,6 +132,26 @@ export const THEME_APPEARANCE: Record<string, ThemeAppearance> = {
     },
     radius: { var: '--rn-radius', default: 12, lgFactor: 1.33 },
   },
+
+  news: {
+    richSize: 16,
+    roles: {
+      accent: {
+        vars: ['--nw-accent'],
+        default: '#c0392b',
+        derived: [
+          { varName: '--nw-accent-deep', kind: 'shade', amount: 15 },
+          { varName: '--nw-accent-soft', kind: 'tint', amount: 8 },
+        ],
+      },
+      ink: { vars: ['--nw-ink'], default: '#22211f' },
+      sub: { vars: ['--nw-sub'], default: '#75716a' },
+      bg: { vars: ['--nw-bg'], default: '#fafaf7' },
+      card: { vars: ['--nw-card'], default: '#ffffff' },
+      line: { vars: ['--nw-line'], default: '#e5e2da' },
+    },
+    radius: { var: '--nw-radius', default: 4, lgFactor: 1.5 },
+  },
 }
 
 /* 正文字体预设：存库时解析成完整字体栈（自定义输入同理归一化），渲染端只认栈字符串 */

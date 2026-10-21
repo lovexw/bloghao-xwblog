@@ -33,6 +33,25 @@ async function api(path, opts = {}) {
   return data
 }
 
+/* ---------- 自定义会员档位（会员 3.0 预备） ----------
+ * 「谁能看」选项按 settings.memberTiers 渲染：编辑器打开时拉一次（失败回落历史三档），
+ * 拉到后重填下拉并保留当前选择。基础档（普通会员）不单独出选项——与「仅登录会员」同级 */
+let edTierDefs = [
+  { key: 'normal', name: '普通会员', permanent: true },
+  { key: 'coffee', name: '咖啡会员', permanent: false },
+  { key: 'top', name: '付费会员', permanent: false },
+]
+
+function tierOptionsHtml(minTier) {
+  const sel = minTier || 'all'
+  return `<option value="all"${sel === 'all' ? ' selected' : ''}>所有人可见</option>
+  <option value="member"${sel === 'member' ? ' selected' : ''}>仅登录会员</option>` +
+    edTierDefs
+      .filter((t) => t.key !== 'normal')
+      .map((t) => `<option value="${esc(t.key)}"${sel === t.key ? ' selected' : ''}>${esc(t.name)}及以上</option>`)
+      .join('')
+}
+
 /* 动态 file input 必须先挂到 DOM 再 click：iOS Safari 对游离节点的选图器能打开、
  * 能选照片，但 change 不回填（文件永远回不到页面），上传静默失败且无任何提示——
  * 手机上「选了图却没动静」即此。挂 body 隐藏，读完文件 / 用户取消即摘除。
@@ -670,13 +689,8 @@ export async function mountEditor(root, postId, opts = {}) {
       <div style="font-size:12px;color:var(--sub);margin-top:6px;">在后台「文章 → 分类标签」里维护</div>
 
       <div class="drawer-title">谁能看</div>
-      <select class="input" id="ed-min-tier">
-        <option value="all"${post.minTier === 'member' || post.minTier === 'coffee' || post.minTier === 'top' ? '' : ' selected'}>所有人可见</option>
-        <option value="member"${post.minTier === 'member' ? ' selected' : ''}>仅登录会员</option>
-        <option value="coffee"${post.minTier === 'coffee' ? ' selected' : ''}>咖啡会员及以上</option>
-        <option value="top"${post.minTier === 'top' ? ' selected' : ''}>仅顶级会员</option>
-      </select>
-      <div style="font-size:12px;color:var(--sub);margin-top:6px;">设为会员可见后，游客与低档位会员只能读到试读部分（正文在服务端截断，不整篇下发）</div>
+      <select class="input" id="ed-min-tier">${tierOptionsHtml(post.minTier)}</select>
+      <div style="font-size:12px;color:var(--sub);margin-top:6px;">设为会员可见后，游客与低档位会员只能读到试读部分（正文在服务端截断，不整篇下发）。档位名称在后台「设置 → 会员 → 会员档位」维护</div>
 
       <div class="drawer-title">访问密码</div>
       <div class="switch-row">
@@ -2647,6 +2661,17 @@ export async function mountEditor(root, postId, opts = {}) {
     })
     .catch(() => {})
   catSelect.addEventListener('change', markDirty)
+
+  /* ---------- 谁能看：自定义档位（会员 3.0 预备，拉到后重填并保留当前选择；change 监听在既有绑定处） ---------- */
+  const tierSelect = document.getElementById('ed-min-tier')
+  api('/admin/member-tiers')
+    .then((d) => {
+      if (!d.tiers || !d.tiers.length) return
+      edTierDefs = d.tiers
+      const cur = tierSelect.value
+      tierSelect.innerHTML = tierOptionsHtml(cur)
+    })
+    .catch(() => {})
 
   /* ---------- 插件 ctx & 加载 ---------- */
   // 插件快捷键（API 1.1）：统一注册到 editor 的一个 keydown 监听上分发。

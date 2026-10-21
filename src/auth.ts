@@ -40,6 +40,15 @@ export function safeEqual(a: string, b: string): boolean {
 export const SESSION_COOKIE = 'bloghao_session'
 const SESSION_TTL = 30 * 24 * 3600 * 1000 // 30 天
 
+/** 会话 Cookie 是否加 Secure：https 直连（Workers 生产恒为 https）或可信反代告知 https
+ *  （Caddy 默认会设 X-Forwarded-Proto）时加；明文 http 不加——Secure 在非 https 源会被浏览器
+ *  直接丢弃，手机连局域网 IP（http://192.168.x.x）登录/签到会全废。docker-poc 的 server.ts
+ *  shim 已有同口径决策（isHttps 由 resolveScheme 判定后摘 Secure），这里是 Worker 侧的同一条。 */
+export function isSecureRequest(req: Request): boolean {
+  if (new URL(req.url).protocol === 'https:') return true
+  return req.headers.get('X-Forwarded-Proto') === 'https'
+}
+
 export function getCookie(req: Request, name: string): string | null {
   const h = req.headers.get('Cookie') || ''
   for (const part of h.split(/; */)) {
@@ -65,8 +74,8 @@ export async function createSession(db: D1Database, userId: number): Promise<str
   return token
 }
 
-export function sessionCookie(token: string): string {
-  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_TTL / 1000}`
+export function sessionCookie(token: string, secure = true): string {
+  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly;${secure ? ' Secure;' : ''} SameSite=Lax; Max-Age=${SESSION_TTL / 1000}`
 }
 
 export function clearSessionCookie(): string {
@@ -78,7 +87,7 @@ export async function getSessionUser(db: D1Database, req: Request): Promise<Sess
   if (!token) return null
   return db
     .prepare(
-      'SELECT u.id, u.username, u.display_name, u.avatar FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires_at > ?'
+      'SELECT u.id, u.username, u.display_name, u.avatar, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires_at > ?'
     )
     .bind(await tokenHash(token), Date.now())
     .first<SessionUser>()
@@ -118,8 +127,8 @@ export async function createMemberSession(db: D1Database, memberId: number): Pro
   return token
 }
 
-export function memberSessionCookie(token: string): string {
-  return `${MEMBER_SESSION_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_TTL / 1000}`
+export function memberSessionCookie(token: string, secure = true): string {
+  return `${MEMBER_SESSION_COOKIE}=${token}; Path=/; HttpOnly;${secure ? ' Secure;' : ''} SameSite=Lax; Max-Age=${SESSION_TTL / 1000}`
 }
 
 export function clearMemberSessionCookie(): string {

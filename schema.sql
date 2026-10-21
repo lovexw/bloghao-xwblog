@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
   salt          TEXT    NOT NULL,
   display_name  TEXT    NOT NULL DEFAULT '',
   avatar        TEXT    NOT NULL DEFAULT '',
+  role          TEXT    NOT NULL DEFAULT 'admin', -- 多作者（3.0-M1）：admin = 站长（全部权限）；author = 作者（内容面可用，管理面 403，见 docs/DEVPLAN-3.0.md 权限矩阵）
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL
 );
@@ -31,13 +32,18 @@ CREATE TABLE IF NOT EXISTS members (
   display_name  TEXT    NOT NULL DEFAULT '',          -- 前台展示名，空 = 用 username
   avatar        TEXT    NOT NULL DEFAULT '',          -- 头像地址（站内 /images/ 或外链），空 = 首字图标
   qq            TEXT    NOT NULL DEFAULT '',          -- 绑定的 QQ 号（仅头像抓取记账位，任何公开出参不携带）
-  tier          TEXT    NOT NULL DEFAULT 'normal',    -- normal | coffee | top（档位与 min_tier 语义见 docs/DEVPLAN-2026-10-07.md 附录 A）
+  tier          TEXT    NOT NULL DEFAULT 'normal',    -- 档位 key（src/tiers.ts 自定义档位：settings.memberTiers 定义，顺序即等级）
+  tier_expires_at INTEGER,                             -- 档位有效期（毫秒；NULL = 永久/不失效）。过期在读侧即时降级为基础档（不靠 cron）
   points        INTEGER NOT NULL DEFAULT 0,           -- 当前积分余额（冗余，明细在 member_points_log）
   status        TEXT    NOT NULL DEFAULT 'active',    -- active | banned（封禁后禁登录与评论，历史评论保留）
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL,
   last_login_at INTEGER,
-  display_name_changed_at INTEGER                    -- 上次改昵称时间（30 天一次，src/utils.ts NICKNAME_CHANGE_COOLDOWN_MS）；NULL = 从未改过，首次修改不受限
+  display_name_changed_at INTEGER,                   -- 上次改昵称时间（30 天一次，src/utils.ts NICKNAME_CHANGE_COOLDOWN_MS）；NULL = 从未改过，首次修改不受限
+  active_days    INTEGER NOT NULL DEFAULT 0,          -- 铁粉体系（DEVPLAN-3.0）：累计活跃天数（北京日，登录/签到各计一天，条件更新幂等）
+  last_active_day TEXT   NOT NULL DEFAULT '',          -- 最近活跃日（YYYY-MM-DD 北京墙上日期）
+  checkin_streak INTEGER NOT NULL DEFAULT 0,           -- 连续签到天数（断签归 1 重来）
+  last_checkin_day TEXT  NOT NULL DEFAULT ''           -- 最近签到日（同北京墙上日期口径）
 );
 CREATE INDEX IF NOT EXISTS idx_members_points ON members (points DESC);
 
@@ -65,6 +71,32 @@ CREATE TABLE IF NOT EXISTS member_points_log (
 CREATE INDEX IF NOT EXISTS idx_points_log_member ON member_points_log (member_id, created_at);
 -- 记分幂等（评论 ref_id=评论 id、每日登录 ref_id=北京日序号）；db.ts SCHEMA_INDEXES 有同款，两处同步
 CREATE UNIQUE INDEX IF NOT EXISTS idx_points_log_dedup ON member_points_log (member_id, reason, ref_id) WHERE ref_id > 0;
+
+-- 会员浏览足迹（会员中心「我的足迹」）：会员登录后浏览已发布文章记一行，同会员同文章同北京日
+-- 只有一行（唯一索引去重，重复浏览仅刷新 ts/title）。title 是浏览时的快照——文章改名/删除后足迹仍可读
+-- （LEFT JOIN posts 取 slug，文章没了就不出链接）。滚动保留 90 天（每晚备份 cron 清理）
+CREATE TABLE IF NOT EXISTS member_visits (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  member_id  INTEGER NOT NULL,
+  post_id    INTEGER NOT NULL,
+  day        TEXT    NOT NULL DEFAULT '',  -- 北京日 YYYY-MM-DD（fanDay 口径），去重键的一部分
+  ts         INTEGER NOT NULL,             -- 最近一次浏览时间（毫秒）
+  title      TEXT    NOT NULL DEFAULT ''   -- 浏览时的文章标题快照
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_member_visits_dedup ON member_visits (member_id, post_id, day);
+CREATE INDEX IF NOT EXISTS idx_member_visits_member ON member_visits (member_id, ts DESC);
+
+-- 会员点赞记录（会员中心「我的点赞」）：登录会员点赞文章/微博记一行，取消赞删行。
+-- 目标是否存活由读侧 LEFT JOIN 判定（删了就不出链接，记录保留）
+CREATE TABLE IF NOT EXISTS member_likes (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  member_id   INTEGER NOT NULL,
+  target_type TEXT    NOT NULL DEFAULT 'post', -- post | weibo
+  target_id   INTEGER NOT NULL,
+  created_at  INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_member_likes_dedup ON member_likes (member_id, target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_member_likes_member ON member_likes (member_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS posts (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,

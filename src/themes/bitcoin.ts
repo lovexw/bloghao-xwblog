@@ -152,7 +152,7 @@ export function post(d: PostData): string {
     <div class="bt-meta"><time>${en ? fmtDateEn(p.published_at) : fmtDate(p.published_at)}</time><i>·</i><span>${p.readingMinutes} min</span><i>·</i><span>${fmtViews(p.views, en)}</span>${p.aiGenerated ? `<i>·</i><span>${en ? 'AI-generated' : 'AI 生成'}</span>` : ''}</div>
     ${p.cover ? `<div class="bt-cover"><img src="${esc(p.cover)}" alt=""></div>` : ''}
     <div class="rich">${p.contentHtml}</div>
-    ${p.locked ? paywallHtml(p.minTier, en) : ''}
+    ${p.locked ? paywallHtml(p.minTier, en, d) : ''}
     <div class="bt-foot">
       ${likesBtn(p.slug, p.likes, en)}
       ${d.share ? shareBtn(d.share.url, d.share.qr, en) : ''}
@@ -298,7 +298,7 @@ export function member(d: MemberData): string {
   </header>
   <h1 class="bt-title bt-page-title">${en ? 'Membership' : '会员中心'}</h1>
   <p class="bt-page-sub">${d.member ? (en ? 'Points, comments and members-only posts live here' : '留言、常回来，积分与专属内容都在这里') : en ? 'Log in or create an account to join' : '登录或注册，加入本站会员'}</p>
-  <main class="bt-member">${d.member ? memberCardHtml(d.member, en) : memberAuthHtml(en)}</main>
+  <main class="bt-member">${d.member ? memberCardHtml(d.member, en) : memberAuthHtml(en, d)}</main>
   ${foot(s, en ? FOOT_LINKS_EN.home : FOOT_LINKS.home)}
 </div>`
 }
