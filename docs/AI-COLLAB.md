@@ -45,6 +45,17 @@
 7. **改 schema / 加 src 文件必须「两处同步 + 登记」**——加列 / 表：`schema.sql` 与 `db.ts` 的 `SCHEMA_COLUMNS` / `SCHEMA_TABLES` 两处同步（建表语句要自带全部列）；加 `src/` 文件：在 AGENTS.md「结构速查」登记一行。
 8. **写了 settings 就要失效缓存**——写完必须 `await invalidateSharedSettings(db)`（`saveSettings` 已内置），忘了 = 改完设置最多 60 秒读旧值。
 
+## 3.5 会员体系特别注意（改会员相关代码前必读，碰了就是线上 bug）
+
+会员 3.0 预备版已上线（自定义档位 / 档位时效 / 认证徽标 / 会员活动中心），防线细节在 AGENTS.md「会员体系」节与 `src/tiers.ts` 头注；这里是**最容易搞乱的四条大白话**：
+
+1. **档位 key 建好后是「身份证号」，永远别改**——`posts.min_tier`（谁能看）和 `members.tier` 都用 key 关联；改**名字 / 颜色**随便（前台跟着变），改 key 会让存量文章对不上号。`'all'` 和 `'member'` 是付费墙伪档（公开 / 任意登录会员），**保留字不准占用**。
+2. **第一档 = 全体会员的兜底身份，必须永久**——它承载「过期会员 / 定义缺失档位」的回落身份，校验在 `cleanMemberTiers`（第一档非永久整体拒绝），后台编辑器也锁死了。**档位顺序即等级**：排前面的低、排后面的高。
+3. **档位时效没有 cron**——过期是读侧 `effectiveTier` 即时判定的。任何要展示 / 判定档位的地方（评论徽标、排行榜、会员卡、付费墙）都必须过 `effectiveTier` 拿**生效档位**，直接用 `members.tier` 原值 = 过期会员还能看付费文（真 bug）。`tier_expires_at` 时间戳只许在服务端用 + 本人视角展示，**任何公开出参（微博评论 JSON 等）出参前剥掉**。
+4. **会员数据只认五张表**——members / member_sessions / member_points_log / member_visits / member_likes（会话不进备份与整站包，其余要登记）。**严禁写 users / sessions**（那是管理员）；「我的足迹 / 点赞 / 评论 / 回复」只服务会员本人（/member 页 SSR 直出），**不进任何公开出参**；足迹 90 天滚动清理挂在 index.ts 备份 cron。
+
+> 涉及会员的新功能先读 `src/tiers.ts`（全部纯函数，tests/tiers.test.ts + tests/member-tiers.test.ts 守着），别在别处手写档位判定 / 过期逻辑。
+
 ## 4. 收工前（四件事）
 
 1. **全绿并贴原始输出**：`npm run typecheck` + `npm test`（动了 SQL 拼接 / 渲染 / 路由再跑 `npm run smoke`）。
@@ -80,6 +91,7 @@
 | 批量替换文本（sed 全仓） | `git ls-files` 不加过滤直接 sed | 先按扩展名过滤（`*.md` `*.ts` `*.js`…）——sed 会把 PNG / SVG 等二进制改坏几字节，还会给全仓文件留「幻影改动」（status 显示 M、diff 为空），清理很费劲（2026-10-17 实踩） |
 | 改版本清单结构 | 只改生成脚本 / 只改校验器 | 三处同步：`scripts/build-release.mjs`、`src/update.ts` 校验器、`tests/update.test.ts` 守卫 |
 | 发布回填 CHANGELOG 之后 | 忘了重生成 `version.json` | 跑 `npm run build:release` 并随发布提交 |
+| 判定/展示会员档位 | 直接用 `members.tier` 原值 | 过 `effectiveTier` 拿生效档位（过期即时降级基础档），档位 key 是稳定标识别改，详见 §3.5 |
 
 ## 7. 话术模板（站长直接复制）
 
