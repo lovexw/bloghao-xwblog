@@ -1209,9 +1209,12 @@ export function memberCardHtml(m: MemberView, en = false): string {
       ? `<span class="mem-tier" data-tier="${esc(m.tier)}">${esc(m.tierName)}</span>`
       : tierBadgeHtml(m.tierName, m.tierColor || '', 'mem-tier', en)
     : `<span class="mem-tier" data-tier="${esc(m.tier)}">${tierLabel(m.tier, en)}</span>`
-  const tierExpiry =
-    m.tierExpiresAt && !m.tierIsBase
-      ? `<p class="mem-email">${m.tierExpired ? tr(en, '会员档位已过期，联系站长续期后恢复权益') : `${tr(en, '有效期至')} ${fmtDateCN(m.tierExpiresAt)}`}</p>`
+  // 有效期行：已过期必须出提示（此时生效档位已是基础档，tierIsBase=true 不能把提示挡掉）；
+  // 未过期的限时档出「有效期至」；永久档（含过期后清掉的）不出
+  const tierExpiry = m.tierExpired
+    ? `<p class="mem-email">${tr(en, '会员档位已过期，联系站长续期后恢复权益')}</p>`
+    : m.tierExpiresAt && !m.tierIsBase
+      ? `<p class="mem-email">${tr(en, '有效期至')} ${fmtDateCN(m.tierExpiresAt)}</p>`
       : ''
   const notice = m.notice ? `<section class="mem-card mem-notice" style="border-left:3px solid rgba(128,128,128,.35);">${esc(m.notice)}</section>` : ''
   return `${notice}
