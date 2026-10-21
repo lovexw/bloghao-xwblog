@@ -471,7 +471,7 @@ test('cleanServerPluginConfig：合法配置规范化、未知插件/字段拒�
     '未登记配置字段'
   )
   assert.equal(cleanServerPluginConfig(JSON.stringify({ 'outbound-webhook': { url: 123 } })).ok, false, '值必须字符串')
-  assert.equal(cleanServerPluginConfig(JSON.stringify({ 'outbound-webhook': { url: 'x'.repeat(501) } })).ok, false, '单值 ≤ 500')
+  assert.equal(cleanServerPluginConfig(JSON.stringify({ 'outbound-webhook': { url: 'x'.repeat(2001) } })).ok, false, '单值 ≤ 2000')
 })
 
 test('cleanServerPluginConfig：configValidate 语义校验生效——坏 webhook 地址报错文案可读', () => {

@@ -84,7 +84,7 @@ window.BlogHao &&
 
 ## 服务端插件（随内核运行）
 
-编辑器插件跑在浏览器，服务端插件跑在 Worker 里：内核在关键动作处广播事件（钩子），插件订阅处理。当前钩子八个——
+编辑器插件跑在浏览器，服务端插件跑在 Worker 里：内核在关键动作处广播事件（钩子），插件订阅处理。当前钩子九个——
 
 | 钩子 | 触发时机 | 典型用途 |
 | --- | --- | --- |
@@ -96,14 +96,15 @@ window.BlogHao &&
 | `onCommentCreated` | 访客在文章 / 微博 / 留言板发表留言（作者自己的回复不触发） | Webhook 通知（飞书 / 企微 / Bark）、同步到审核流 |
 | `onBackupCompleted` | 备份成功写盘（每晚 cron 与手动「立即备份」；skipped / 失败不触发） | **异地备份推送**——插件凭 `ctx.env.IMAGES.get(payload.key)` 取件转推 GitHub / 另一账号 |
 | `footerHtml` | 每个公开页渲染时（同步） | 页脚注入挂件、徽章、自定义代码 |
+| `postContentHtml` | 文章正文渲染时（同步**过滤**：传入净化后的正文 HTML，返回改写后的 HTML；只覆盖文章页，微博 / RSS / Markdown 镜像不经过） | 关键词自动内链、术语标注等渲染期变形 |
 
-内置九个官方插件（源码与注册表都在 `src/hooks.ts`）：**发布同步 Telegram 频道**（复用「外部发布」的 Bot Token，频道 ID 在「设置 → 外部发布」）、**微博同步 Buffer（X 等）**（Buffer 是社交排程平台，免费档 3 渠道并含 API 访问，替用户承担 X API 按量计费；API Key 与渠道 ID 在「设置 → 服务端插件」，渠道 ID 可一键拉取，X 免费档 280 字符超出自动截断，站内话题（`#话题` 或成对 `#话题#`）转 X 话题格式，站内配图走公链直传）、**评论 Webhook 推送**（地址在「设置 → 服务端插件」）、**通用出站 Webhook**（见下节）、**页脚自定义代码**（同在「设置 → 服务端插件」，受 CSP 保护外部脚本不执行）、**广场同步**（发布时把公开文章/微博推给官网广场 bloghao.com/plaza，Token 与地址在「设置 → 服务端插件」，加密文与会员锁文自动跳过，机制见 [PLAZA.md](PLAZA.md)）。**通知渠道三件（B3，纯提醒不广播）**——**飞书群机器人**（群「设置 → 群机器人」即得 Webhook，可选签名校验）、**企业微信群机器人**（群右键添加即得，文本自动按 2048 字节截断）、**Bark 推送 iOS**（装 App 即得 Key，支持自建服务器）：三者共用同一提醒语义——**新留言**（含待审核态）与**备份完成**各推一条，事件可自选子集；URL 落配置即过官方域白名单 + 公网校验，配置在「插件」页「配置」按钮里填。后台「插件」页的「服务端插件」区可随时启停（存 settings 的 `serverPluginsDisabled`，立即生效）。
+内置十个官方插件（源码与注册表都在 `src/hooks.ts`）：**发布同步 Telegram 频道**（复用「外部发布」的 Bot Token，频道 ID 在「设置 → 外部发布」）、**微博同步 Buffer（X 等）**（Buffer 是社交排程平台，免费档 3 渠道并含 API 访问，替用户承担 X API 按量计费；API Key 与渠道 ID 在「设置 → 服务端插件」，渠道 ID 可一键拉取，X 免费档 280 字符超出自动截断，站内话题（`#话题` 或成对 `#话题#`）转 X 话题格式，站内配图走公链直传）、**评论 Webhook 推送**（地址在「设置 → 服务端插件」）、**通用出站 Webhook**（见下节）、**页脚自定义代码**（同在「设置 → 服务端插件」，受 CSP 保护外部脚本不执行）、**广场同步**（发布时把公开文章/微博推给官网广场 bloghao.com/plaza，Token 与地址在「设置 → 服务端插件」，加密文与会员锁文自动跳过，机制见 [PLAZA.md](PLAZA.md)）、**关键词自动内链**（文章正文里的预设关键词自动变成链接——SEO 内链 / 术语跳转，映射表在「插件 → 配置」每行一条「关键词|链接」，渲染期改写不落库：改映射回溯全站旧文、停用即恢复原样；自动跳过既有链接 / 代码块 / 标题，非白名单外链套用全站「外链中间页」策略，机制见 `src/keyword-link.ts`）。**通知渠道三件（B3，纯提醒不广播）**——**飞书群机器人**（群「设置 → 群机器人」即得 Webhook，可选签名校验）、**企业微信群机器人**（群右键添加即得，文本自动按 2048 字节截断）、**Bark 推送 iOS**（装 App 即得 Key，支持自建服务器）：三者共用同一提醒语义——**新留言**（含待审核态）与**备份完成**各推一条，事件可自选子集；URL 落配置即过官方域白名单 + 公网校验，配置在「插件」页「配置」按钮里填。后台「插件」页的「服务端插件」区可随时启停（存 settings 的 `serverPluginsDisabled`，立即生效）。
 
 `onPostPublished` 的 payload 带可选 `locked` 布尔（发布的是加密访问文或会员专属文）——同步类插件必须据此跳过，别把锁文标题捅到公开面。
 
 ## 插件配置通道（不必再为配置改内核）
 
-服务端插件要配置项，在插件定义上声明 `configFields`（`{ key, label, type: 'text'|'textarea', placeholder?, help? }[]`），后台「插件」页该插件行会出现「配置」按钮，弹窗按声明渲染表单，值存进 settings 的 `serverPluginConfig`（JSON：`{ 插件id: { 字段键: 值 } }`，单值 ≤ 500 字符）。处理器里用 `pluginConfig(ctx.settings, 自身id)` 读；保存时自动过两道校验——顶层键必须是注册插件 id、字段键必须在 `configFields` 里，插件可再实现 `configValidate(cfg)` 做语义校验（返回错误文案 = 拒绝保存，如公网地址校验）。**通用出站 Webhook** 就是第一个吃这套通道的官方插件：自选事件清单（`post_published / post_updated / post_deleted / weibo_published / weibo_deleted / comment_created / backup_completed`）+ 目标 URL（落配置即过公网 https 校验）+ 可选 HMAC 签名（`X-Bloghao-Timestamp` + `X-Bloghao-Signature` = HMAC-SHA256(密钥, `时间戳.请求体`)，与广场同步同口径可复用校验代码），n8n / 飞书 / 自建系统一个地址全接走。事件清单是**三态**：留空 = 全部放行；合法清单 = 只发这些；**非空但含坏项 = 拒发**（失败关闭，别让一次配置写脏把「只发某事件」放大成「全事件外推」）。发送走内核统一出网入口 `fetchPublicResource`（起点 + 每一跳重过 `fetchableUrl`，`expectBody:false` 只发不收）。
+服务端插件要配置项，在插件定义上声明 `configFields`（`{ key, label, type: 'text'|'textarea', placeholder?, help? }[]`），后台「插件」页该插件行会出现「配置」按钮，弹窗按声明渲染表单，值存进 settings 的 `serverPluginConfig`（JSON：`{ 插件id: { 字段键: 值 } }`，单值 ≤ 2000 字符，装得下关键词映射这类成表配置）。处理器里用 `pluginConfig(ctx.settings, 自身id)` 读；保存时自动过两道校验——顶层键必须是注册插件 id、字段键必须在 `configFields` 里，插件可再实现 `configValidate(cfg)` 做语义校验（返回错误文案 = 拒绝保存，如公网地址校验）。**通用出站 Webhook** 就是第一个吃这套通道的官方插件：自选事件清单（`post_published / post_updated / post_deleted / weibo_published / weibo_deleted / comment_created / backup_completed`）+ 目标 URL（落配置即过公网 https 校验）+ 可选 HMAC 签名（`X-Bloghao-Timestamp` + `X-Bloghao-Signature` = HMAC-SHA256(密钥, `时间戳.请求体`)，与广场同步同口径可复用校验代码），n8n / 飞书 / 自建系统一个地址全接走。事件清单是**三态**：留空 = 全部放行；合法清单 = 只发这些；**非空但含坏项 = 拒发**（失败关闭，别让一次配置写脏把「只发某事件」放大成「全事件外推」）。发送走内核统一出网入口 `fetchPublicResource`（起点 + 每一跳重过 `fetchableUrl`，`expectBody:false` 只发不收）。
 
 **铁律**：插件抛错绝不影响主流程——fire 函数统一吞错，发文 / 评论 / 渲染照常。
 

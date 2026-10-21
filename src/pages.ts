@@ -62,6 +62,7 @@ import {
 import { extractOgImage, sanitizeHtml } from './sanitize'
 import { hasValidUnlock, isProtected, PP_COOKIE, PP_CSS, passwordFormHtml, protectedDescription } from './protect'
 import { canRead, normalizeMinTier } from './points'
+import { renderPostContentHtml } from './hooks'
 import { getTheme, THEMES } from './themes/registry'
 import type { MemberData, RankData } from './themes/registry'
 import type { Env, PostRow, SessionUser, SettingsMap } from './types'
@@ -649,8 +650,16 @@ export async function renderPost(c: C): Promise<Response> {
   const minTier = normalizeMinTier(row.min_tier)
   const locked = !pwLocked && !user && !canRead(minTier, member?.tier)
   // 密码墙时正文一个字节都不出：连 sanitize 都不做，fullHtml 留空（teaser 分支不会被走到）。
-  // 渲染路径传 origin：非白名单外链包 /go 中间页（存库/RSS/导出不传，保持原始 URL）
-  const fullHtml = pwLocked ? '' : replaceEmoji(stripCoverDuplicate(sanitizeHtml(row.content, { origin: url.origin }), row.cover))
+  // 渲染路径传 origin：非白名单外链包 /go 中间页（存库/RSS/导出不传，保持原始 URL）。
+  // 服务端插件渲染过滤（src/hooks.ts postContentHtml，如关键词自动内链）挂在这之后——
+  // 命中的关键词包成链接对锁文试读段同样生效（正文可见部分口径一致）
+  const fullHtml = pwLocked
+    ? ''
+    : renderPostContentHtml(
+        settings,
+        replaceEmoji(stripCoverDuplicate(sanitizeHtml(row.content, { origin: url.origin }), row.cover)),
+        url.origin
+      )
   const en = isEn(settings)
   const commentsBlock = commentsHtml({
     comments,

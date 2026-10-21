@@ -10,6 +10,7 @@
  */
 import { getSettings } from './db'
 import { fetchableUrl, fetchPublicResource } from './fetchsafe'
+import { keywordLinkHtml, keywordRulesError, parseKeywordRules, parseMaxPerKeyword } from './keyword-link'
 import { purgePageCache } from './pagecache'
 import type { Env, SettingsMap } from './types'
 import { excerpt, isDemo } from './utils'
@@ -20,6 +21,9 @@ export interface HookContext {
   settings: SettingsMap
   /** 站点绝对地址前缀（siteUrl 去尾斜杠，未配置为空串） */
   base: string
+  /** 渲染过滤钩子的当前请求源（pages 层传入）：外链包装 outHref 判同源用；
+   *  页脚注入等无请求上下文的钩子缺省 */
+  origin?: string
 }
 
 export interface PostPublishedPayload {
@@ -120,6 +124,10 @@ export interface ServerPlugin {
   onBackupCompleted?: (p: BackupCompletedPayload, ctx: HookContext) => Promise<void> | void
   /** 页脚注入：返回的 HTML 拼在每页 </body> 前（同步，不能访问 env） */
   footerHtml?: (ctx: HookContext) => string
+  /** 文章正文渲染过滤（同步）：传入净化后的正文 HTML，返回改写后的 HTML——
+   *  关键词内链、术语标注这类「渲染期变形」挂这里；抛错 / 返回空串视为放弃本次改写。
+   *  只覆盖文章页（renderPost），微博 / RSS / Markdown 镜像等其余面不经过 */
+  postContentHtml?: (ctx: HookContext, html: string) => string
   /** 插件配置表单（后台「插件」页渲染）；不定义 = 该插件无配置界面 */
   configFields?: PluginConfigField[]
   /** 配置保存时的语义校验（返回错误文案 = 整体拒绝保存） */
@@ -186,6 +194,53 @@ const footerHtmlPlugin: ServerPlugin = {
   author: '官方',
   footerHtml(ctx) {
     return (ctx.settings.footerHtmlCode || '').trim()
+  },
+}
+
+/* ---------------- 关键词自动内链（渲染期变形） ----------------
+ * 站长维护「关键词|链接」映射表（后台「插件」页「配置」），文章正文渲染时把命中的
+ * 关键词包成 <a>——SEO 内链 / 术语跳转。渲染期改写不落库：改映射回溯全站旧文，
+ * 停用即全部消失；微博 / RSS / Markdown 镜像等其余面不经过该钩子。扫描规则
+ * （跳过清单 / 最长命中 / 实体安全 / 外链中间页包装）见 src/keyword-link.ts 顶部注释。
+ */
+const keywordLinkPlugin: ServerPlugin = {
+  id: 'keyword-link',
+  title: '关键词自动内链',
+  description:
+    '文章正文里的预设关键词自动变成链接（SEO 内链、术语跳转）。关键词与链接映射在「配置」里维护，每行一条「关键词|链接」；全站文章渲染时生效，改映射回溯旧文，停用即恢复原样。自动跳过既有链接、代码块与标题，默认每个关键词每篇只链首次出现。',
+  version: '1.0.0',
+  author: '官方',
+  configFields: [
+    {
+      key: 'rules',
+      type: 'textarea',
+      label: '关键词与链接映射',
+      placeholder: '比特币|/post/bitcoin\n区块链|https://zh.wikipedia.org/wiki/区块链',
+      help: '每行一条「关键词|链接」，# 或 // 开头的行是注释。链接可以是本站相对路径（/post/…）或 http(s) 完整地址；非白名单外链自动套用全站「外链中间页」策略。最多 100 条。',
+    },
+    {
+      key: 'maxPerKeyword',
+      type: 'text',
+      label: '每个关键词每篇替换次数',
+      placeholder: '1',
+      help: '留空或 1 = 只链接首次出现（推荐，过度内链反而伤 SEO）；all = 全部替换；数字 N = 前 N 次。',
+    },
+  ],
+  configValidate(cfg) {
+    const err = keywordRulesError(cfg.rules || '')
+    if (err) return `关键词映射：${err}`
+    const m = (cfg.maxPerKeyword || '').trim().toLowerCase()
+    if (m && m !== 'all' && m !== '全部' && !/^[1-9]\d*$/.test(m)) return '替换次数只能是留空、正整数或 all'
+    return null
+  },
+  postContentHtml(ctx, html) {
+    const cfg = pluginConfig(ctx.settings, 'keyword-link')
+    const rules = parseKeywordRules(cfg.rules || '')
+    if (!rules.length) return html
+    return keywordLinkHtml(html, rules, {
+      origin: ctx.origin,
+      maxPerKeyword: parseMaxPerKeyword(cfg.maxPerKeyword || ''),
+    })
   },
 }
 
@@ -775,7 +830,7 @@ const barkNotify: ServerPlugin = {
 }
 
 /** 注册表：第三方服务端插件在此登记（顺序即后台展示顺序） */
-export const SERVER_PLUGINS: ServerPlugin[] = [tgChannel, commentWebhook, bufferSync, plazaSync, outboundWebhook, feishuNotify, wecomNotify, barkNotify, footerHtmlPlugin]
+export const SERVER_PLUGINS: ServerPlugin[] = [tgChannel, commentWebhook, bufferSync, plazaSync, outboundWebhook, feishuNotify, wecomNotify, barkNotify, footerHtmlPlugin, keywordLinkPlugin]
 
 /** 后台「插件」页列表用：只出元数据与配置表单描述，不带处理函数 */
 export function listServerPlugins(): {
@@ -811,6 +866,22 @@ export function renderFooterHtml(settings: SettingsMap): string {
     if (!p.footerHtml) continue
     try {
       html += p.footerHtml(ctx)
+    } catch {
+      /* 插件出错不影响页面渲染 */
+    }
+  }
+  return html
+}
+
+/** 文章正文渲染过滤汇总（pages.ts renderPost 调用：同步、无 DB 访问；插件链逐个过滤，
+ *  抛错 / 返回空串都回退上一个环节的产物，正文渲染不受插件故障影响） */
+export function renderPostContentHtml(settings: SettingsMap, html: string, origin?: string): string {
+  const ctx: HookContext = { settings, base: (settings.siteUrl || '').replace(/\/+$/, ''), origin }
+  for (const p of enabledPlugins(settings)) {
+    if (!p.postContentHtml) continue
+    try {
+      const out = p.postContentHtml(ctx, html)
+      if (typeof out === 'string' && out) html = out
     } catch {
       /* 插件出错不影响页面渲染 */
     }
@@ -935,8 +1006,9 @@ export function pluginConfig(settings: SettingsMap, id: string): Record<string, 
 }
 
 /** settings.serverPluginConfig 净化（api.ts PUT 调用）：顶层键必须是注册插件 id
- *  （防任意命名空间），字段键必须在该插件 configFields 里登记，值是非空字符串 ≤ 500；
- *  涉及的插件再过 configValidate 语义校验。空配置返回 ''，非法返回 { ok: false, error } */
+ *  （防任意命名空间），字段键必须在该插件 configFields 里登记，值是非空字符串 ≤ 2000
+ *  （关键词映射这类成表配置一条字段就要装下几十行）；涉及的插件再过 configValidate 语义校验。
+ *  空配置返回 ''，非法返回 { ok: false, error } */
 export function cleanServerPluginConfig(raw: string): { ok: true; value: string } | { ok: false; error: string } {
   const s = String(raw ?? '').trim()
   if (!s) return { ok: true, value: '' }
@@ -961,7 +1033,7 @@ export function cleanServerPluginConfig(raw: string): { ok: true; value: string 
         return { ok: false, error: `插件 ${id} 不认识配置字段：${k}` }
       }
       if (typeof v !== 'string') return { ok: false, error: `插件 ${id} 的配置值必须是字符串` }
-      if (v.length > 500) return { ok: false, error: `插件 ${id} 的配置值过长（≤ 500 字符）` }
+      if (v.length > 2000) return { ok: false, error: `插件 ${id} 的配置值过长（≤ 2000 字符）` }
       if (v !== '') fields[k] = v
     }
     if (plugin.configValidate) {
