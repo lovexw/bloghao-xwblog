@@ -3468,6 +3468,13 @@ async function viewSettings() {
   const s = state.settings
   // 会员档位编辑态（会员 3.0 预备）：存量定义载入草稿，行内增删排序，随「保存全部」提交
   loadMemberTierDraft(s.memberTiers)
+  // 可见范围：新键为空且旧单键有值时显示旧值（与 utils.visibleRangeOf 的升级回落同口径；
+  // 保存时 PUT 会清空旧键，之后新键的空值就是「全部可见」）
+  const rangeVal = (key) => s[key] || s.contentVisibleRange || ''
+  const rangeOptions = (val) =>
+    [['', '全部可见'], ['3d', '最近 3 天可见'], ['1m', '最近 1 个月可见'], ['6m', '最近半年可见'], ['1y', '最近 1 年可见']]
+      .map(([v, label]) => `<option value="${v}"${(val || '') === v ? ' selected' : ''}>${label}</option>`)
+      .join('')
 
   await shellView(
     'settings',
@@ -3613,11 +3620,21 @@ async function viewSettings() {
           <label class="switch"><input type="checkbox" id="st-showCommentRegion" ${s.showCommentRegion === '1' ? 'checked' : ''}><span class="track"></span></label>
         </div>
         <div class="form-item" style="max-width:180px;"><label>每页文章数</label><input class="input" id="st-postsPerPage" type="number" min="1" max="50" value="${esc(s.postsPerPage)}"></div>
-        <div class="form-item" style="max-width:220px;"><label>内容可见范围</label><select class="input" id="st-contentVisibleRange">${[['', '全部可见'], ['3d', '最近 3 天可见'], ['1m', '最近 1 个月可见'], ['6m', '最近半年可见'], ['1y', '最近 1 年可见']]
-          .map(([v, label]) => `<option value="${v}"${(s.contentVisibleRange || '') === v ? ' selected' : ''}>${label}</option>`)
-          .join('')}</select></div>
       </div>
-      <div class="switch-sub" style="margin:-4px 0 0;">类似朋友圈「几天可见」：窗口外的文章与微博对访客（游客和会员）不可见——列表不出现、直链打不开、搜索搜不到、RSS 与 sitemap 不包含，后台管理、备份与导出不受影响；窗口内访客仍可用前台的时间范围条再缩小。默认全部可见，改完保存立即生效</div>
+    </div>
+
+    <div class="panel" style="padding:20px;">
+      <div class="form-section"><h3>内容可见范围</h3>
+        <div class="sec-desc">类似朋友圈「几天可见」：文章与微博可以分别设置，窗口外的内容对访客彻底不可见——列表不出现、直链打不开（404）、站内搜索搜不到、RSS / sitemap / llms.txt 不包含、「历史上的今天」与相关文章 / 上一篇下一篇也只出窗口内内容。后台管理、备份与导出不受影响，内容完整保留，改回「全部可见」即恢复。默认全部可见，保存后立即生效（页面缓存自动刷新）。</div>
+        <div class="form-row">
+          <div class="form-item"><label>文章可见范围</label><select class="input" id="st-contentVisibleRangePosts">${rangeOptions(rangeVal('contentVisibleRangePosts'))}</select></div>
+          <div class="form-item"><label>微博可见范围</label><select class="input" id="st-contentVisibleRangeWeibo">${rangeOptions(rangeVal('contentVisibleRangeWeibo'))}</select></div>
+        </div>
+        <div class="switch-row">
+          <div><div class="switch-label">会员同样受限</div><div class="switch-sub">开启（默认）：窗口外的文章与微博对已登录会员也不可见，与游客一致；关闭：窗口只挡游客，会员登录后能看到全部内容。无论开关如何，管理员在后台始终能管理全部内容。</div></div>
+          <label class="switch"><input type="checkbox" id="st-contentVisibleForMembers" ${s.contentVisibleForMembers !== '0' ? 'checked' : ''}><span class="track"></span></label>
+        </div>
+      </div>
     </div>
 
     <div class="panel" style="padding:20px;">
@@ -3961,7 +3978,9 @@ async function viewSettings() {
       moderateComments: g('st-moderateComments').checked ? '1' : '0',
       showCommentRegion: g('st-showCommentRegion').checked ? '1' : '0',
       postsPerPage: g('st-postsPerPage').value || '10',
-      contentVisibleRange: g('st-contentVisibleRange').value,
+      contentVisibleRangePosts: g('st-contentVisibleRangePosts').value,
+      contentVisibleRangeWeibo: g('st-contentVisibleRangeWeibo').value,
+      contentVisibleForMembers: g('st-contentVisibleForMembers').checked ? '1' : '0',
       membersEnabled: g('st-membersEnabled').checked ? '1' : '0',
       rankTopN: g('st-rankTopN').value || '10',
       // 会员 3.0 预备：注册/排行榜/徽标开关 + 会员公告 + 档位定义（JSON，服务端 cleanMemberTiers 校验）

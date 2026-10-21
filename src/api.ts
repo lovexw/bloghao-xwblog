@@ -33,6 +33,8 @@ import {
   createCategory,
   categoryNameMap,
   createMember,
+  bumpWeiboCount,
+  bumpWeiboCountById,
   DEFAULT_SETTINGS,
   getCategoryById,
   getFriendLinkById,
@@ -51,6 +53,7 @@ import {
   uniquePageSlug,
   listPosts,
   listWeibo,
+  likeDelta,
   MAX_CONTENT_BYTES,
   parseTags,
   parseWeiboImages,
@@ -150,7 +153,7 @@ import { fetchLinkMeta, fetchableUrl } from './linkmeta'
 import { BROWSER_UA, buildCardHtml, coverProxyHostOk, coverReferer, fetchDoubanDetail, probeRelay, resolveCardCover, sanitizeMediaItem, searchMedia, subjectIdFromUrl, validateRelay, type MediaItem } from './douban'
 import { THEMES } from './themes/registry'
 import type { CommentRow, Env, MemberRow, PostRow, SessionUser } from './types'
-import { appendOldSlug, clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extractWeiboTopics, fmtDateCN, isDemo, isValidQQ, jsonItemLikePattern, LIST_RANGES, listRangeCutoff, nicknameCooldown, normalizeLinkUrl, siteVisibleCutoff, slugify } from './utils'
+import { appendOldSlug, clampInt, cleanDisabledPlugins, cleanNickname, cleanSlug, excerpt, extractWeiboTopics, fmtDateCN, isDemo, isValidQQ, jsonItemLikePattern, LIST_RANGES, listRangeCutoff, nicknameCooldown, normalizeLinkUrl, pageWindowCutoff, siteVisibleCutoff, slugify, visibleRangeAppliesToMembers, weiboVisibleCutoff } from './utils'
 
 type AppEnv = { Bindings: Env; Variables: { user: SessionUser } }
 
@@ -1384,6 +1387,8 @@ api.post('/admin/weibo', async (c) => {
     )
     .run()
   const row = await getWeiboById(c.env.DB, Number(res.meta.last_row_id))
+  // 微博总数记账位（settings.wbPubCount）：listWeibo 分页 COUNT 的读放大治理，见 db.ts
+  if (p.status === 'published') await bumpWeiboCount(c.env.DB, 1)
   // 广播微博发布事件（服务端插件钩子，见 src/hooks.ts）：新建即发布才算
   if (p.status === 'published' && row) {
     c.executionCtx.waitUntil(
@@ -1411,6 +1416,9 @@ api.put('/admin/weibo/:id', async (c) => {
   )
     .bind(p.content, JSON.stringify(p.images), video, JSON.stringify(p.topics), p.status, pinned, publishedAt, Date.now(), id)
     .run()
+  // 微博总数记账位：状态跃迁才增减（草稿→发布 +1，发布→草稿 -1），原状态不变不扰
+  if (p.status === 'published' && existing.status !== 'published') await bumpWeiboCount(c.env.DB, 1)
+  else if (existing.status === 'published' && p.status !== 'published') await bumpWeiboCount(c.env.DB, -1)
   // 编辑已发布微博（含转回草稿）→ 页面边缘缓存作废；草稿→发布的跃迁由 fireWeiboPublished 附带清理
   if (existing.status === 'published') c.executionCtx.waitUntil(purgePageCache(c.env.DB))
   const row = await getWeiboById(c.env.DB, id)
@@ -1453,6 +1461,9 @@ api.post('/admin/weibo/:id/pin', async (c) => {
 api.delete('/admin/weibo/:id', async (c) => {
   const id = parseId(c.req.param('id'))
   if (!id) return jsonError('这条微博不存在', 404)
+  // 微博总数记账位：条件增减按「本语句执行时刻」求值，必须排在软删**之前**（删后行就不是
+  // published 存活态了，EXISTS 判不中）；行非已发布时自动 no-op
+  await bumpWeiboCountById(c.env.DB, -1, id)
   // 软删进回收站（src/trash.ts）：评论保留，恢复时一并跟回；彻底删除才级联清掉
   await c.env.DB.prepare('UPDATE weibo SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').bind(Date.now(), id).run()
   // 广场下架广播：微博若曾同步 hub（ref = 微博 id），软删后摘除（未收录时 hub 空删幂等）
@@ -1891,6 +1902,9 @@ api.post('/admin/trash/:type/:id/restore', async (c) => {
       .bind(id)
       .run()
     if ((res.meta.changes ?? 0) !== 1) return jsonError('回收站里没有这条内容', 404)
+    // 微博总数记账位：条件增减按「本语句执行时刻」求值，必须排在恢复**之后**（此时行已复活，
+    // published 存活态判得中）；行非已发布时自动 no-op
+    await bumpWeiboCountById(c.env.DB, 1, id)
   } else {
     const res = await c.env.DB
       .prepare(`UPDATE ${table} SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL`)
@@ -2302,9 +2316,10 @@ api.put('/admin/settings', async (c) => {
       patch[key] = SITE_MODE_VALUES.includes(v as SiteMode) ? v : 'blog-weibo'
       continue
     }
-    if (key === 'contentVisibleRange') {
+    if (key === 'contentVisibleRange' || key === 'contentVisibleRangePosts' || key === 'contentVisibleRangeWeibo') {
       // 站点可见窗口（朋友圈式 N 天可见）：写路径严格白名单——脏值 400 而不是静默降级，
-      // 站长得知道「保存了但没生效」是输入问题；'' = 全部可见
+      // 站长得知道「保存了但没生效」是输入问题；'' = 全部可见。旧单键仅为升级期兼容，
+      // 新键保存后下方统一清空旧键（避免旧值继续回落）
       if (v !== '' && !Object.prototype.hasOwnProperty.call(LIST_RANGES, v)) return jsonError('可见范围档位不正确')
       patch[key] = v
       continue
@@ -2331,6 +2346,12 @@ api.put('/admin/settings', async (c) => {
     if (key === 'memberNotice') {
       // 会员中心公告：纯文本单行（换行折叠成空格），长度 200 封顶——渲染层 esc 后直出
       patch[key] = v.replace(/\s+/g, ' ').trim().slice(0, 200)
+      continue
+    }
+    if (key === 'contentVisibleForMembers') {
+      // 会员是否同样受可见窗口限制：只认 '0' / '1'，脏值 400
+      if (v !== '0' && v !== '1') return jsonError('会员可见范围档位不正确')
+      patch[key] = v
       continue
     }
     if (key === 'appearance') {
@@ -2491,6 +2512,9 @@ api.put('/admin/settings', async (c) => {
   }
   // 演示站不允许闭站：有人开了开关，整个重置周期内所有体验者都会看到 503
   if (isDemo(c.env)) patch.siteClosed = '0'
+  // 可见窗口新键一旦提交，旧单键 contentVisibleRange 同步清空：旧键只服务「升级后没动过设置」的
+  // 回落期（utils.visibleRangeOf），留着会让新键的 ''（全部可见）被旧值覆盖
+  if (patch.contentVisibleRangePosts !== undefined || patch.contentVisibleRangeWeibo !== undefined) patch.contentVisibleRange = ''
   await saveSettings(c.env.DB, patch)
   const saved = seoDisplaySettings(await getSettings(c.env.DB))
   // 与 GET 同口径：密钥只在生成时返回一次明文，此后任何回显都打码（防代理/扩展被动收集）
@@ -3079,7 +3103,7 @@ api.get('/public/weibo', async (c) => {
   const r = await listWeibo(c.env.DB, {
     status: 'published',
     limit: clampInt(c.req.query('limit'), 1, 50, 20),
-    afterTs: siteVisibleCutoff(settings),
+    afterTs: weiboVisibleCutoff(settings),
   })
   const origin = new URL(c.req.url).origin
   return c.json({
@@ -3125,8 +3149,10 @@ async function publicComment(
     freqMessage: string
     /** 文章评论接收 email/website，其余两路不收 */
     withContact?: boolean
-    /** 归属与通知上下文；目标不存在返回 Response（404） */
-    target: (body: CommentBody | null) => Promise<{ postId: number; weiboId: number; context?: string; path: string } | Response>
+    /** 归属与通知上下文；目标不存在返回 Response（404）。visCutoff = 页面口径的可见窗口
+     *  生效 cutoff（0 = 放行）——目标行时间早于它时按「不存在」404（防「直链 404 但留言
+     *  接口 200」的存在性探测旁路，与旧 slug 301 的信息差禁令同款） */
+    target: (body: CommentBody | null, visCutoff: number) => Promise<{ postId: number; weiboId: number; context?: string; path: string } | Response>
   }
 ): Promise<Response> {
   const db = c.env.DB
@@ -3151,7 +3177,15 @@ async function publicComment(
   const content = String(body?.content || '').trim().slice(0, 1000)
   if (!content) return jsonError(`${o.noun}内容不能为空`)
 
-  const t = await o.target(body)
+  // 站点可见窗口（API 侧与页面同口径）：窗口外内容直链已 404，留言接口不得成为「存在性
+  // 探测旁路」——豁免规则单一来源 utils.pageWindowCutoff（管理员豁免仅文章、会员豁免按站点开关）。
+  // user / member 已在上面加载，这里直接复用，不再各查一次会话
+  const visCutoff =
+    o.kind === 'guestbook'
+      ? 0
+      : pageWindowCutoff(settings, o.kind === 'weibo' ? 'weibo' : 'posts', { admin: !!user, member: !!member })
+
+  const t = await o.target(body, visCutoff)
   if (t instanceof Response) return t
 
   const parentId = Number(body?.parentId) || 0
@@ -3283,10 +3317,12 @@ api.post('/public/comments', async (c) =>
     closedMessage: '作者已关闭留言',
     freqMessage: '留言太频繁，休息一下吧',
     withContact: true,
-    target: async (body) => {
+    target: async (body, visCutoff) => {
       const slug = String(body?.slug || '').slice(0, 100)
       const post = await getPostBySlug(c.env.DB, slug)
       if (!post || post.status !== 'published') return jsonError('文章不存在', 404)
+      // 站点可见窗口：窗口外文章的留言同口径 404（直链已是 404，留言接口不能多透露一个比特）
+      if (visCutoff && (post.published_at ?? post.created_at ?? 0) < visCutoff) return jsonError('文章不存在', 404)
       return { postId: post.id, weiboId: 0, context: post.title, path: `/post/${encodeURIComponent(post.slug)}#comments` }
     },
   })
@@ -3302,27 +3338,16 @@ api.post('/public/guestbook', async (c) =>
   })
 )
 /* ---------------- 微博互动（点赞 + 评论，公开） ---------------- */
-/** 点赞公共件（posts 按 slug / weibo 按 id 两路共用）：条件更新防负数，
- *  回读同口径只认已发布——草稿/不存在的统一返回 0（草稿历史点赞数不外泄）。
- *  table/col 只来自两个调用点的字面量，无注入面 */
-async function likeDelta(
-  db: D1Database,
-  table: 'posts' | 'weibo',
-  col: 'slug' | 'id',
-  key: string,
-  delta: number
-): Promise<number> {
-  await db
-    .prepare(
-      `UPDATE ${table} SET likes = CASE WHEN likes + ? < 0 THEN 0 ELSE likes + ? END WHERE ${col} = ? AND status = 'published' AND deleted_at IS NULL`
-    )
-    .bind(delta, delta, key)
-    .run()
-  const row = await db
-    .prepare(`SELECT likes FROM ${table} WHERE ${col} = ? AND status = 'published' AND deleted_at IS NULL`)
-    .bind(key)
-    .first<{ likes: number }>()
-  return row?.likes ?? 0
+/** 页面口径的可见窗口 cutoff（公开 API 与 renderPost / renderWeibo 对齐）：
+ *  窗口关闭恒 0、不查会话；开启时豁免规则走 utils.pageWindowCutoff（管理员豁免仅文章、
+ *  「不限制会员」的会员豁免），两个会话都懒查——绝大多数站没开窗口，零开销 */
+async function pageVisibleCutoff(db: D1Database, req: Request, settings: Awaited<ReturnType<typeof getSettings>>, kind: 'posts' | 'weibo'): Promise<number> {
+  const base = kind === 'weibo' ? weiboVisibleCutoff(settings) : siteVisibleCutoff(settings)
+  if (!base) return 0
+  const admin = kind === 'posts' ? !!(await getSessionUser(db, req)) : false
+  const member =
+    settings.membersEnabled === '1' && !visibleRangeAppliesToMembers(settings) ? !!(await getMemberUser(db, req)) : false
+  return pageWindowCutoff(settings, kind, { admin, member })
 }
 
 /** 会员点赞记账（会员 3.0 预备，会员中心「我的点赞」）：登录会员的赞落 member_likes、取消赞删行。
@@ -3344,10 +3369,15 @@ api.post('/public/like/weibo/:id', async (c) => {
   if (!id) return jsonError('参数错误')
   const body = await c.req.json<{ delta?: number }>().catch(() => null)
   const delta = body?.delta === -1 ? -1 : 1
-  const likes = await likeDelta(c.env.DB, 'weibo', 'id', String(id), delta)
+  // 站点可见窗口：窗口外微博的点赞同口径收口（未命中回 0，与「不存在」同响应）
+  const settings = await getSettings(c.env.DB)
+  const cutoff = await pageVisibleCutoff(c.env.DB, c.req.raw, settings, 'weibo')
+  const likes = await likeDelta(c.env.DB, 'weibo', 'id', String(id), delta, cutoff)
+  // 会员点赞记账（member_likes 按微博 id 记，取消赞删行）；窗口外内容点赞未命中不落账
+  const wb = await getWeiboById(c.env.DB, id)
   if (delta === 1) {
-    const wb = await getWeiboById(c.env.DB, id)
-    if (wb && wb.status === 'published') c.executionCtx.waitUntil(trackMemberLike(c, 'weibo', id, 1))
+    if (wb && wb.status === 'published' && (cutoff <= 0 || (wb.published_at ?? wb.created_at ?? 0) >= cutoff))
+      c.executionCtx.waitUntil(trackMemberLike(c, 'weibo', id, 1))
   } else {
     c.executionCtx.waitUntil(trackMemberLike(c, 'weibo', id, -1))
   }
@@ -3360,6 +3390,9 @@ api.get('/public/weibo/:id/comments', async (c) => {
   const wb = await getWeiboById(c.env.DB, id)
   if (!wb || wb.status !== 'published') return jsonError('这条微博不存在', 404)
   const settings = await getSettings(c.env.DB)
+  // 站点可见窗口：窗口外微博的评论列表同口径 404（页面 404 的微博，评论不单独可见）
+  const cutoff = await pageVisibleCutoff(c.env.DB, c.req.raw, settings, 'weibo')
+  if (cutoff && (wb.published_at ?? wb.created_at ?? 0) < cutoff) return jsonError('这条微博不存在', 404)
   // IP 属地（src/ipregion.ts）：展示开关门控在服务端——关闭时连 ip_region 列都不进 SELECT，
   // 开启时出参已是格式化好的标签（en 按 isEn 口径），客户端只渲染字符串不做映射
   const showRegion = settings.showCommentRegion === '1'
@@ -3406,9 +3439,11 @@ api.post('/public/weibo/:id/comments', async (c) => {
     noun: '评论',
     closedMessage: '作者已关闭评论',
     freqMessage: '评论太频繁，休息一下吧',
-    target: async () => {
+    target: async (_body, visCutoff) => {
       const wb = await getWeiboById(c.env.DB, id)
       if (!wb || wb.status !== 'published') return jsonError('这条微博不存在', 404)
+      // 站点可见窗口：窗口外微博的评论同口径 404（直链 /weibo 定位不到，评论接口不能多透露一个比特）
+      if (visCutoff && (wb.published_at ?? wb.created_at ?? 0) < visCutoff) return jsonError('这条微博不存在', 404)
       return { postId: 0, weiboId: id, context: excerpt(wb.content, 40), path: `/weibo?wb=${id}#wb-${id}` }
     },
   })
@@ -3418,13 +3453,16 @@ api.post('/public/like/:slug', async (c) => {
   const slug = c.req.param('slug').slice(0, 100)
   const body = await c.req.json<{ delta?: number }>().catch(() => null)
   const delta = body?.delta === -1 ? -1 : 1
-  const likes = await likeDelta(c.env.DB, 'posts', 'slug', slug, delta)
-  // 会员点赞记账（member_likes 按文章 id 记，这里把 slug 换算回 id；取消赞删行）
+  // 站点可见窗口：窗口外文章的点赞同口径收口（未命中回 0，与「不存在」同响应）
+  const settings = await getSettings(c.env.DB)
+  const cutoff = await pageVisibleCutoff(c.env.DB, c.req.raw, settings, 'posts')
+  const likes = await likeDelta(c.env.DB, 'posts', 'slug', slug, delta, cutoff)
+  // 会员点赞记账（member_likes 按文章 id 记；取消赞删行）；窗口外内容点赞未命中不落账
+  const post = await getPostBySlug(c.env.DB, slug)
   if (delta === 1) {
-    const post = await getPostBySlug(c.env.DB, slug)
-    if (post && post.status === 'published') c.executionCtx.waitUntil(trackMemberLike(c, 'post', post.id, 1))
+    if (post && post.status === 'published' && (cutoff <= 0 || (post.published_at ?? post.created_at ?? 0) >= cutoff))
+      c.executionCtx.waitUntil(trackMemberLike(c, 'post', post.id, 1))
   } else {
-    const post = await getPostBySlug(c.env.DB, slug)
     if (post) c.executionCtx.waitUntil(trackMemberLike(c, 'post', post.id, -1))
   }
   return c.json({ ok: true, likes })

@@ -389,6 +389,37 @@ try {
   results.push(['引导记账位：手册键复位', obManualOff.status === 200])
   console.log(`  ${obManualOff.status === 200 ? '✓' : '✗'} 引导记账位：手册键复位`)
 
+  // ── 内容可见范围链路（文章 / 微博分键 + 会员开关，api.ts 设置 PUT 白名单）──
+  // 纯函数口径（脏值降级、旧键回落）由 tests/list-range.test.ts 守；这里只验 API 接线：
+  // 三个键能存能回显、旧单键被清空、脏值整体 400、复位后回 '' / '1'
+  console.log('\n▸ 内容可见范围链路')
+  const vrSet = await putSettings({ contentVisibleRangePosts: '3d', contentVisibleRangeWeibo: '1m', contentVisibleForMembers: '0' })
+  const vrSetBody = await vrSet.json().catch(() => null)
+  const vrSetOk =
+    vrSet.status === 200 &&
+    vrSetBody?.settings?.contentVisibleRangePosts === '3d' &&
+    vrSetBody?.settings?.contentVisibleRangeWeibo === '1m' &&
+    vrSetBody?.settings?.contentVisibleForMembers === '0' &&
+    vrSetBody?.settings?.contentVisibleRange === ''
+  results.push(['可见范围：文章 / 微博分键保存并回显 + 旧键清空', vrSetOk])
+  console.log(`  ${vrSetOk ? '✓' : '✗'} 可见范围：分键保存回显 + 旧键清空（status ${vrSet.status}）`)
+
+  const vrBadRange = await putSettings({ contentVisibleRangePosts: '10y' })
+  const vrBadMember = await putSettings({ contentVisibleForMembers: 'maybe' })
+  const vrBadOk = vrBadRange.status === 400 && vrBadMember.status === 400
+  results.push(['可见范围：脏档位整体 400（不静默降级）', vrBadOk])
+  console.log(`  ${vrBadOk ? '✓' : '✗'} 可见范围：脏档位 400（${vrBadRange.status}/${vrBadMember.status}）`)
+
+  const vrOff = await putSettings({ contentVisibleRangePosts: '', contentVisibleRangeWeibo: '', contentVisibleForMembers: '1' })
+  const vrOffBody = await vrOff.json().catch(() => null)
+  const vrOffOk =
+    vrOff.status === 200 &&
+    vrOffBody?.settings?.contentVisibleRangePosts === '' &&
+    vrOffBody?.settings?.contentVisibleRangeWeibo === '' &&
+    vrOffBody?.settings?.contentVisibleForMembers === '1'
+  results.push(['可见范围：复位为全部可见 + 会员同样受限', vrOffOk])
+  console.log(`  ${vrOffOk ? '✓' : '✗'} 可见范围：复位（status ${vrOff.status}）`)
+
   // ── 微博前台管理链路（登录管理员在 /weibo 页直接编辑/置顶/删除随手记）──
   // 全程用临时数据（新建→置顶→编辑→删除），不碰夹具，可重复运行
   console.log('\n▸ 微博前台管理链路')
@@ -644,9 +675,12 @@ try {
     })
     const onPage = await raw('GET', bypassUrl('/post/smoke-multi-tag'))
     const onHtml = await onPage.text()
-    const onOk = onHtml.includes('IP 属地') && onHtml.includes('cmt-region') && onHtml.includes('>美国<')
-    results.push(['评论属地：开启后 SSR 出披露 + 属地标签（dev 样本 cf=美国）', onOk])
-    console.log(`  ${onOk ? '✓' : '✗'} 评论属地：开启后 SSR 出披露 + 属地标签（dev 样本 cf=美国）`)
+    const onRegion = onHtml.match(/<span class="cmt-region"[^>]*>([^<]+)<\/span>/)
+    // 不写死具体地名：wrangler dev 注入的 cf 样本随运行环境变化（曾为 US，也曾为 CN:Inner Mongolia），
+    // 这里只验「披露文案 + 属地标签存在且非空」，具体映射口径由 tests/ipregion.test.ts 守
+    const onOk = onHtml.includes('IP 属地') && !!onRegion && onRegion[1].trim().length > 0
+    results.push(['评论属地：开启后 SSR 出披露 + 属地标签', onOk])
+    console.log(`  ${onOk ? '✓' : '✗'} 评论属地：开启后 SSR 出披露 + 属地标签（${onRegion?.[1]?.trim() || '无'}）`)
 
     // 临时微博走一遍 JSON 面（微博 id 时点不定，自建再验），验完软删清理
     const wbCreate = await raw('POST', '/api/admin/weibo', {
@@ -1473,9 +1507,16 @@ try {
 
     const cacheHome2 = await raw('GET', '/')
     const h2 = cacheHome2.headers.get('x-page-cache')
+    const cc2 = cacheHome2.headers.get('cache-control') || ''
     const sameBody = (await cacheHome2.text()).includes('fc-name')
     results.push(['页缓存：第二次请求命中边缘副本', cacheHome2.status === 200 && h2 === 'hit' && sameBody])
     console.log(`  ${h2 === 'hit' ? '✓' : '✗'} 页缓存：第二次请求命中（x-page-cache: ${h2}）`)
+
+    // 命中时浏览器侧仍必须是 no-cache：边缘副本的 max-age 不能外泄给浏览器
+    // （HTTP 缓存不按 Cookie 分键，否则登入 / 登出后 30 分钟内还看到上一个身份的页面）
+    const ccOk = h2 === 'hit' && cc2.includes('no-cache') && !cc2.includes('max-age')
+    results.push(['页缓存：命中时浏览器侧仍是 no-cache', ccOk])
+    console.log(`  ${ccOk ? '✓' : '✗'} 页缓存：命中时浏览器侧 no-cache（cache-control: ${cc2 || '空'}）`)
 
     // 登录视角永远实时（不进缓存键），副本在也不能发给登录者
     const adminHome = await raw('GET', '/', { headers: { Cookie: cookie } })

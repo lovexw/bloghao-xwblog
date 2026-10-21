@@ -127,6 +127,9 @@ CREATE INDEX IF NOT EXISTS idx_posts_updated ON posts (updated_at DESC);
 -- 与上面裸 published_at 列结构不匹配，翻页会全表扫描 + 临时排序（D1 按行读取计费）。
 -- 表达式必须与 src/db.ts 的排序片段一字不差（含 DESC 与部分索引 WHERE），改排序三处同步（tests/feed-index.test.ts 守卫）
 CREATE INDEX IF NOT EXISTS idx_posts_feed ON posts (status, pinned DESC, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL;
+-- 相邻文章专用（无 pinned 前缀的纯时间序，posts.ts adjacentPosts 的 ORDER BY 结构匹配），
+-- 表达式与 src/db.ts SCHEMA_INDEXES 双份登记一致
+CREATE INDEX IF NOT EXISTS idx_posts_chrono ON posts (status, COALESCE(published_at, created_at) DESC, id DESC) WHERE deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS comments (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

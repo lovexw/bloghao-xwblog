@@ -9,6 +9,8 @@ import {
   cleanCategoryDescription,
   cleanRobotsExtra,
   cleanVerifyMetas,
+  contentSignalValue,
+  indexNowKeyOk,
   isSpeculativeRequest,
   parseAnalyticsScript,
   parseVerifyMetas,
@@ -317,4 +319,23 @@ test('page()：jsonLd 传数组时逐块输出（文章页 = BlogPosting + 面�
   assert.equal(blocks.length, 2)
   const second = JSON.parse(blocks[1].replace(/^<script type="application\/ld\+json">/, '').replace(/<\/script>$/, '')) as any
   assert.equal(second['@type'], 'BreadcrumbList')
+})
+
+test('Content-Signal 声明值：默认档 null 不出头，seek / deny 各出对应口径（robots 行与 HTTP 头同源）', () => {
+  assert.equal(contentSignalValue('allow'), null)
+  assert.equal(contentSignalValue('seek'), 'search=yes, ai-input=yes, ai-train=no')
+  assert.equal(contentSignalValue('deny'), 'search=yes, ai-input=no, ai-train=no')
+  // search 恒 yes：搜索收录归 siteNoindex 管，AI 策略不越界
+  for (const v of contentSignalValue('seek')!.split(', ')) assert.ok(v.startsWith('search=yes') || v.startsWith('ai-'))
+})
+
+test('IndexNow 密钥形态：8-128 位十六进制，其余一律拒绝（提交路与密钥文件路共用判定）', () => {
+  assert.ok(indexNowKeyOk('a1b2c3d4'))
+  assert.ok(indexNowKeyOk('A1B2C3D4E5F60718293A4B5C6D7E8F90'))
+  assert.ok(indexNowKeyOk('a'.repeat(128)))
+  assert.ok(!indexNowKeyOk('a1b2c3d')) // 7 位太短
+  assert.ok(!indexNowKeyOk('a'.repeat(129))) // 超长
+  assert.ok(!indexNowKeyOk('g1b2c3d4')) // 非 hex 字符
+  assert.ok(!indexNowKeyOk(''))
+  assert.ok(!indexNowKeyOk('  a1b2c3d4'))
 })

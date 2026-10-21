@@ -100,3 +100,16 @@ test('JSON-LD 产物是合法 JSON 且与 og:image 同源（image 字段 == og:i
   const parsed = JSON.parse(ldMatch[1]) as any
   assert.equal(parsed.image, ogMatch[1])
 })
+
+test('付费墙声明：paywallSelector 输出 isAccessibleForFree + hasPart；不传则完全不出这两个键', () => {
+  const locked = articleJsonLd({ ...base, paywallSelector: '.paywall' }) as any
+  assert.equal(locked.isAccessibleForFree, 'False')
+  assert.deepEqual(locked.hasPart, {
+    '@type': 'WebPageElement',
+    isAccessibleForFree: 'False',
+    cssSelector: '.paywall',
+  })
+  const plain = articleJsonLd(base) as any
+  assert.ok(!('isAccessibleForFree' in plain))
+  assert.ok(!('hasPart' in plain))
+})

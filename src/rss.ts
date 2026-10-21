@@ -43,15 +43,18 @@ export function buildRss(settings: SettingsMap, posts: PostRow[], siteUrl: strin
     </item>`
     })
     .join('\n')
+  // lastBuildDate 取条目里最新的发布时间（max，防置顶旧文排第一时取错）；无条目时不输出
+  const lastBuild = posts.reduce((m, p) => Math.max(m, p.published_at || 0), 0)
   return `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:bloghao="https://bloghao.com/plaza-ns">
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:bloghao="https://bloghao.com/plaza-ns">
   <channel>
     <title>${xmlEsc(tr(en, settings.siteName))}</title>
     <link>${xmlEsc(siteUrl)}</link>
     <description>${xmlEsc(tr(en, settings.siteDescription))}</description>
     <language>${en ? 'en' : 'zh-CN'}</language>
     <atom:link href="${xmlEsc(siteUrl)}/rss.xml" rel="self" type="application/rss+xml"/>
-${items}
+    <dc:creator>${xmlEsc(tr(en, settings.siteName))}</dc:creator>
+${items}${lastBuild ? `\n    <lastBuildDate>${rfc822(lastBuild)}</lastBuildDate>` : ''}
   </channel>
 </rss>`
 }

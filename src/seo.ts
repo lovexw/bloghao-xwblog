@@ -281,13 +281,20 @@ export function readAiPolicy(v: unknown): AiPolicy {
   return v === 'seek' || v === 'deny' ? v : 'allow'
 }
 
-/** Content-Signal 声明行（写在既有 User-agent: * 组内，不另起组）。
+/** Content-Signal 声明值（contentsignals.org 口径；robots.txt 行与 HTTP 响应头共用同一来源）。
  *  search 恒 yes——搜索收录归 settings.siteNoindex 管，AI 策略不越界；
- *  ai-input = RAG / 实时生成式回答取用，ai-train = 模型训练。默认档返回空串（逐字节兼容） */
-function contentSignalLine(policy: AiPolicy): string {
-  if (policy === 'allow') return ''
+ *  ai-input = RAG / 实时生成式回答取用，ai-train = 模型训练。默认档返回 null（不出声明，
+ *  robots.txt 与历史版本逐字节一致；响应头同理，未表态的站不加多余头） */
+export function contentSignalValue(policy: AiPolicy): string | null {
+  if (policy === 'allow') return null
   const aiInput = policy === 'seek' ? 'yes' : 'no'
-  return `Content-signal: search=yes, ai-input=${aiInput}, ai-train=no\n`
+  return `search=yes, ai-input=${aiInput}, ai-train=no`
+}
+
+/** Content-Signal 声明行（写在既有 User-agent: * 组内，不另起组）。默认档返回空串（逐字节兼容） */
+function contentSignalLine(policy: AiPolicy): string {
+  const v = contentSignalValue(policy)
+  return v ? `Content-signal: ${v}\n` : ''
 }
 
 /** AI 策略的 robots 声明块（默认档返回空串）。令牌去重 + 排序保证「同输入同输出」 */
@@ -427,4 +434,12 @@ export function isSpeculativeRequest(req: { headers: { get(name: string): string
   const sec = req.headers.get('Sec-Purpose') || ''
   if (/prefetch|prerender/i.test(sec)) return true
   return /prefetch/i.test(req.headers.get('Purpose') || '')
+}
+
+/* ---------------- 九、IndexNow 快速收录（密钥形态，2026-10-21） ---------------- */
+
+/** IndexNow 密钥形态：8-128 位十六进制（协议规定）。hooks.ts 的 indexnow 插件（提交路）与
+ *  index.ts 的密钥文件路由（/indexnow-key.txt 回验路）共用这一判定，别在调用方再抄正则 */
+export function indexNowKeyOk(key: string): boolean {
+  return /^[0-9a-fA-F]{8,128}$/.test(key)
 }

@@ -201,6 +201,10 @@ export function pageCacheMiddleware(): MiddlewareHandler<AppEnv> {
     if (hit) {
       const headers = new Headers(hit.headers)
       headers.set('X-Page-Cache', 'hit')
+      // 浏览器侧恒为 no-cache：边缘副本上的 max-age=1800 只服务于 Cache API 存储，
+      // 不能外泄给浏览器——HTTP 缓存不按 Cookie 分键，浏览器持有副本会让登入 / 登出后
+      // 仍看到上一个身份的页面（与模块头注「浏览器侧不存在持有旧页面」的口径一致）
+      headers.set('Cache-Control', 'no-cache')
       return new Response(hit.body, { status: hit.status, headers })
     }
 

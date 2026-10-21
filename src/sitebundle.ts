@@ -24,7 +24,7 @@
  * Worker（128MB 内存 / CF 请求体 ≈100MB 上限）。所以导入 = 包先进 R2（`bundles/`，**不在 /images
  * 公开白名单内**），再按 Range 读（src/zip.ts 的读取器），前端分步驱动（每步一次小请求，可重试）。
  */
-import { invalidateSharedSettings, saveSettings, SECRET_SETTINGS, tableColumns } from './db'
+import { invalidateSharedSettings, recountWeiboCount, refreshOnThisDay, saveSettings, SECRET_SETTINGS, tableColumns } from './db'
 import { collectReferencedKeys } from './audit'
 import { collectImageKeysFromHtml, keyOf } from './export'
 import { purgePageCache } from './pagecache'
@@ -70,7 +70,9 @@ export const BUNDLE_TABLES = [
 
 /** settings 里不进包的键：密钥类（SECRET_SETTINGS）+ 实例态/记账位。
  *  bundleImport 是导入自己的状态位（进了包会把自己的进度覆盖掉）；
- *  siteUrl 换域名后应以新实例为准；pageCacheEpoch / lastBackup* 是实例记账。 */
+ *  siteUrl 换域名后应以新实例为准；pageCacheEpoch / lastBackup* 是实例记账；
+ *  wbPubCount / onThisDay / ftsCheckedAt 是运行时派生快照（D1 读放大治理的记账位，
+ *  2026-10-18）——带着旧实例的值走反而是错的，导入收尾各有重算/重播种兜底。 */
 export const BUNDLE_SETTINGS_SKIP: string[] = [
   ...SECRET_SETTINGS,
   'siteUrl',
@@ -79,6 +81,9 @@ export const BUNDLE_SETTINGS_SKIP: string[] = [
   'lastBackupKey',
   'lastBackupBytes',
   'bundleImport',
+  'wbPubCount',
+  'onThisDay',
+  'ftsCheckedAt',
 ]
 
 /** 清空目标站时要删的业务表（settings 除外：密钥/实例态键要留着，只 upsert 包里带来的键） */
@@ -326,6 +331,10 @@ export async function resetSiteContent(env: Env): Promise<ResetResult> {
   // 后台提示重试即可——本操作幂等，再清一次没有副作用。
   await db.batch(BUNDLE_CLEAR_TABLES.map((t) => db.prepare(`DELETE FROM ${t}`)))
   await setBundleImportState(db, { state: 'idle', key: '', at: Date.now() })
+  // 派生记账位归零重算：wbPubCount 清空后应为 0（onThisDay 空库算出来是空数组，翻转天首渲重算也行，
+  // 这里顺手刷掉免得首页先渲染出清空前的旧快照）；ftsCheckedAt 不动——空库下个冷启动复核会重记账
+  await recountWeiboCount(db)
+  await refreshOnThisDay(db).catch(() => {})
   await purgePageCache(db)
 
   let images = 0
@@ -741,6 +750,10 @@ export async function finishBundleImport(env: Env, key: string): Promise<BundleR
     return { ok: false, error: '导入会话不存在或已结束，请重新开始导入', status: 400 }
   }
   await setBundleImportState(db, { state: 'done', key, at: Date.now() })
+  // 派生记账位重算：导入绕过了单条写入口，wbPubCount / onThisDay 快照按新库内容重建
+  // （ftsCheckedAt 不用管：ftsSeeded 随包带回来时索引由触发器随 INSERT 重建，下个冷启动复核自会记账）
+  await recountWeiboCount(db)
+  await refreshOnThisDay(db).catch(() => {})
   await purgePageCache(db)
   await invalidateSharedSettings(db)
   return { ok: true, value: { state: await getBundleImportState(db) } }

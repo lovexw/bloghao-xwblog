@@ -8,14 +8,19 @@ import type { D1Database } from '@cloudflare/workers-types'
 import {
   adjacentPosts,
   ensureSchema,
+  likeDelta,
+  listAllPublishedArchives,
   listPosts,
   listSitemapPosts,
   listWeibo,
+  listWeiboLastmod,
   locateWeiboPage,
+  postHeatmap,
   relatedPosts,
+  yearArchiveStats,
 } from '../src/db.ts'
 import { searchPosts, searchWeibo } from '../src/fts.ts'
-import { listRangeCutoff, siteVisibleCutoff, LIST_RANGES } from '../src/utils.ts'
+import { listRangeCutoff, pageWindowCutoff, siteVisibleCutoff, weiboVisibleCutoff, visibleRangeOf, visibleRangeAppliesToMembers, LIST_RANGES } from '../src/utils.ts'
 
 // ── 后台列表时间范围筛选（文章 / 微博共用）──
 // 防线核心：客户端只传白名单语义值（3d/1m/6m/1y），真实 cutoff 由服务端
@@ -77,6 +82,41 @@ test('listRangeCutoff：未传 / 未知值 / 原型链属性一律回 0（不过
   // hasOwnProperty 查表：原型链属性不得穿透成有效档位
   assert.equal(listRangeCutoff('constructor', now), 0)
   assert.equal(listRangeCutoff('toString', now), 0)
+})
+
+// ── 站点可见窗口：文章 / 微博分列 + 旧单键回落 + 会员豁免开关 ──
+const NOW = 1_750_000_000_000
+const DAY = 86_400_000
+
+test('可见窗口：文章与微博各读各的键，互不串档', () => {
+  const s = { contentVisibleRangePosts: '3d', contentVisibleRangeWeibo: '1y' }
+  assert.equal(visibleRangeOf(s, 'posts'), '3d')
+  assert.equal(visibleRangeOf(s, 'weibo'), '1y')
+  assert.equal(siteVisibleCutoff(s, NOW), NOW - 3 * DAY)
+  assert.equal(weiboVisibleCutoff(s, NOW), NOW - 365 * DAY)
+})
+
+test('可见窗口：旧单键 contentVisibleRange 只在新键为空时回落（升级不静默放开旧内容）', () => {
+  // 老站只有旧键：两路都沿用旧值，升级后行为不变
+  assert.equal(visibleRangeOf({ contentVisibleRange: '1m' }, 'posts'), '1m')
+  assert.equal(visibleRangeOf({ contentVisibleRange: '1m' }, 'weibo'), '1m')
+  // 新键有值：新键优先
+  assert.equal(visibleRangeOf({ contentVisibleRange: '1m', contentVisibleRangePosts: '3d' }, 'posts'), '3d')
+  assert.equal(visibleRangeOf({ contentVisibleRange: '1m', contentVisibleRangeWeibo: '6m' }, 'weibo'), '6m')
+  // 后台保存新键时 PUT 会清空旧键：此时空串 = 真正的「全部可见」
+  assert.equal(visibleRangeOf({ contentVisibleRange: '', contentVisibleRangePosts: '' }, 'posts'), '')
+  assert.equal(siteVisibleCutoff({ contentVisibleRange: '', contentVisibleRangePosts: '', contentVisibleRangeWeibo: '' }, NOW), 0)
+  // 脏值 / 原型链属性一律回 0
+  assert.equal(siteVisibleCutoff({ contentVisibleRangePosts: 'constructor' }, NOW), 0)
+  assert.equal(weiboVisibleCutoff({ contentVisibleRangeWeibo: '10y' }, NOW), 0)
+})
+
+test('可见窗口：会员默认同样受限，唯一豁免档是 contentVisibleForMembers=0', () => {
+  assert.equal(visibleRangeAppliesToMembers({}), true)
+  assert.equal(visibleRangeAppliesToMembers({ contentVisibleForMembers: '1' }), true)
+  assert.equal(visibleRangeAppliesToMembers({ contentVisibleForMembers: '0' }), false)
+  // 脏值按默认「受限」处理（宁严勿漏）
+  assert.equal(visibleRangeAppliesToMembers({ contentVisibleForMembers: 'false' }), true)
 })
 
 function seedRangeDb(): { db: D1Database; raw: DatabaseSync; now: number } {
@@ -153,4 +193,150 @@ test('listWeibo：范围 × 状态筛选叠加（后台「草稿」页签 + 3 �
   const { db, now } = seedRangeDb()
   const r = await listWeibo(db, { status: 'draft', afterTs: now - 3 * 86_400_000 })
   assert.deepEqual(r.items.map((w) => w.content), ['新草稿微博'])
+})
+
+// ── 可见窗口的其余公开面：归档页（列表 / 年度统计 / 热力图）与 sitemap 微博 lastmod ──
+// 这些面曾经不看窗口：窗口外文章直链已经 404，标题与链接却还留在 /archives 里（点了就是死链），
+// sitemap 的 /weibo lastmod 也会被窗口外微博拉到未来。改动先看这一组用例。
+
+test('listAllPublishedArchives：afterTs 之后只留窗口内文章（草稿与软删照旧不出）', async () => {
+  const { db, raw, now } = seedRangeDb()
+  const DAY = 86_400_000
+  // 归档页只看已发布：4 篇里 2 篇草稿本来就不进
+  const all = await listAllPublishedArchives(db)
+  assert.deepEqual(all.map((p) => p.slug), ['new-pub', 'old-pub'])
+  const win = await listAllPublishedArchives(db, now - 3 * DAY)
+  assert.deepEqual(win.map((p) => p.slug), ['new-pub'])
+  // 软删（回收站）同样不出——归档不是回收站的旁路出口
+  raw.prepare("UPDATE posts SET deleted_at = ? WHERE slug = 'new-pub'").run(now)
+  assert.deepEqual((await listAllPublishedArchives(db)).map((p) => p.slug), ['old-pub'])
+  assert.deepEqual(await listAllPublishedArchives(db, now - 3 * DAY), [])
+})
+
+test('yearArchiveStats：窗口外文章不计入「今年已写」（与归档列表同口径）', async () => {
+  const raw = new DatabaseSync(':memory:')
+  raw.exec(SCHEMA_SQL)
+  const now = Date.now()
+  const HOUR = 3600_000
+  const DAY = 86_400_000
+  // 三篇已发布：1 小时前 / 40 天前 / 400 天前；窗口 30 天 → 后两篇出窗
+  const ins = raw.prepare(
+    'INSERT INTO posts (slug, title, content, status, pinned, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?)'
+  )
+  for (const [slug, ts] of [['h1', now - HOUR], ['d40', now - 40 * DAY], ['d400', day400(now)]] as const) {
+    ins.run(slug, slug, 'x', 'published', ts, ts, ts)
+  }
+  const db = d1FromSqlite(raw)
+  const beijingYear = (ts: number) => new Date(ts + 28800_000).getUTCFullYear()
+  const cutoff = now - 30 * DAY
+  // 期望值按 SQL 同一份口径在测试里算：窗口内 + 今年（北京时间）
+  const expectWindowed = [now - HOUR, now - 40 * DAY, day400(now)].filter(
+    (ts) => ts >= cutoff && beijingYear(ts) === beijingYear(now)
+  ).length
+  const windowed = await yearArchiveStats(db, cutoff)
+  assert.equal(windowed.count, expectWindowed)
+  // 不过滤时不会比窗口内更少（老站在窗口外还有今年写的文章时严格更多）
+  const unwindowed = await yearArchiveStats(db)
+  assert.ok(unwindowed.count >= windowed.count)
+  assert.ok(unwindowed.chars >= windowed.chars)
+})
+
+test('postHeatmap：起点取「过去一年」与窗口起点更严者，窗口外的日子不出现', async () => {
+  const raw = new DatabaseSync(':memory:')
+  raw.exec(SCHEMA_SQL)
+  const now = Date.now()
+  const HOUR = 3600_000
+  const DAY = 86_400_000
+  const ins = raw.prepare(
+    'INSERT INTO posts (slug, title, content, status, pinned, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?)'
+  )
+  ins.run('h1', 'h1', 'x', 'published', now - HOUR, now - HOUR, now - HOUR)
+  ins.run('d40', 'd40', 'x', 'published', now - 40 * DAY, now - 40 * DAY, now - 40 * DAY)
+  ins.run('d400', 'd400', 'x', 'published', day400(now), day400(now), day400(now))
+  const db = d1FromSqlite(raw)
+  // 不过滤：近一年内两篇（1 小时前 + 40 天前），400 天前那篇在 366 天窗口外
+  assert.equal((await postHeatmap(db)).total, 2)
+  // 窗口 30 天：40 天前那条出窗，只剩 1 篇
+  assert.equal((await postHeatmap(db, now - 30 * DAY)).total, 1)
+  // 窗口比一年更宽时不影响「过去一年」上限：起点仍是 now - 366 天
+  assert.equal((await postHeatmap(db, now - 800 * DAY)).total, 2)
+})
+
+test('listWeiboLastmod：窗口内没有微博时回 0（条目照旧列出但不带 lastmod）', async () => {
+  const { db, now } = seedRangeDb()
+  const DAY = 86_400_000
+  // 最新已发布微博是 2 小时前：3 天窗口内 → 原样返回；草稿微博不参与 lastmod
+  assert.equal(await listWeiboLastmod(db, now - 3 * DAY), now - 2 * 3600_000)
+  // 窗口收到 1 小时内：所有已发布微博都出窗 → 0
+  assert.equal(await listWeiboLastmod(db, now - 3600_000), 0)
+  // 不过滤：与历史行为一致
+  assert.equal(await listWeiboLastmod(db), now - 2 * 3600_000)
+})
+
+/** 400 天前的时间戳（跨年份安全：不做年初年末的特殊假设） */
+function day400(now: number): number {
+  return now - 400 * 86_400_000
+}
+
+// ── 可见窗口 × 公开互动接口（留言 / 评论 / 点赞）──
+// 防线核心：窗口外内容直链已 404，公开写入口不得多透露一个比特——「404 vs 200」的
+// 存在性信息差与旧 slug 301 同禁（utils.pageWindowCutoff 单一来源，api.ts 三个口共用）。
+
+test('pageWindowCutoff：窗口关闭恒 0；管理员豁免仅文章（微博页连管理员也吃窗口）', () => {
+  const DAY = 86_400_000
+  const off = { contentVisibleRangePosts: '', contentVisibleRangeWeibo: '3d' }
+  // 窗口关闭 = 放行，与身份无关
+  assert.equal(pageWindowCutoff(off, 'posts', { admin: true }), 0)
+  // 微博窗口开着：管理员不豁免（renderWeibo 口径），文章窗口关着：管理员豁免无关紧要
+  const wbOnly = { contentVisibleRangePosts: '', contentVisibleRangeWeibo: '3d' }
+  assert.equal(pageWindowCutoff(wbOnly, 'weibo', { admin: true }), pageWindowCutoff(wbOnly, 'weibo', {}))
+  const both = { contentVisibleRangePosts: '3d', contentVisibleRangeWeibo: '3d' }
+  const now = 1_750_000_000_000
+  assert.equal(pageWindowCutoff(both, 'posts', { admin: true }, now), 0)
+  assert.equal(pageWindowCutoff(both, 'posts', {}, now), now - 3 * DAY)
+  assert.equal(pageWindowCutoff(both, 'weibo', { admin: true }, now), now - 3 * DAY)
+})
+
+test('pageWindowCutoff：会员豁免只在「membersEnabled 开启 + 不限制会员 + 会员在登录态」三者为当时生效', () => {
+  const DAY = 86_400_000
+  const now = 1_750_000_000_000
+  const base = { contentVisibleRangePosts: '3d', contentVisibleRangeWeibo: '3d' }
+  // 默认（会员同样受限）：登录会员也不豁免
+  assert.equal(pageWindowCutoff(base, 'posts', { member: true }, now), now - 3 * DAY)
+  // 站点不限会员，但 membersEnabled 没开（游客站）：会员身份无从谈起，照旧受限
+  const noMembers = { ...base, contentVisibleForMembers: '0' }
+  assert.equal(pageWindowCutoff(noMembers, 'posts', { member: true }, now), now - 3 * DAY)
+  // 三者为当时：豁免生效
+  const exempt = { ...base, contentVisibleForMembers: '0', membersEnabled: '1' }
+  assert.equal(pageWindowCutoff(exempt, 'posts', { member: true }, now), 0)
+  assert.equal(pageWindowCutoff(exempt, 'weibo', { member: true }, now), 0)
+  // 豁免只对登录会员：游客仍受限
+  assert.equal(pageWindowCutoff(exempt, 'posts', {}, now), now - 3 * DAY)
+})
+
+test('likeDelta：窗口外内容点赞不出（回 0 与「不存在」同响应），库内计数分毫不动', async () => {
+  const { db, now } = seedRangeDb()
+  const DAY = 86_400_000
+  const cutoff = now - 3 * DAY
+
+  // 窗口内微博：正常 +1
+  const wbNew = (await listWeibo(db, { status: 'published', afterTs: cutoff })).items.find((w) => w.content === '新微博')!
+  assert.equal(await likeDelta(db, 'weibo', 'id', String(wbNew.id), 1, cutoff), 1)
+
+  // 400 天前的旧微博出窗：回 0，且 likes 没被改动（UPDATE 谓词同口径拦下）
+  const wbOld = (await listWeibo(db, {})).items.find((w) => w.content === '旧微博')!
+  assert.equal(await likeDelta(db, 'weibo', 'id', String(wbOld.id), 1, cutoff), 0)
+  const after = await db.prepare('SELECT likes FROM weibo WHERE id = ?').bind(wbOld.id).first<{ likes: number }>()
+  assert.equal(after?.likes, 0)
+
+  // 不过滤（cutoff=0）：与历史行为一致，旧微博可赞
+  assert.equal(await likeDelta(db, 'weibo', 'id', String(wbOld.id), 1), 1)
+
+  // 文章同口径：窗口外 slug 赞不出；草稿恒不可赞（与「不存在」同响应）
+  assert.equal(await likeDelta(db, 'posts', 'slug', 'new-pub', 1, cutoff), 1)
+  assert.equal(await likeDelta(db, 'posts', 'slug', 'old-pub', 1, cutoff), 0)
+  assert.equal(await likeDelta(db, 'posts', 'slug', 'new-draft', 1), 0)
+  // 不存在的 slug / id 同样回 0（不透露存在性）
+  assert.equal(await likeDelta(db, 'posts', 'slug', 'no-such', 1, cutoff), 0)
+  assert.equal(await likeDelta(db, 'weibo', 'id', '999999', 1, cutoff), 0)
 })

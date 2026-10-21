@@ -131,13 +131,59 @@ export function listRangeCutoff(v: string | null | undefined, now: number = Date
   return days ? now - days : 0
 }
 
-/** 站点可见窗口（朋友圈式 N 天可见，settings `contentVisibleRange`）：窗口外内容对游客/会员
- *  彻底不可见（列表不出现、直链 404、搜索不命中、RSS/sitemap 不含），后台管理与备份不受影响。
- *  与 URL 自选范围组合时调用方取 max（更严者）——窗口是站点级上限，访客只能在窗口内再缩小。
- *  档位白名单与 listRangeCutoff 同源（LIST_RANGES），未配置/脏值一律 0 = 全部可见（老站零打扰） */
+/** 站点可见窗口（朋友圈式 N 天可见）：文章与微博各自一档。
+ *
+ *  键口径：
+ *   - `contentVisibleRangePosts` / `contentVisibleRangeWeibo` 是新键（'' = 全部可见）；
+ *   - `contentVisibleRange` 是旧版单键，只作**升级期回落**：新键仍为空串且旧键有值时两路都沿用旧值，
+ *     老站升级不会静默把窗口外的旧内容重新放出来；后台保存新键时 PUT 会同步清空旧键，
+ *     此后新键的 '' 就是真的「全部可见」（不再回落）。
+ *   - `contentVisibleForMembers`：'0' = 窗口只挡游客，会员登录后不受限；缺省/其它 = 会员同样受限
+ *     （与旧版口径一致）。
+ *
+ *  窗口外内容彻底不可见（列表不出现、直链 404、搜索不命中、RSS/sitemap/llms 不含），
+ *  后台管理与备份不受影响。档位白名单与 listRangeCutoff 同源（LIST_RANGES），脏值一律 0 = 全部可见。 */
+export function visibleRangeOf(settings: Record<string, unknown>, kind: 'posts' | 'weibo'): string {
+  const raw = settings[kind === 'weibo' ? 'contentVisibleRangeWeibo' : 'contentVisibleRangePosts']
+  const v = typeof raw === 'string' ? raw : ''
+  if (v) return v
+  const legacy = settings.contentVisibleRange
+  return typeof legacy === 'string' ? legacy : ''
+}
+
+/** 文章可见窗口 cutoff（0 = 不过滤） */
 export function siteVisibleCutoff(settings: Record<string, unknown>, now: number = Date.now()): number {
-  const v = settings.contentVisibleRange
-  return listRangeCutoff(typeof v === 'string' ? v : '', now)
+  return listRangeCutoff(visibleRangeOf(settings, 'posts'), now)
+}
+
+/** 微博可见窗口 cutoff（0 = 不过滤） */
+export function weiboVisibleCutoff(settings: Record<string, unknown>, now: number = Date.now()): number {
+  return listRangeCutoff(visibleRangeOf(settings, 'weibo'), now)
+}
+
+/** 可见窗口是否同样限制会员（默认 true，保持旧版「游客和会员都受限」口径） */
+export function visibleRangeAppliesToMembers(settings: Record<string, unknown>): boolean {
+  return settings.contentVisibleForMembers !== '0'
+}
+
+/** 页面口径的可见窗口判定（纯函数）：公开 API（留言 / 评论 / 点赞）与页面渲染（renderPost /
+ *  renderWeibo）对齐的豁免规则，单一来源。
+ *  - base = 0（窗口关闭）恒放行；
+ *  - 管理员豁免仅文章（renderPost 的预览语义——微博页连管理员也吃窗口，保持一致）；
+ *  - 站点选择「不限制会员」（contentVisibleForMembers='0' 且 membersEnabled 开启）且会员已登录时豁免。
+ *  返回生效 cutoff（0 = 放行）；调用方对 cutoff > 0 且行时间早于 cutoff 的内容按「不存在」口径 404 /
+ *  返回 0（与直链 404、旧 slug 301 的「窗口外不可见」信息差禁令同款） */
+export function pageWindowCutoff(
+  settings: Record<string, unknown>,
+  kind: 'posts' | 'weibo',
+  who: { admin?: boolean; member?: boolean },
+  now: number = Date.now()
+): number {
+  const base = kind === 'weibo' ? weiboVisibleCutoff(settings, now) : siteVisibleCutoff(settings, now)
+  if (!base) return 0
+  if (kind === 'posts' && who.admin) return 0
+  if (settings.membersEnabled === '1' && !visibleRangeAppliesToMembers(settings) && who.member) return 0
+  return base
 }
 
 /* ---------------- 会员昵称（注册选填 + 30 天一次修改，中英文均可） ----------------

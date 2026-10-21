@@ -27,15 +27,30 @@ function post(over: Partial<PostRow>): PostRow {
 }
 
 test('llms.txt：H1 站名 + blockquote 描述 + 文章条目（标题/链接/摘要）与机器可读清单', () => {
-  const out = buildLlmsTxt(S, [post({})], [{ slug: 'about', title: '关于本站' }], SITE)
+  const out = buildLlmsTxt(S, [post({})], [{ slug: 'about', title: '关于本站' }], SITE, ['比特币', '硬件钱包'])
   assert.ok(out.startsWith('# 测试站\n\n> 一个测试站点\n'))
   assert.ok(out.includes('- [你好世界](https://blog.example.com/post/hello-world): 第一篇文章的摘要'))
-  assert.ok(out.includes('- [关于本站](https://blog.example.com/about)'), 'about 走 /about 短链')
+  // 「关于本站」节：about 专属链接 + 主要话题（真实标签聚合）；独立页面节不再重复 about 条目
+  assert.ok(out.includes('## 关于本站'))
+  assert.ok(out.includes('- [关于我（作者介绍）](https://blog.example.com/about)'), 'about 链接收进关于本站节')
+  assert.ok(out.includes('- 主要话题：比特币、硬件钱包'))
+  assert.ok(!out.includes('- [关于本站](https://blog.example.com/about)'), '独立页面节不再重复 about')
   assert.ok(out.includes('(https://blog.example.com/rss.xml)'))
   assert.ok(out.includes('(https://blog.example.com/feed.json)'))
   assert.ok(out.includes('(https://blog.example.com/sitemap.xml)'))
   assert.ok(out.includes('.md`'), 'Markdown 镜像约定要写进导读')
   assert.ok(!out.includes('smoke-llms-body-marker'), '索引不出现正文')
+})
+
+test('llms：无 topics 时「关于本站」只剩作者链接；英文版出英文节名', () => {
+  const zh = buildLlmsTxt(S, [post({})], [], SITE)
+  assert.ok(zh.includes('## 关于本站'))
+  assert.ok(zh.includes('- [关于我（作者介绍）](https://blog.example.com/about)'))
+  assert.ok(!zh.includes('主要话题'), '空标签整行省略')
+  const enS = { ...S, edition: 'en', editionEnStatus: 'active' } as SettingsMap
+  const en = buildLlmsFullTxt(enS, [post({})], SITE, ['bitcoin'])
+  assert.ok(en.includes('## About this site'))
+  assert.ok(en.includes('- Main topics: bitcoin'))
 })
 
 test('llms.txt：中文 slug 百分号编码；摘要/标题内嵌换行单行化；无摘要省略冒号', () => {
