@@ -8,6 +8,7 @@ import type { D1Database } from '@cloudflare/workers-types'
 import {
   adjacentPosts,
   ensureSchema,
+  likeDelta,
   listAllPublishedArchives,
   listPosts,
   listSitemapPosts,
@@ -19,7 +20,7 @@ import {
   yearArchiveStats,
 } from '../src/db.ts'
 import { searchPosts, searchWeibo } from '../src/fts.ts'
-import { listRangeCutoff, siteVisibleCutoff, weiboVisibleCutoff, visibleRangeOf, visibleRangeAppliesToMembers, LIST_RANGES } from '../src/utils.ts'
+import { listRangeCutoff, pageWindowCutoff, siteVisibleCutoff, weiboVisibleCutoff, visibleRangeOf, visibleRangeAppliesToMembers, LIST_RANGES } from '../src/utils.ts'
 
 // ── 后台列表时间范围筛选（文章 / 微博共用）──
 // 防线核心：客户端只传白名单语义值（3d/1m/6m/1y），真实 cutoff 由服务端
@@ -276,3 +277,66 @@ test('listWeiboLastmod：窗口内没有微博时回 0（条目照旧列出但�
 function day400(now: number): number {
   return now - 400 * 86_400_000
 }
+
+// ── 可见窗口 × 公开互动接口（留言 / 评论 / 点赞）──
+// 防线核心：窗口外内容直链已 404，公开写入口不得多透露一个比特——「404 vs 200」的
+// 存在性信息差与旧 slug 301 同禁（utils.pageWindowCutoff 单一来源，api.ts 三个口共用）。
+
+test('pageWindowCutoff：窗口关闭恒 0；管理员豁免仅文章（微博页连管理员也吃窗口）', () => {
+  const DAY = 86_400_000
+  const off = { contentVisibleRangePosts: '', contentVisibleRangeWeibo: '3d' }
+  // 窗口关闭 = 放行，与身份无关
+  assert.equal(pageWindowCutoff(off, 'posts', { admin: true }), 0)
+  // 微博窗口开着：管理员不豁免（renderWeibo 口径），文章窗口关着：管理员豁免无关紧要
+  const wbOnly = { contentVisibleRangePosts: '', contentVisibleRangeWeibo: '3d' }
+  assert.equal(pageWindowCutoff(wbOnly, 'weibo', { admin: true }), pageWindowCutoff(wbOnly, 'weibo', {}))
+  const both = { contentVisibleRangePosts: '3d', contentVisibleRangeWeibo: '3d' }
+  const now = 1_750_000_000_000
+  assert.equal(pageWindowCutoff(both, 'posts', { admin: true }, now), 0)
+  assert.equal(pageWindowCutoff(both, 'posts', {}, now), now - 3 * DAY)
+  assert.equal(pageWindowCutoff(both, 'weibo', { admin: true }, now), now - 3 * DAY)
+})
+
+test('pageWindowCutoff：会员豁免只在「membersEnabled 开启 + 不限制会员 + 会员在登录态」三者为当时生效', () => {
+  const DAY = 86_400_000
+  const now = 1_750_000_000_000
+  const base = { contentVisibleRangePosts: '3d', contentVisibleRangeWeibo: '3d' }
+  // 默认（会员同样受限）：登录会员也不豁免
+  assert.equal(pageWindowCutoff(base, 'posts', { member: true }, now), now - 3 * DAY)
+  // 站点不限会员，但 membersEnabled 没开（游客站）：会员身份无从谈起，照旧受限
+  const noMembers = { ...base, contentVisibleForMembers: '0' }
+  assert.equal(pageWindowCutoff(noMembers, 'posts', { member: true }, now), now - 3 * DAY)
+  // 三者为当时：豁免生效
+  const exempt = { ...base, contentVisibleForMembers: '0', membersEnabled: '1' }
+  assert.equal(pageWindowCutoff(exempt, 'posts', { member: true }, now), 0)
+  assert.equal(pageWindowCutoff(exempt, 'weibo', { member: true }, now), 0)
+  // 豁免只对登录会员：游客仍受限
+  assert.equal(pageWindowCutoff(exempt, 'posts', {}, now), now - 3 * DAY)
+})
+
+test('likeDelta：窗口外内容点赞不出（回 0 与「不存在」同响应），库内计数分毫不动', async () => {
+  const { db, now } = seedRangeDb()
+  const DAY = 86_400_000
+  const cutoff = now - 3 * DAY
+
+  // 窗口内微博：正常 +1
+  const wbNew = (await listWeibo(db, { status: 'published', afterTs: cutoff })).items.find((w) => w.content === '新微博')!
+  assert.equal(await likeDelta(db, 'weibo', 'id', String(wbNew.id), 1, cutoff), 1)
+
+  // 400 天前的旧微博出窗：回 0，且 likes 没被改动（UPDATE 谓词同口径拦下）
+  const wbOld = (await listWeibo(db, {})).items.find((w) => w.content === '旧微博')!
+  assert.equal(await likeDelta(db, 'weibo', 'id', String(wbOld.id), 1, cutoff), 0)
+  const after = await db.prepare('SELECT likes FROM weibo WHERE id = ?').bind(wbOld.id).first<{ likes: number }>()
+  assert.equal(after?.likes, 0)
+
+  // 不过滤（cutoff=0）：与历史行为一致，旧微博可赞
+  assert.equal(await likeDelta(db, 'weibo', 'id', String(wbOld.id), 1), 1)
+
+  // 文章同口径：窗口外 slug 赞不出；草稿恒不可赞（与「不存在」同响应）
+  assert.equal(await likeDelta(db, 'posts', 'slug', 'new-pub', 1, cutoff), 1)
+  assert.equal(await likeDelta(db, 'posts', 'slug', 'old-pub', 1, cutoff), 0)
+  assert.equal(await likeDelta(db, 'posts', 'slug', 'new-draft', 1), 0)
+  // 不存在的 slug / id 同样回 0（不透露存在性）
+  assert.equal(await likeDelta(db, 'posts', 'slug', 'no-such', 1, cutoff), 0)
+  assert.equal(await likeDelta(db, 'weibo', 'id', '999999', 1, cutoff), 0)
+})

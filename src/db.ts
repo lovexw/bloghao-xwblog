@@ -1060,6 +1060,33 @@ export async function getWeiboById(db: D1Database, id: number): Promise<WeiboRow
   return db.prepare('SELECT * FROM weibo WHERE id = ? AND deleted_at IS NULL').bind(id).first<WeiboRow>()
 }
 
+/** 点赞公共件（posts 按 slug / weibo 按 id 两路共用，api.ts 两个公开点赞端点调用）：
+ *  条件更新防负数，回读同口径只认已发布——草稿/不存在的统一返回 0（草稿历史点赞数不外泄）。
+ *  afterTs = 页面口径的可见窗口 cutoff（0 = 不过滤）：窗口外内容点赞不出（谓词同时挂
+ *  UPDATE 与回读，未命中回 0——与「不存在」同响应，不透露存在性）。
+ *  table/col 只来自调用点字面量，无注入面 */
+export async function likeDelta(
+  db: D1Database,
+  table: 'posts' | 'weibo',
+  col: 'slug' | 'id',
+  key: string,
+  delta: number,
+  afterTs = 0
+): Promise<number> {
+  const vis = afterTs > 0 ? 'AND COALESCE(published_at, created_at) >= ?' : ''
+  await db
+    .prepare(
+      `UPDATE ${table} SET likes = CASE WHEN likes + ? < 0 THEN 0 ELSE likes + ? END WHERE ${col} = ? AND status = 'published' AND deleted_at IS NULL ${vis}`
+    )
+    .bind(...(afterTs > 0 ? [delta, delta, key, afterTs] : [delta, delta, key]))
+    .run()
+  const row = await db
+    .prepare(`SELECT likes FROM ${table} WHERE ${col} = ? AND status = 'published' AND deleted_at IS NULL ${vis}`)
+    .bind(...(afterTs > 0 ? [key, afterTs] : [key]))
+    .first<{ likes: number }>()
+  return row?.likes ?? 0
+}
+
 /** 批量取一组微博的已审核评论数：{weiboId: count}。
  *  INDEXED BY 是硬约束（生产实测 2026-10-15）：不带它时规划器误选 idx_comments_status，
  *  每次全表扫全部已审评论；强制走 weibo_id 索引后十次精准 seek。索引由 ensureSchema 兜底建 */

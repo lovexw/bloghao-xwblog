@@ -166,6 +166,26 @@ export function visibleRangeAppliesToMembers(settings: Record<string, unknown>):
   return settings.contentVisibleForMembers !== '0'
 }
 
+/** 页面口径的可见窗口判定（纯函数）：公开 API（留言 / 评论 / 点赞）与页面渲染（renderPost /
+ *  renderWeibo）对齐的豁免规则，单一来源。
+ *  - base = 0（窗口关闭）恒放行；
+ *  - 管理员豁免仅文章（renderPost 的预览语义——微博页连管理员也吃窗口，保持一致）；
+ *  - 站点选择「不限制会员」（contentVisibleForMembers='0' 且 membersEnabled 开启）且会员已登录时豁免。
+ *  返回生效 cutoff（0 = 放行）；调用方对 cutoff > 0 且行时间早于 cutoff 的内容按「不存在」口径 404 /
+ *  返回 0（与直链 404、旧 slug 301 的「窗口外不可见」信息差禁令同款） */
+export function pageWindowCutoff(
+  settings: Record<string, unknown>,
+  kind: 'posts' | 'weibo',
+  who: { admin?: boolean; member?: boolean },
+  now: number = Date.now()
+): number {
+  const base = kind === 'weibo' ? weiboVisibleCutoff(settings, now) : siteVisibleCutoff(settings, now)
+  if (!base) return 0
+  if (kind === 'posts' && who.admin) return 0
+  if (settings.membersEnabled === '1' && !visibleRangeAppliesToMembers(settings) && who.member) return 0
+  return base
+}
+
 /* ---------------- 会员昵称（注册选填 + 30 天一次修改，中英文均可） ----------------
  * 展示名不做唯一约束（username 才是登录凭证），渲染层 esc 兜底 XSS；
  * 清洗与窗口判定是纯函数：SSR 渲染、API 校验、Node 测试三处共用同一口径。 */
