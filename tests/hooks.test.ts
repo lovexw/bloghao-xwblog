@@ -483,3 +483,62 @@ test('cleanServerPluginConfig：configValidate 语义校验生效——坏 webho
   const badEvents = cleanServerPluginConfig(JSON.stringify({ 'outbound-webhook': { url: 'https://x.example/h', events: 'nope' } }))
   assert.equal(badEvents.ok, false)
 })
+
+test('IndexNow 插件：密钥 + 站点地址齐才提交，URL/key/keyLocation 三件套齐全，未配置零外发', async () => {
+  const cap = captureFetch()
+  try {
+    // 密钥（serverPluginConfig.indexnow.key）+ 站点地址齐：发布 / 编辑 / 软删各提交一条
+    const env = fakeEnv([
+      { key: 'siteUrl', value: 'https://blog.example.com/' },
+      { key: 'serverPluginConfig', value: JSON.stringify({ indexnow: { key: 'a1b2c3d4e5' } }) },
+    ])
+    await firePostPublished(env, { slug: 'hello', title: '新文章', summary: '', via: 'admin' })
+    assert.equal(cap.calls.length, 1)
+    assert.ok(cap.calls[0].url.startsWith('https://api.indexnow.org/indexnow?'))
+    const u = new URL(cap.calls[0].url)
+    assert.equal(u.searchParams.get('url'), 'https://blog.example.com/post/hello')
+    assert.equal(u.searchParams.get('key'), 'a1b2c3d4e5')
+    assert.equal(u.searchParams.get('keyLocation'), 'https://blog.example.com/indexnow-key.txt')
+
+    await firePostUpdated(env, { slug: 'hello', title: '新文章', via: 'admin' })
+    await firePostDeleted(env, { slug: 'hello', title: '新文章', via: 'admin' })
+    assert.equal(cap.calls.length, 3)
+
+    // 密钥缺失 / 形态不对：零外发
+    cap.calls.length = 0
+    const noKey = fakeEnv([{ key: 'siteUrl', value: 'https://blog.example.com' }])
+    await firePostPublished(noKey, { slug: 'hello', title: 'T', summary: '', via: 'admin' })
+    const badKey = fakeEnv([
+      { key: 'siteUrl', value: 'https://blog.example.com' },
+      { key: 'serverPluginConfig', value: JSON.stringify({ indexnow: { key: 'zzzz' } }) },
+    ])
+    await firePostPublished(badKey, { slug: 'hello', title: 'T', summary: '', via: 'admin' })
+    // 站点地址未配置：拼不出绝对 URL，静默跳过
+    const noBase = fakeEnv([{ key: 'serverPluginConfig', value: JSON.stringify({ indexnow: { key: 'a1b2c3d4e5' } }) }])
+    await firePostPublished(noBase, { slug: 'hello', title: 'T', summary: '', via: 'admin' })
+    assert.equal(cap.calls.length, 0, '未配置态零外发')
+  } finally {
+    cap.restore()
+  }
+})
+
+test('IndexNow 插件：configValidate 拒绝非十六进制密钥；停用名单可关掉', async () => {
+  const bad = cleanServerPluginConfig(JSON.stringify({ indexnow: { key: 'xyz!!!' } }))
+  assert.equal(bad.ok, false)
+  assert.ok(bad.ok === false && bad.error.includes('十六进制'))
+  const ok = cleanServerPluginConfig(JSON.stringify({ indexnow: { key: 'A1B2C3D4E5F60718293A4B5C6D7E8F90' } }))
+  assert.equal(ok.ok, true)
+
+  const cap = captureFetch()
+  try {
+    const env = fakeEnv([
+      { key: 'siteUrl', value: 'https://blog.example.com' },
+      { key: 'serverPluginsDisabled', value: 'indexnow' },
+      { key: 'serverPluginConfig', value: JSON.stringify({ indexnow: { key: 'a1b2c3d4e5' } }) },
+    ])
+    await firePostPublished(env, { slug: 'hello', title: 'T', summary: '', via: 'admin' })
+    assert.equal(cap.calls.length, 0, '停用后零外发')
+  } finally {
+    cap.restore()
+  }
+})

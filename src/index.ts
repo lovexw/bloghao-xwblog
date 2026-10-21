@@ -5,7 +5,7 @@ import { api } from './api'
 import { cleanBotPath, identifyBot, purgeBots, recordBot, shouldRecordBot } from './bots'
 import { siteClosedResponse } from './closed'
 import { clientIp, getCookie, getMemberUser, getSessionUser, rateLimit } from './auth'
-import { ensureSchema, getPostBySlug, getSettings, listCategories, listPages, listPosts, listSitemapCategoryLastmod, listSitemapPages, listSitemapPosts, listWeiboLastmod } from './db'
+import { ensureSchema, getPostBySlug, getSettings, listCategories, listPages, listPosts, listPublishedTags, listSitemapCategoryLastmod, listSitemapPages, listSitemapPosts, listWeiboLastmod } from './db'
 import { isEn, recordEditionFailure } from './i18n'
 import { buildLlmsFullTxt, buildLlmsStub, buildLlmsTxt } from './llms'
 import { mcpRoutes } from './mcp'
@@ -16,7 +16,8 @@ import { mergeUnlockCookie, PP_COOKIE, PP_TTL_MS, verifyPostPassword } from './p
 import { installedManifest, pluginFileKey, readInstalled } from './pluginpkg'
 import { buildJsonFeed, buildRss, buildSitemap } from './rss'
 import { siteBase } from './render'
-import { buildRobotsTxt, readAiPolicy } from './seo'
+import { buildRobotsTxt, contentSignalValue, indexNowKeyOk, readAiPolicy } from './seo'
+import { pluginConfig } from './hooks'
 import { purgeVisits } from './stats'
 import { purgeTrash } from './trash'
 import { recountWeiboCount, refreshFootStats, refreshOnThisDay } from './db'
@@ -226,6 +227,7 @@ const rssHandler: PublicHandler = async (c) => {
   const siteUrl = siteBase(settings, new URL(c.req.url).origin)
   c.header('Content-Type', 'application/rss+xml; charset=utf-8')
   c.header('Cache-Control', 'public, max-age=600')
+  setSignalHeader(c, settings)
   return c.body(buildRss(settings, items, siteUrl))
 }
 app.get('/rss.xml', rssHandler)
@@ -240,9 +242,17 @@ const jsonFeedHandler: PublicHandler = async (c) => {
   const siteUrl = siteBase(settings, new URL(c.req.url).origin)
   c.header('Content-Type', 'application/json; charset=utf-8')
   c.header('Cache-Control', 'public, max-age=600')
+  setSignalHeader(c, settings)
   return c.body(buildJsonFeed(settings, items, siteUrl))
 }
 app.get('/feed.json', jsonFeedHandler)
+
+/** Content-Signal 响应头（robots.txt 同款声明的 HTTP 头形态，部分抓取器只看头）：
+ *  订阅源 / sitemap / llms 这些机器可读面与 HTML 页面（pages.ts baseHeaders）同一口径 */
+function setSignalHeader(c: Context<{ Bindings: Env; Variables: { user: SessionUser | null } }>, settings: Awaited<ReturnType<typeof getSettings>>): void {
+  const signal = contentSignalValue(readAiPolicy(settings.aiPolicy))
+  if (signal) c.header('Content-Signal', signal)
+}
 
 app.get('/sitemap.xml', async (c) => {
   const settings = await getSettings(c.env.DB)
@@ -258,6 +268,7 @@ app.get('/sitemap.xml', async (c) => {
   const lastmodBySlug = new Map(catLastmod.map((r) => [r.slug, r.lastmod]))
   c.header('Content-Type', 'application/xml; charset=utf-8')
   c.header('Cache-Control', 'public, max-age=600')
+  setSignalHeader(c, settings)
   return c.body(
     buildSitemap(
       settings,
@@ -290,21 +301,38 @@ const llmsHandler = (full: boolean): PublicHandler => async (c) => {
   const siteUrl = siteBase(settings, new URL(c.req.url).origin)
   c.header('Content-Type', 'text/markdown; charset=utf-8')
   c.header('Cache-Control', 'public, max-age=600')
+  setSignalHeader(c, settings)
   // AI 策略 deny 档：llms 面本就是给 AI 看的导读，robots 全拒时整体关闭（桩文案指向策略而非演示）
   const aiDenied = readAiPolicy(settings.aiPolicy) === 'deny'
   if (isDemo(c.env) || settings.siteNoindex === '1' || aiDenied) return c.body(buildLlmsStub(settings, siteUrl, aiDenied))
-  const [feed, pages] = await Promise.all([
+  const [feed, pages, tags] = await Promise.all([
     listPosts(c.env.DB, { status: 'published', limit: full ? 50 : 100, afterTs: siteVisibleCutoff(settings) }),
     listPages(c.env.DB, { status: 'published' }),
+    // 「关于本站」节的主要话题：已发布文章的标签聚合（真实内容推导），取前 8 个
+    listPublishedTags(c.env.DB),
   ])
+  const topics = tags.slice(0, 8).map((t) => t.name)
   return c.body(
     full
-      ? buildLlmsFullTxt(settings, feed.items, siteUrl)
-      : buildLlmsTxt(settings, feed.items, pages.map((p) => ({ slug: p.slug, title: p.title })), siteUrl)
+      ? buildLlmsFullTxt(settings, feed.items, siteUrl, topics)
+      : buildLlmsTxt(settings, feed.items, pages.map((p) => ({ slug: p.slug, title: p.title })), siteUrl, topics)
   )
 }
 app.get('/llms.txt', llmsHandler(false))
 app.get('/llms-full.txt', llmsHandler(true))
+
+/* ---------------- IndexNow 密钥文件（hooks.ts indexnow 插件的站点归属验证路） ----------------
+ * IndexNow 协议：提交时带 keyLocation，引擎回访这个地址比对密钥。密钥存插件配置
+ * （serverPluginConfig.indexnow.key），未配置 / 形态不对一律 404 不透露任何信息；
+ * 本文件是公开值（验证机制本来就要求公开），短缓存兼顾「换密钥后尽快生效」 */
+app.get('/indexnow-key.txt', async (c) => {
+  const settings = await getSettings(c.env.DB)
+  const key = (pluginConfig(settings, 'indexnow').key || '').trim()
+  if (!indexNowKeyOk(key)) return c.text('Not found', 404)
+  c.header('Content-Type', 'text/plain; charset=utf-8')
+  c.header('Cache-Control', 'public, max-age=300')
+  return c.body(key)
+})
 
 /* ---------------- 编辑器远程插件下发（B8 插件半边，安装端点在 api.ts） ----------------
  * /plugins/installed.json 与 /plugin-files/:id 都要求管理员会话（编辑器带着 Cookie 加载），

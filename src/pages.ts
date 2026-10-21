@@ -68,7 +68,7 @@ import type { MemberData, RankData } from './themes/registry'
 import type { Env, PostRow, SessionUser, SettingsMap } from './types'
 import { packMatrix, qrMatrix } from './qrcode'
 import { clampInt, esc, excerpt, isDemo, readingMinutes, siteVisibleCutoff, teaserHtml, visibleRangeAppliesToMembers, weiboVisibleCutoff } from './utils'
-import { analyticsOrigin, breadcrumbJsonLd, isSpeculativeRequest, readAiPolicy } from './seo'
+import { analyticsOrigin, breadcrumbJsonLd, contentSignalValue, isSpeculativeRequest, readAiPolicy } from './seo'
 import { needsFontSrc } from './skinpack'
 
 type C = Context<{ Bindings: Env; Variables: { user: SessionUser | null } }>
@@ -127,6 +127,12 @@ function baseHeaders(c: C, settings?: SettingsMap) {
   // https 上启用 HSTS（http 上浏览器忽略，本地开发不受影响）；浏览器特性收敛到无
   c.header('Strict-Transport-Security', 'max-age=31536000')
   c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+  // Content-Signal 响应头（contentsignals.org）：robots.txt 里那行声明的 HTTP 头形态，
+  // 部分抓取器只看头不看 robots——与 aiRobotsBlock 共用同一取值来源（默认档不出头）
+  if (settings) {
+    const signal = contentSignalValue(readAiPolicy(settings.aiPolicy))
+    if (signal) c.header('Content-Signal', signal)
+  }
 }
 
 // 浏览量去重：同一 IP 对同一篇文章 1 小时内只计 1 次（进程内缓存，尽力而为），
@@ -736,6 +742,9 @@ export async function renderPost(c: C): Promise<Response> {
           updatedAt: row.updated_at,
           tags: parseTags(row),
           commentCount: commentTotal,
+          // 付费墙声明（Google 口径 isAccessibleForFree）：密码墙与会员锁文都算受限内容——
+          // 密码墙整页只有解锁表单，会员锁文正文截断处是 .paywall 升级卡
+          paywallSelector: pwLocked ? '.pp-box' : locked ? '.paywall' : undefined,
         }),
         breadcrumbJsonLd([
           { name: en ? 'Home' : '首页', url: `${base}/` },

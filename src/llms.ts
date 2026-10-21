@@ -43,10 +43,15 @@ function sections(parts: [string, string][]): string {
     .join('')
 }
 
-/** 共同的头（H1 + blockquote 描述）与机器可读清单尾节 */
-function frame(settings: SettingsMap, siteUrl: string, middle: string): string {
+/** 共同的头（H1 + blockquote 描述）、关于本站节与机器可读清单尾节。
+ *  「关于本站」给 AI 引用时提供出处背景（这是谁的站、在写什么）——topics 来自调用方的
+ *  文章标签聚合（真实内容推导，无需站长另行配置），空标签时整行省略 */
+function frame(settings: SettingsMap, siteUrl: string, middle: string, topics: string[] = []): string {
   const en = isEn(settings)
   const head = `# ${oneLine(tr(en, settings.siteName))}\n\n> ${oneLine(tr(en, settings.siteDescription))}\n`
+  const aboutParts = [`- [${en ? 'About the author' : '关于我（作者介绍）'}](${siteUrl}/about)`]
+  if (topics.length) aboutParts.push(en ? `- Main topics: ${topics.join(', ')}` : `- 主要话题：${topics.join('、')}`)
+  const about = sections([[en ? '## About this site' : '## 关于本站', aboutParts.join('\n')]])
   const tools = sections([
     [
       en ? '## Subscriptions & machine-readable surfaces' : '## 订阅与机器可读面',
@@ -62,31 +67,34 @@ function frame(settings: SettingsMap, siteUrl: string, middle: string): string {
   const mdNote = en
     ? 'Every post is also available as Markdown: append `.md` to its URL (e.g. `' + siteUrl + '/post/example.md`).'
     : '每篇文章另有 Markdown 镜像：在文章地址后加 `.md`（例如 `' + siteUrl + '/post/example.md`）。'
-  return `${head}\n${middle}${tools}\n${mdNote}\n`
+  return `${head}\n${middle}${about}${tools}\n${mdNote}\n`
 }
 
-/** /llms.txt —— 导读索引：最新文章（标题 + 链接 + 一句话摘要）与独立页面 */
-export function buildLlmsTxt(settings: SettingsMap, posts: PostRow[], pages: LlmsPage[], siteUrl: string): string {
+/** /llms.txt —— 导读索引：最新文章（标题 + 链接 + 一句话摘要）与独立页面。
+ *  slug='about' 的页面不再进「独立页面」节（「关于本站」节已带专属链接，避免同链重复） */
+export function buildLlmsTxt(settings: SettingsMap, posts: PostRow[], pages: LlmsPage[], siteUrl: string, topics: string[] = []): string {
   const en = isEn(settings)
   const postLines = posts.map((p) => {
     const s = oneLine(p.summary)
     return `- [${oneLine(p.title)}](${postUrl(siteUrl, p)})${s ? `: ${s}` : ''}`
   })
-  const pageLines = pages.map((pg) => {
-    const url = pg.slug === 'about' ? `${siteUrl}/about` : `${siteUrl}/page/${encodeURIComponent(pg.slug)}`
-    return `- [${oneLine(pg.title)}](${url})`
-  })
+  const pageLines = pages
+    .filter((pg) => pg.slug !== 'about')
+    .map((pg) => {
+      const url = `${siteUrl}/page/${encodeURIComponent(pg.slug)}`
+      return `- [${oneLine(pg.title)}](${url})`
+    })
   const middle = sections([
     [en ? '## Latest posts' : '## 最新文章', postLines.join('\n')],
     [en ? '## Pages' : '## 独立页面', pageLines.join('\n')],
   ])
-  return frame(settings, siteUrl, middle)
+  return frame(settings, siteUrl, middle, topics)
 }
 
 /** /llms-full.txt —— 同一结构附全文：普通文出正文（库存净化 HTML 经 sanitizeHtml → htmlToMd 转
- * Markdown，与导出 Markdown 包同款转换器——别按「库存即 Markdown」原样输出，标签会直接透出）；
- * 锁文/密码文只出摘要 + 引导（防泄漏） */
-export function buildLlmsFullTxt(settings: SettingsMap, posts: PostRow[], siteUrl: string): string {
+ *  Markdown，与导出 Markdown 包同款转换器——别按「库存即 Markdown」原样输出，标签会直接透出）；
+ *  锁文/密码文只出摘要 + 引导（防泄漏） */
+export function buildLlmsFullTxt(settings: SettingsMap, posts: PostRow[], siteUrl: string, topics: string[] = []): string {
   const en = isEn(settings)
   const items = posts.map((p) => {
     const pwProtected = !!p.password_hash
@@ -109,7 +117,7 @@ export function buildLlmsFullTxt(settings: SettingsMap, posts: PostRow[], siteUr
     return `## [${oneLine(p.title)}](${postUrl(siteUrl, p)})\n\n${date ? (en ? 'Published: ' : '发布：') + fmtDate(date) + '\n\n' : ''}${body}\n\n---`
   })
   const middle = sections([[en ? '## Posts (full text)' : '## 文章全文', items.join('\n\n')]])
-  return frame(settings, siteUrl, middle)
+  return frame(settings, siteUrl, middle, topics)
 }
 
 /** 演示站 / 全站 noindex / AI 策略 deny 档的桩输出：与 robots.txt 整站 Disallow 同口径，不列任何内容。

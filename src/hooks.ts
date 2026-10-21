@@ -12,6 +12,7 @@ import { getSettings } from './db'
 import { fetchableUrl, fetchPublicResource } from './fetchsafe'
 import { keywordLinkHtml, keywordRulesError, parseKeywordRules, parseMaxPerKeyword } from './keyword-link'
 import { purgePageCache } from './pagecache'
+import { indexNowKeyOk } from './seo'
 import type { Env, SettingsMap } from './types'
 import { excerpt, isDemo } from './utils'
 
@@ -829,8 +830,72 @@ const barkNotify: ServerPlugin = {
   },
 }
 
+/* ---------------- IndexNow 快速收录（发布即通知 Bing 等搜索引擎） ----------------
+ * IndexNow 协议（indexnow.org）：把新增 / 更新 / 删除的 URL 主动推给搜索引擎，免等爬虫按
+ * 周期回访——Bing 索引是 ChatGPT 搜索 / Copilot 检索的底座，「尽快被收录」约等于「尽快被
+ * AI 搜索找到」。聚合端点 api.indexnow.org 一发即达全部参与引擎（Bing / Yandex / Seznam /
+ * Naver / Yep）。鉴权模型：密钥是**自生成**的随机十六进制串（无需注册），公开挂在
+ * /indexnow-key.txt（index.ts 路由读同一份插件配置）供引擎回验站点归属——所以密钥不是
+ * 机密，仍走插件配置通道存 serverPluginConfig。站点地址（settings.siteUrl）未配置时拼不出
+ * 绝对 URL，静默跳过（页面侧 RSS / llms 有请求 origin 兜底，钩子是异步事件拿不到）。 */
+
+const INDEXNOW_API = 'https://api.indexnow.org/indexnow'
+
+/** 单条 URL 提交（GET 形态，≤10 条走查询串足够）：失败只记日志——收录推送绝不影响发布主流程 */
+async function indexNowSubmit(ctx: HookContext, path: string): Promise<void> {
+  const key = (pluginConfig(ctx.settings, 'indexnow').key || '').trim()
+  if (!indexNowKeyOk(key)) return
+  const base = (ctx.base || '').replace(/\/+$/, '')
+  if (!/^https?:\/\//i.test(base)) return
+  const qs = new URLSearchParams({
+    url: `${base}${path}`,
+    key,
+    keyLocation: `${base}/indexnow-key.txt`,
+  })
+  // 固定可信端点（IndexNow 官方聚合入口，同 api.telegram.org 口径）；expectBody:false 只发不收，
+  // 200 / 202 都算受理；fetchPublicResource 失败一律 null（不透状态码）
+  const r = await fetchPublicResource(`${INDEXNOW_API}?${qs.toString()}`, {
+    maxBytes: 4096,
+    timeoutMs: 10_000,
+    expectBody: false,
+  })
+  if (!r) console.error('[indexnow] 提交失败（引擎稍后会按常规周期回访，不影响收录）')
+}
+
+const indexNowPlugin: ServerPlugin = {
+  id: 'indexnow',
+  title: 'IndexNow 快速收录（Bing 等）',
+  description:
+    '文章发布 / 编辑 / 删除时实时通知 Bing、Yandex 等搜索引擎即时重抓（IndexNow 协议），不等爬虫按周期回访——Bing 索引是 ChatGPT 搜索等 AI 检索的底座。前置条件：「设置 → 站点信息」需已填站点地址（通知里要拼绝对链接）；密钥自己生成一串 8-128 位十六进制填进「配置」即可（会公开在 /indexnow-key.txt 用于验证站点归属，本就不是机密）。',
+  version: '1.0.0',
+  author: '官方',
+  configFields: [
+    {
+      key: 'key',
+      label: 'IndexNow 密钥',
+      type: 'text',
+      placeholder: '例如：a1b2c3d4e5f60718293a4b5c6d7e8f90',
+      help: '自己生成的 8-128 位十六进制（a-f、0-9）即可，无需注册；它会公开在 /indexnow-key.txt（IndexNow 的站点归属验证机制）。换密钥 = 撤旧授权',
+    },
+  ],
+  configValidate(cfg) {
+    if (!indexNowKeyOk((cfg.key || '').trim())) return 'IndexNow 密钥需为 8-128 位十六进制字符（a-f、0-9）'
+    return null
+  },
+  async onPostPublished(p, ctx) {
+    await indexNowSubmit(ctx, `/post/${p.slug}`)
+  },
+  async onPostUpdated(p, ctx) {
+    await indexNowSubmit(ctx, `/post/${p.slug}`)
+  },
+  async onPostDeleted(p, ctx) {
+    // 删除也提交：引擎回访发现 404 即从索引摘除（协议口径：URL 的增 / 改 / 删都属通知范围）
+    await indexNowSubmit(ctx, `/post/${p.slug}`)
+  },
+}
+
 /** 注册表：第三方服务端插件在此登记（顺序即后台展示顺序） */
-export const SERVER_PLUGINS: ServerPlugin[] = [tgChannel, commentWebhook, bufferSync, plazaSync, outboundWebhook, feishuNotify, wecomNotify, barkNotify, footerHtmlPlugin, keywordLinkPlugin]
+export const SERVER_PLUGINS: ServerPlugin[] = [tgChannel, commentWebhook, bufferSync, plazaSync, outboundWebhook, feishuNotify, wecomNotify, barkNotify, indexNowPlugin, footerHtmlPlugin, keywordLinkPlugin]
 
 /** 后台「插件」页列表用：只出元数据与配置表单描述，不带处理函数 */
 export function listServerPlugins(): {

@@ -203,6 +203,10 @@ export interface ArticleJsonLdOptions {
   updatedAt: number
   tags?: string[]
   commentCount?: number
+  /** 付费墙标记（Google 结构化数据口径）：传内容区的 CSS 选择器时输出 isAccessibleForFree:"False"
+   *  + hasPart——让搜索引擎 / AI 明确知道这篇是受限内容而非坏链，不误判站点质量。取值只来自
+   *  renderPost 的两处字面量（'.paywall' / '.pp-box'），无注入面 */
+  paywallSelector?: string
 }
 
 /**
@@ -234,6 +238,12 @@ export function articleJsonLd(o: ArticleJsonLdOptions): Record<string, unknown> 
   }
   if (o.tags?.length) data.keywords = o.tags.join(', ')
   if (o.commentCount != null) data.commentCount = o.commentCount
+  // 付费墙结构化声明（isAccessibleForFree + hasPart，Google「付费墙标记」口径）：
+  // 检索端据此把这篇归为受限内容，不进「免费内容质量」的评价维度
+  if (o.paywallSelector) {
+    data.isAccessibleForFree = 'False'
+    data.hasPart = { '@type': 'WebPageElement', isAccessibleForFree: 'False', cssSelector: o.paywallSelector }
+  }
   return data
 }
 

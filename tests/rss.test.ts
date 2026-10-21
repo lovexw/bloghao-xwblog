@@ -162,3 +162,23 @@ test('JSON Feed：全文关闭只出摘要；无封面不出 image 键', () => {
   assert.equal(out.items[0].content_html, undefined)
   assert.ok(!('image' in out.items[0]))
 })
+
+test('RSS 频道元数据：dc:creator 出站名，lastBuildDate 取条目最新发布时间，无条目不输出', () => {
+  const t1 = 1_700_000_000_000
+  const t2 = 1_760_000_000_000
+  const out = buildRss(settings, [
+    { slug: 'a', title: 'A', content: '', summary: '', published_at: t1, updated_at: t1 } as never,
+    { slug: 'b', title: 'B', content: '', summary: '', published_at: t2, updated_at: t2 } as never,
+  ], 'https://x.com')
+  assert.ok(out.includes('<dc:creator>'), 'dc:creator 作者字段')
+  assert.ok(out.includes('xmlns:dc="http://purl.org/dc/elements/1.1/"'))
+  assert.ok(out.includes('<lastBuildDate>'))
+  // 置顶旧文排第一也不影响：取 max 而不是首条
+  const pinnedFirst = buildRss(settings, [
+    { slug: 'old', title: 'O', content: '', summary: '', published_at: t1, updated_at: t1 } as never,
+    { slug: 'new', title: 'N', content: '', summary: '', published_at: t2, updated_at: t2 } as never,
+  ], 'https://x.com')
+  assert.ok(new Date(pinnedFirst.match(/<lastBuildDate>([^<]+)<\/lastBuildDate>/)![1]).getTime() >= t2 - 60_000)
+  const empty = buildRss(settings, [], 'https://x.com')
+  assert.ok(!empty.includes('<lastBuildDate>'), '无条目不输出 lastBuildDate')
+})
