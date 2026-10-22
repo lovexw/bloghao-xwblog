@@ -31,6 +31,8 @@ npm run typecheck      # TypeScript 类型检查，提交前必须通过
 npm test               # 回归测试（tests/，700+ 用例），提交前必须通过；CI（.github/workflows/ci.yml）每次推送强制执行
 npm run smoke          # 本地冒烟：起 wrangler dev 逐路由断言 200（含多标签文章页回归守卫），改 SQL 拼接/渲染后必跑
 npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
+npm run videos:fix-hevc -- --site https://blog.xiaowuleyi.com --user 管理员 --password '***' --dry-run
+                       # 把站上放不出来的 HEVC 视频批量转 H.264（需要本地 ffmpeg，见「微博视频」节）
 ```
 
 ## 回归防线（改代码前先读，防已修好的 bug 复发）
@@ -202,6 +204,7 @@ npm run db:init:local  # 初始化本地 D1（.wrangler/state，幂等）
 - **媒体入口只有一个**（站长 2026-10-13 拍板）：图片与视频共用「加图」按钮，accept 写成 `image/jpeg,image/png,image/webp,image/gif,` + `VIDEO_ACCEPT`，而 `VIDEO_ACCEPT = 'video/*'`——iOS 的「照片图库」按 accept 过滤，枚举具体视频类型会让 iPhone 拍的 `.mov` 一个都不显示（`video/*` 是唯一稳的写法）；选完由 `cpAddFiles` / `addMediaFiles` 分流，**一条微博最多 1 个视频**（多选时视频只取第一个，其余按图片走），视频预览在 `.wb-composer-video` 容器里。**别再给视频单独加按钮**（B19 曾因「三处入口只接了两处」绕了一大圈）
 - 上传前的 `prepareVideo` **只认文件头、不信任浏览器声明的 MIME**（与服务端「只认魔数」同口径）：有 `ftyp` 即 ISO-BMFF——品牌是 `qt  ` 的（iPhone 的 .mov）原地改写成 `isom`，其余品牌字节原样、统一按 mp4 声明上传；WebM 认 EBML 魔数；其它容器才回 error。**别把「品牌无需改写」当成「不认识的格式」**——macOS 常把 .mp4 报成 `video/quicktime`（内容品牌 isom），曾因此被误拒（2026-10-13 站长上传失败）；HEVC 的再给一条诚实提示（iPhone / Mac 正常，部分 Windows 浏览器放不出来）。**服务端白名单不放宽**：归一化后的文件本身就是 mp4（魔数照旧过嗅探），「只收 mp4/webm」那道防线不动；tests/weibo-admin.test.ts 守 `patchFtypBrand` 的字节级行为、`detectHevc`、`prepareVideo` 的三种声明与两处 accept 口径
 - 视频文件不出站：RSS 不含；广场同步与开放接口 `/api/public/weibo` 只取**封面帧**当缩略图（插件 payload 的 `video` 只带 `{url, poster}` 元数据）；`audit.ts pullReferenceTexts` 已登记 `weibo.video`（视频与封面帧都在图床里，漏登记会被媒体体检判成「未被引用」）
+- **HEVC / H.265 是「微博视频黑屏」的唯一病根（2026-10-22 站长反馈「有的能放有的不行」实测）**：iPhone 默认录 HEVC，Chrome 与安卓大部分浏览器解不出来——表现是时长有了、画面全黑、点播放没反应（不是文件坏了，也不是防盗链）。**Workers 没有转码能力，所以「认出来」只用于三件事**：① 服务端 `store.ts sniffVideoCodec` 按容器 box 树（stsd 的样本描述 fourcc）判编码，**别退回全文扫 'hvc1' 字节**——moov 里的普通字节会误报（tests/video-codec.test.ts 守着，webm 走 CodecID 明文串）；`/admin/upload` 出参带 `codec`（客户端探测只读文件头，服务端是权威）；② 上传时**仍然收**（一律拒收等于让 iPhone 拍的东西传不上来），客户端 toast 如实提示；③ 播放端 `site.js` 在 `error` 事件里给一句成因 + 下载入口（`.wb-video-note` 定位在控件上方，**服务端无转码能力这件事必须对访客讲清楚**，别留一块沉默的黑框；`MEDIA_ERR_ABORTED` 跳过、`MEDIA_ERR_NETWORK` 另给网络文案，别把网络抖动误报成编码问题）。**修既有的 HEVC 视频只有一条路**：`scripts/fix-hevc-videos.mjs`（走后台 API 登录 → 逐条下载 → ffmpeg 转 H.264（yuv420p + faststart + 最长边 1280）→ 重新上传拿**新 key** → PUT 换地址），**必须换新地址而不是覆盖旧对象**——图床是内容寻址 + 1 年 immutable 边缘缓存，原地覆盖只会让老缓存继续喂黑屏文件；脚本幂等（H.264 自动跳过）、`--dry-run` 只体检、`--delete-old` 才删旧文件（先确认没有别的微博引用）；**脚本带乐观锁**——转码（几秒）之后再取一次 `updated_at`，变了或进了回收站就跳过，绝不拿旧快照覆盖站长同时进行的编辑；转码参数 `scale=...:out_range=tv`（iPhone 全范围 yuvj 拉回标准 limited range）+ `-pix_fmt yuv420p`。**定期体检写在使用手册 GUIDE §8.4**（建议每季度或大批导入手机视频后跑 `--dry-run`，输出「HEVC N 条」就全量跑一遍）。两个客户端的 `prepareVideo` 都要探 HEVC（后台 app.js 曾对已声明 mp4 的直接回 `hevc:false` 而漏判）
 - 封面帧是发布端 best-effort 产物（客户端 canvas 抽第一帧、最长边压到 1280、JPEG 0.82；抓不到 / 超时就留空，卡片退化成无封面播放器）：**新增发布入口别把它做成必需步骤**，也不要在服务端做图像解码（Workers 没有）
 
 **前台 site.js 兼容（全文件是一个 IIFE，一处解析错误全站交互瘫痪）**

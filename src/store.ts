@@ -100,6 +100,96 @@ export function sniffUploadExt(
   return null
 }
 
+/** 视频编码（只在「上传时记账 + 播放端说清为什么」用到：Workers 没有转码能力，
+ *  认出 HEVC 也不能就地转码，别指望这里救回浏览器放不出来的视频） */
+export type VideoCodec = 'h264' | 'hevc' | 'vp9' | 'av1'
+
+/** ISO-BMFF 样本描述 fourcc → 编码（avc3 是带内参数集的 H.264，同样按 h264 记） */
+const SAMPLE_ENTRY_CODEC: Record<string, VideoCodec> = {
+  avc1: 'h264',
+  avc3: 'h264',
+  hvc1: 'hevc',
+  hev1: 'hevc',
+  vp09: 'vp9',
+  av01: 'av1',
+}
+
+function readU32(b: Uint8Array, at: number): number {
+  return ((b[at] << 24) | (b[at + 1] << 16) | (b[at + 2] << 8) | b[at + 3]) >>> 0
+}
+
+function fourccAt(b: Uint8Array, at: number): string {
+  return String.fromCharCode(b[at], b[at + 1], b[at + 2], b[at + 3])
+}
+
+/** 在字节里找一段 ASCII（WebM 的 CodecID 是明文串，不解码整段省内存） */
+function findAscii(b: Uint8Array, needle: string, limit: number): boolean {
+  const n = needle.length
+  const end = Math.min(b.length, limit) - n
+  outer: for (let i = 0; i <= end; i++) {
+    for (let j = 0; j < n; j++) if (b[i + j] !== needle.charCodeAt(j)) continue outer
+    return true
+  }
+  return false
+}
+
+/** 沿 box 树找 stsd 的第一个样本描述（moov 在文件头 / 尾都能走到）；
+ *  尺寸越界 / 层数过深一律放弃返回 null——解析异常宁可「认不出」，不做猜测 */
+function codecFromBoxes(b: Uint8Array, start: number, end: number, depth: number): VideoCodec | null {
+  if (depth > 8) return null
+  let at = start
+  while (at + 8 <= end) {
+    const size = readU32(b, at)
+    const type = fourccAt(b, at + 4)
+    let header = 8
+    let boxSize = size
+    if (size === 1) {
+      // 64 位 largesize（超过 4GB 的视频，正常上传碰不到，但别把结构走歪）
+      if (at + 16 > end) return null
+      boxSize = readU32(b, at + 8) * 4294967296 + readU32(b, at + 12)
+      header = 16
+    } else if (size === 0) {
+      boxSize = end - at // 到文件末尾
+    }
+    if (boxSize < header || at + boxSize > end) return null
+    if (type === 'stsd') {
+      // version/flags(4) + entry_count(4)，其后每个 entry 是 size(4) + fourcc(4)
+      const p = at + header + 8
+      const code = p + 8 <= end ? SAMPLE_ENTRY_CODEC[fourccAt(b, p + 4)] : undefined
+      return code || null
+    }
+    if (type === 'moov' || type === 'trak' || type === 'mdia' || type === 'minf' || type === 'stbl') {
+      const found = codecFromBoxes(b, at + header, at + boxSize, depth + 1)
+      if (found) return found
+    }
+    at += boxSize
+  }
+  return null
+}
+
+/** 视频编码嗅探（mp4/mov 与 webm）：只认容器内的真实样本描述，不信任 mime / 扩展名。
+ *  iPhone 默认录的 HEVC（hvc1）在 Chrome / 安卓大部分浏览器解不出来（表现为 0:00 黑屏），
+ *  上传时记一笔、播放端据此给一句可读的原因（src/render.ts / public/site.js）。
+ *  认不出（结构异常 / 陌生编码）返回 null，按「不知道」处理，不误报。 */
+export function sniffVideoCodec(
+  buf: ArrayBuffer
+): VideoCodec | null {
+  if (buf.byteLength < 16) return null
+  const b = new Uint8Array(buf)
+  // WebM / Matroska：EBML 魔数 + CodecID 明文串
+  if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) {
+    const limit = Math.min(b.length, 512 * 1024)
+    if (findAscii(b, 'V_MPEGH/ISO/HEVC', limit)) return 'hevc'
+    if (findAscii(b, 'V_AV1', limit)) return 'av1'
+    if (findAscii(b, 'V_VP9', limit) || findAscii(b, 'V_VP8', limit)) return 'vp9'
+    if (findAscii(b, 'V_MPEG4/ISO/AVC', limit)) return 'h264'
+    return null
+  }
+  // ISO-BMFF（mp4 / mov，ftyp 在偏移 4）
+  if (fourccAt(b, 4) === 'ftyp') return codecFromBoxes(b, 0, b.length, 0)
+  return null
+}
+
 /** 抓远程图片 → 魔数识别 → R2 图床落库，返回站内地址；失败返回 null，回退策略由调用方定。
  *  类型只认文件魔数，不信任源站 Content-Type / URL 参数（如 wx_fmt）：声明成图片但内容
  *  是 HTML/SVG 的响应一律拒收，存储的 Content-Type 由识别出的扩展名反推，

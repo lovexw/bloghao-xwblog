@@ -131,7 +131,7 @@ import {
 import { SITE_MODE_VALUES, siteBase, toHomePost, type SiteMode } from './render'
 import { sanitizeHtml } from './sanitize'
 import { cleanupUnreferenced, backfillHashes, mergeDuplicate, runAudit } from './audit'
-import { imageExtOf, MAX_REMOTE_IMAGES, MAX_UPLOAD_BYTES, saveUpload, sniffImageExt, sniffUploadExt, transferImage } from './store'
+import { imageExtOf, MAX_REMOTE_IMAGES, MAX_UPLOAD_BYTES, saveUpload, sniffImageExt, sniffUploadExt, sniffVideoCodec, transferImage } from './store'
 import { hashPostPassword } from './protect'
 import { generateTotpSecret, totpProvisioningUri, verifyTotp } from './totp'
 import { qrMatrix } from './qrcode'
@@ -2052,7 +2052,10 @@ api.post('/admin/upload', async (c) => {
   const realMime =
     ext === 'mp4' ? 'video/mp4' : ext === 'webm' ? 'video/webm' : ext === 'ico' ? 'image/x-icon' : `image/${ext === 'jpg' ? 'jpeg' : ext}`
   const url = await saveUpload(c.env, buf, realMime, file.name, ext)
-  return c.json({ ok: true, url, key: url.slice('/images/'.length), mime: realMime, size: buf.byteLength })
+  // 视频编码如实回报（HEVC 在 Chrome / 安卓解不出来）：前端据此提示，不改「收不收」的口径——
+  // iPhone 默认就是 HEVC，一律拒收等于让手机拍的东西传不上来
+  const codec = ext === 'mp4' || ext === 'webm' ? sniffVideoCodec(buf) : null
+  return c.json({ ok: true, url, key: url.slice('/images/'.length), mime: realMime, size: buf.byteLength, codec })
 })
 
 api.get('/admin/uploads', async (c) => {

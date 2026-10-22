@@ -24,13 +24,16 @@
     '上传中': 'Uploading',
     '只支持 JPG / PNG / WebP / GIF 图片': 'Only JPG / PNG / WebP / GIF images are supported',
     '视频': 'Video',
+    '这条视频的编码当前浏览器放不出来（常见于 H.265 / HEVC），换用 Safari / iPhone 可正常观看，或':
+      'This video uses a codec your browser cannot decode (usually H.265 / HEVC). Open it in Safari / on iPhone, or',
+    '视频加载失败，多半是网络问题，刷新再试一次；也可以':
+      'The video failed to load — usually a network hiccup. Refresh and try again, or',
+    '下载到本地播放': 'download it and play locally',
     '最大 25MB，MP4 / WebM': 'Up to 25MB, MP4 / WebM',
     '图片 / 视频，一条微博最多 1 个视频': 'Photos / video — one video per note',
     '只支持 MP4 / WebM 视频': 'Only MP4 / WebM videos are supported',
-    'HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）':
-      'HEVC video: fine on iPhone / Mac, but some Windows browsers cannot play it (export an MP4 from a video editor for the widest support)',
-    'HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）':
-      'HEVC video: fine on iPhone / Mac, but some Windows browsers cannot play it (export an MP4 from a video editor for the widest support)',
+    'HEVC 高效格式：Chrome / 安卓大部分浏览器放不出来（iPhone / Mac 可以，要全平台可播就导出 H.264 的 MP4）':
+      'HEVC video: Chrome and most Android browsers cannot play it (iPhone / Mac can) — export an H.264 MP4 for the widest support',
     '网络错误，上传失败': 'Network error — upload failed',
     '置顶': 'Pin',
     '取消置顶': 'Unpin',
@@ -401,7 +404,8 @@
     return prepareVideo(file).then(function (prep) {
       if (prep.error) throw new Error(T('只支持 MP4 / WebM 视频'))
       return uploadVideoRaw(prep.file, onProgress).then(function (d) {
-        d.hevc = prep.hevc
+        // 服务端嗅探出的编码是权威（客户端只读文件头，可能漏判）；任一侧认出来都算 HEVC
+        d.hevc = prep.hevc || d.codec === 'hevc'
         return d
       })
     })
@@ -1271,6 +1275,58 @@
     true
   )
 
+  /* 视频放不出来时说清「为什么」（2026-10-22 站长反馈「有的视频打不开」）：iPhone 默认录的是
+     H.265 / HEVC，Chrome / 安卓大部分浏览器解不出来——表现正是时长有了、画面全黑、点了没反应。
+     服务端没有转码能力，这里只负责给一句可读的原因和一条下载路（别让访客以为站坏了）。
+     error 事件不冒泡，用 capture 代理；一条视频只挂一张提示（同一段可能 source / video 各报一次）。 */
+  function videoUnplayable(v) {
+    var box = v.closest ? v.closest('.wb-video') : null
+    if (!box || box.querySelector('.wb-video-note')) return
+    var err = v.error
+    // 1 = 用户自己中断（换源、关页面），不是故障；2 = 网络错误，跟编码无关，别误报成「编码不支持」
+    if (err && err.code === 1) return
+    var src = v.currentSrc || ''
+    if (!src) {
+      var s = v.querySelector ? v.querySelector('source') : null
+      src = s ? s.src : ''
+    }
+    var note = document.createElement('div')
+    note.className = 'wb-video-note'
+    // 提示叠在控件上方（原生控件栏在底部，别遮住播放 / 进度条）
+    note.setAttribute(
+      'style',
+      'position:absolute;left:0;right:0;top:0;z-index:2;padding:9px 12px;background:rgba(0,0,0,.74);color:#fff;font-size:12.5px;line-height:1.55;'
+    )
+    note.appendChild(
+      document.createTextNode(
+        err && err.code === 2
+          ? T('视频加载失败，多半是网络问题，刷新再试一次；也可以')
+          : T('这条视频的编码当前浏览器放不出来（常见于 H.265 / HEVC），换用 Safari / iPhone 可正常观看，或')
+      )
+    )
+    if (src) {
+      var a = document.createElement('a')
+      a.href = src
+      a.setAttribute('download', '')
+      a.setAttribute('target', '_blank')
+      a.setAttribute('rel', 'noopener noreferrer')
+      a.setAttribute('style', 'color:#fff;text-decoration:underline;')
+      a.textContent = T('下载到本地播放')
+      note.appendChild(a)
+    }
+    box.appendChild(note)
+  }
+  document.addEventListener(
+    'error',
+    function (e) {
+      var v = e.target
+      if (!v) return
+      if (v.tagName === 'SOURCE' && v.parentNode && v.parentNode.tagName === 'VIDEO') v = v.parentNode
+      if (v.tagName === 'VIDEO') videoUnplayable(v)
+    },
+    true
+  )
+
   /* ---------------- 前台发微博（管理员登录时微博页顶部的发布框，能力与后台发布器一致） ---------------- */
   var composerForm = document.querySelector('[data-wb-composer]')
   if (composerForm) {
@@ -1345,7 +1401,7 @@
           if (!cpVideoMeta) cpVideoMeta = fmtSize(file.size)
           cpRenderVideo()
           // HEVC（iPhone 默认的高效格式）只在部分浏览器能放：如实提示，让站长自己决定要不要换格式
-          if (up.hevc) cpMsg(T('HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）'))
+          if (up.hevc) cpMsg(T('HEVC 高效格式：Chrome / 安卓大部分浏览器放不出来（iPhone / Mac 可以，要全平台可播就导出 H.264 的 MP4）'))
           // 封面帧慢一步补传：拿不到就保持无封面（卡片照常播放），不拖慢发布
           grabVideoPoster(file, function (shot) {
             if (!shot || !cpVideo || cpVideo.url !== up.url) return
@@ -1757,7 +1813,7 @@
             video = { url: up.url, poster: '', w: 0, h: 0 }
             if (!videoMeta) videoMeta = fmtSize(file.size)
             renderVideo()
-            if (up.hevc) tip(T('HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）'))
+            if (up.hevc) tip(T('HEVC 高效格式：Chrome / 安卓大部分浏览器放不出来（iPhone / Mac 可以，要全平台可播就导出 H.264 的 MP4）'))
             grabVideoPoster(file, function (shot) {
               if (!shot || !video || video.url !== up.url) return
               uploadImage(new File([shot.blob], 'poster.jpg', { type: 'image/jpeg' }))

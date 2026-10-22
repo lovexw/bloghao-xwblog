@@ -1243,7 +1243,7 @@ async function viewWeibo() {
       wbVideoMeta = fmtSize(file.size)
       renderVideo()
       // HEVC（iPhone 默认的高效格式）只在部分浏览器能放：如实提示，让站长自己决定要不要换格式
-      if (prep.hevc) toast('HEVC 高效格式：iPhone / Mac 正常，部分 Windows 浏览器放不出来（想更稳就用剪辑 App 导出 MP4）')
+      if (prep.hevc || up.codec === 'hevc') toast('HEVC 高效格式：Chrome / 安卓大部分浏览器放不出来（iPhone / Mac 可以，要全平台可播就导出 H.264 的 MP4）')
       // 封面帧慢一步补传：拿不到就保持无封面（视频照常可播），不阻塞保存
       const shot = await grabVideoPoster(prep.file)
       if (shot && wbVideo && wbVideo.url === up.url) {
@@ -4555,10 +4555,10 @@ async function detectHevc(file) {
   return false
 }
 
-/** 上传前的视频整理：mp4 / webm 原样；ISO-BMFF 的 .mov 改写成 mp4；其余格式回 error */
+/** 上传前的视频整理：mp4 / webm 原样（但仍要探一次编码，好如实提示 HEVC）；ISO-BMFF 的 .mov 改写成 mp4；其余格式回 error */
 async function prepareVideo(file) {
   if (/^video\/(mp4|webm)$/i.test(file.type || '') || (!file.type && /\.(mp4|webm)$/i.test(file.name || '')))
-    return { file, hevc: false }
+    return { file, hevc: await detectHevc(file) }
   const head = new Uint8Array(await file.slice(0, 64).arrayBuffer())
   if (!patchFtypBrand(head)) return { error: true }
   const name = (file.name || 'video').replace(/\.[^.]+$/, '') + '.mp4'
