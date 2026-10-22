@@ -352,7 +352,7 @@ AI 可获取面（`src/llms.ts`，`text/plain; charset=utf-8`，`public, max-age
 ### 采集（公众号文章）
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/admin/collect/wechat` | Body `{url}`，仅接受 `https://mp.weixin.qq.com/s/...`；服务端抓取正文，配图与封面转存 R2（与封面同媒体的正文首图自动去重），生成**保留原文发布时间**的草稿；返回 `{ok, post, account, images}`。限频 10 次/分钟/IP；单篇最多转存 30 张图、单图 ≤ 25MB、正文 ≤ ~900KB。编辑器插件「采集公众号文章」调用（见 docs/PLUGINS.md） |
+| POST | `/api/admin/collect/wechat` | Body `{url}`，仅接受 `https://mp.weixin.qq.com/s/...`；服务端抓取正文，配图与封面转存 R2（与封面同媒体的正文首图自动去重），生成**保留原文发布时间**的草稿；段内保留加粗 / 斜体 / 下划线 / 文字颜色四类行内样式（其余样式与链接丢弃，草稿可在编辑器继续加工）；返回 `{ok, post, account, images}`。限频 10 次/分钟/IP；单篇最多转存 30 张图、单图 ≤ 25MB、正文 ≤ ~900KB。编辑器插件「采集公众号文章」调用（见 docs/PLUGINS.md） |
 
 ### 外部发布（管理）
 | 方法 | 路径 | 说明 |

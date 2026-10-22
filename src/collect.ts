@@ -4,6 +4,7 @@
  * POST /api/admin/collect/wechat { url }
  * 抓取 mp.weixin.qq.com 单篇内容 → 解析正文/标题/发布时间 →
  * 配图与封面转存 R2 图床 → 生成一篇保留原发布时间的草稿。
+ * 段内行内样式保留加粗 / 斜体 / 下划线 / 文字颜色四类（inlineHtml），其余样式丢弃。
  * 支持两种内容：普通图文（js_content）与贴图/图片消息（item_show_type=8，
  * 数据埋在内嵌 JS 里，见 parseImagePost）。
  * 编辑器里的「采集公众号文章」插件（public/plugins/wechat-collect.js）调用，
@@ -254,7 +255,8 @@ export function imagePostBlocks(post: ImagePostData): Block[] {
 
 interface Block {
   type: 'text' | 'img'
-  text?: string
+  text?: string // 纯文本（贴图全文），渲染时转义 + \n→<br>
+  html?: string // 已转义的行内 HTML（图文正文，inlineHtml 产物），渲染时直接输出
   src?: string
 }
 
@@ -277,12 +279,123 @@ export function dropCoverDupBlock(blocks: Block[], cover: string): Block[] {
   return blocks.slice(0, idx).concat(blocks.slice(idx + 1))
 }
 
+/** style 属性里值得保留的行内样式：加粗（font-weight）/ 下划线（text-decoration）/ 颜色。
+ *  颜色值字符集收死（hex / rgb() / 色名），引号、尖括号、分号进不了 style 属性，
+ *  expression/url 一类函数调用整体拒绝——下游 sanitizeStyle 还会再兜一遍 */
+export function keptInlineStyle(style: string): { style: string; bold: boolean } {
+  let color = ''
+  let underline = false
+  let bold = false
+  for (const decl0 of style.split(';')) {
+    const decl = decl0.trim()
+    const i = decl.indexOf(':')
+    if (i < 1) continue
+    const prop = decl.slice(0, i).trim().toLowerCase()
+    const val = decl.slice(i + 1).replace(/!important/gi, '').trim()
+    if (prop === 'color') color = val
+    else if (prop === 'text-decoration' && /underline/i.test(val)) underline = true
+    else if (prop === 'font-weight' && /^(?:bold|bolder|[6-9]\d{2})$/i.test(val)) bold = true
+  }
+  if (color && (!/^[#a-zA-Z0-9(),.%\s]{1,40}$/.test(color) || /expression|url\s*\(/i.test(color))) color = ''
+  const parts: string[] = []
+  if (color) parts.push(`color: ${color}`)
+  if (underline) parts.push('text-decoration: underline')
+  return { style: parts.join('; '), bold }
+}
+
+/** 保留的行内标签 → 重建标签（b 归一为 strong、i 归一为 em）；Map 免得裸对象查表撞上原型链属性 */
+const INLINE_TAGS = new Map([
+  ['strong', 'strong'],
+  ['b', 'strong'],
+  ['em', 'em'],
+  ['i', 'em'],
+  ['u', 'u'],
+])
+
+/**
+ * 段内行内样式保留：走一遍标签流，文本节点统一实体解码 → 控制字符清理 → 空白收敛 →
+ * esc 转义；加粗、斜体、下划线、文字颜色四类重建标签输出，其余标签剥壳留字。
+ * 闭标签按栈配对（含跨界隐式闭合），块内未闭合的保留标签收尾补齐——返回已转义的
+ * 行内 HTML，渲染时不再二次 esc。控制字符清理只作用于文本节点，不再有哨兵可误伤
+ * （旧哨兵方案：\u0001 标记曾在整串清理时被一起清掉，加粗连同残影字符一起丢失）。
+ */
+export function inlineHtml(chunk: string): string {
+  const segs: string[] = []
+  // 栈条目 name 是源标签名（闭标签配对用）；out 是重建的输出标签（null = 白名单外，只透传）
+  const stack: { name: string; out: string | null }[] = []
+  const styleOf = (attrs: string) => decodeEntities(match1(attrs, /\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)')/i))
+  const closeTo = (j: number) => {
+    for (let i = stack.length - 1; i >= j; i--) if (stack[i].out) segs.push(`</${stack[i].out}>`)
+    stack.length = j
+  }
+  const openKept = (name: string, tag: string, attrs: string) => {
+    const k = keptInlineStyle(styleOf(attrs))
+    segs.push(k.style ? `<${tag} style="${k.style}">` : `<${tag}>`)
+    stack.push({ name, out: tag })
+  }
+
+  // 分词同浏览器口径：< 后跟字母 / 才是标签，否则当文本（「3<5」不吃掉后续真标签）；
+  // 注释整体跳过，孤立 < 作文本。四种标签形态都在采集正文的现实里出现过
+  for (const tok of chunk.match(/<!--[^>]*>?|<\/?[a-zA-Z][^>]*>?|[^<]+|</g) ?? []) {
+    if (!tok.startsWith('<')) {
+      segs.push(
+        esc(
+          decodeEntities(tok)
+            .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '')
+            .replace(/\r\n?/g, '\n')
+            .replace(/[ \t\u00a0]+/g, ' ')
+        )
+      )
+      continue
+    }
+    if (tok.startsWith('<!--')) continue
+    const m = /^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([\s\S]*?)(>?)$/.exec(tok)
+    if (!m) {
+      segs.push(esc(decodeEntities(tok))) // 「3<5」这类未终结的 < 按文本转义
+      continue
+    }
+    const name = m[2].toLowerCase()
+    const attrs = m[3] ?? ''
+    if (m[1]) {
+      // 闭标签：弹到同名的开标签为止，途中被跨界闭合的保留标签一并补上
+      const j = stack.map((s) => s.name).lastIndexOf(name)
+      if (j !== -1) closeTo(j)
+      continue
+    }
+    if (name === 'br') {
+      segs.push('<br>')
+      continue
+    }
+    if (/\/\s*$/.test(attrs)) continue // 自闭合（img 已拆出、hr 等忽略），不进栈
+    const tag = INLINE_TAGS.get(name)
+    if (tag) openKept(name, tag, attrs)
+    else if (name === 'span') {
+      // span 也能承载加粗（font-weight）与颜色/下划线，按实际样式选重建标签
+      const k = keptInlineStyle(styleOf(attrs))
+      if (k.bold) openKept(name, 'strong', attrs)
+      else if (k.style) openKept(name, 'span', attrs)
+      else stack.push({ name, out: null })
+    } else stack.push({ name, out: null })
+  }
+  closeTo(0) // 块内未闭合的保留标签补齐
+
+  const html = segs
+    .join('')
+    .replace(/\n\s*\n+/g, '\n') // 连续空行收敛成一个换行
+    .replace(/\n/g, '<br>') // 段内换行
+    .replace(/(?:<br>\s*){2,}/gi, '<br>')
+    .replace(/^(?:\s|<br>)+/i, '')
+    .replace(/(?:\s|<br>)+$/i, '')
+  // 纯标签无文字（如只剩 <br>）按空块丢弃
+  return html.replace(/<[^>]+>/g, '').trim() ? html : ''
+}
+
 /**
  * 把正文 HTML 拆成有序的段落/图片块。
- * 公众号正文是大量嵌套 <section>，按 </section>/<p> 切块；
- * 段内保留加粗/斜体（哨兵标记，最后还原），其余样式丢弃。
+ * 公众号正文是大量嵌套 <section>，按块级闭标签（section/p/div/li/标题/引用）切块，
+ * 段内行内样式由 inlineHtml 保留（加粗/斜体/下划线/颜色），其余样式丢弃。
  */
-function parseBlocks(body: string): Block[] {
+export function parseBlocks(body: string): Block[] {
   const blocks: Block[] = []
   for (const token of body.split(/(<img\b[^>]*>)/i)) {
     if (!token) continue
@@ -293,42 +406,26 @@ function parseBlocks(body: string): Block[] {
       })
       continue
     }
-    for (const raw of token.split(/<\/(?:section|p)>/i)) {
-      const text = decodeEntities(
-        raw
-          .replace(/<br\s*\/?>/gi, '\n')
-          .replace(/<(?:strong|b)\b[^>]*>/gi, '\u0001s')
-          .replace(/<\/(?:strong|b)\b[^>]*>/gi, '\u0001/s')
-          .replace(/<(?:em|i)\b[^>]*>/gi, '\u0001e')
-          .replace(/<\/(?:em|i)\b[^>]*>/gi, '\u0001/e')
-          .replace(/<[^>]+>/g, '')
-      )
-        // 清掉控制字符：防止 &#1; 之类数字实体还原出 \u0001 与加粗/斜体哨兵冲突
-        .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '')
-        .replace(/[ \t\u00a0]+/g, ' ')
-        .replace(/\n\s*\n+/g, '\n')
-        .trim()
-      if (text) blocks.push({ type: 'text', text })
+    for (const raw of token.split(/<\/(?:section|p|div|li|h[1-6]|blockquote)>/i)) {
+      const html = inlineHtml(raw)
+      if (html) blocks.push({ type: 'text', html })
     }
   }
   return blocks
 }
 
 /** 组装文章 HTML；转存失败的图片整块丢弃 */
-function renderHtml(blocks: Block[], srcMap: Map<string, string>): string {
+export function renderHtml(blocks: Block[], srcMap: Map<string, string>): string {
   const out: string[] = []
   for (const b of blocks) {
     if (b.type === 'img') {
       const local = srcMap.get(b.src || '')
       if (!local) continue
       out.push(`<p style="text-align: center"><img src="${local}" alt=""></p>`)
+    } else if (b.html !== undefined) {
+      out.push(`<p>${b.html}</p>`)
     } else {
-      const html = esc(b.text || '')
-        .replace(/\u0001s/g, '<strong>')
-        .replace(/\u0001\/s/g, '</strong>')
-        .replace(/\u0001e/g, '<em>')
-        .replace(/\u0001\/e/g, '</em>')
-        .replace(/\n/g, '<br>')
+      const html = esc(b.text || '').replace(/\n/g, '<br>')
       if (html) out.push(`<p>${html}</p>`)
     }
   }

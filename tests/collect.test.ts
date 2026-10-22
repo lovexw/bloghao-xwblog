@@ -1,8 +1,17 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { dropCoverDupBlock, imagePostBlocks, mmbizAssetId, parseImagePost, parseMeta } from '../src/collect.ts'
+import {
+  dropCoverDupBlock,
+  imagePostBlocks,
+  mmbizAssetId,
+  parseBlocks,
+  parseImagePost,
+  parseMeta,
+  renderHtml,
+} from '../src/collect.ts'
 // 魔数识别与转存已下沉 store.ts（采集与粘贴净化共用）
 import { sniffImageExt } from '../src/store.ts'
+import { sanitizeHtml } from '../src/sanitize.ts'
 
 // ── 图片类型只认魔数（回归：曾信任源站 Content-Type / URL wx_fmt，
 //    可把 HTML/SVG 以图片身份转存进站点源，形成存储型 XSS）──
@@ -166,4 +175,98 @@ test('dropCoverDupBlock：正文里与封面同媒体的图块被去掉（只去
   const mid = dropCoverDupBlock(blocks, 'https://mmbiz.qpic.cn/mmbiz_png/OTHERID/0?wx_fmt=png')
   assert.equal(mid.length, 3)
   assert.equal(mid[2].src, undefined)
+})
+
+// ── 段内行内样式：加粗 / 斜体 / 下划线 / 文字颜色（回归：旧哨兵方案的 \u0001 标记
+//    曾被控制字符清理整串误杀——采集稿丢失加粗且正文残留裸 s / /s 字符；
+//    下划线与颜色则从未保留过。现为标签流重建，净化器白名单本就放行这几类）──
+
+test('加粗斜体保留，控制字符清理不再误伤（旧哨兵回归）', () => {
+  const html = renderHtml(parseBlocks('<p><strong>加粗</strong>普通<em>斜体</em><b>B</b><i>I</i></p>'), new Map())
+  assert.equal(html, '<p><strong>加粗</strong>普通<em>斜体</em><strong>B</strong><em>I</em></p>')
+})
+
+test('下划线：u 标签与 text-decoration 两种写法都保留，line-through 照旧丢弃', () => {
+  const html = renderHtml(
+    parseBlocks(
+      '<p><u>甲</u><span style="text-decoration: underline">乙</span><span style="text-decoration:line-through">丙</span></p>'
+    ),
+    new Map()
+  )
+  assert.equal(html, '<p><u>甲</u><span style="text-decoration: underline">乙</span>丙</p>')
+})
+
+test('颜色：hex/rgb/色名保留，expression 与无关样式拒绝', () => {
+  const html = renderHtml(
+    parseBlocks(
+      '<p><span style="color:#e36c09">甲</span>' +
+        '<span style="color:rgb(227,51,51);">乙</span>' +
+        '<span style="color:red">丙</span>' +
+        '<span style="color:expression(alert(1))">丁</span>' +
+        '<span style="color:url(https://x/e)">己</span>' +
+        '<span style="font-size:20px">戊</span></p>'
+    ),
+    new Map()
+  )
+  assert.equal(
+    html,
+    '<p><span style="color: #e36c09">甲</span><span style="color: rgb(227,51,51)">乙</span>' +
+      '<span style="color: red">丙</span>丁己戊</p>'
+  )
+})
+
+test('span 的 font-weight 加粗映射为 strong，颜色随标签保留；strong 自带颜色同样保留', () => {
+  const html = renderHtml(
+    parseBlocks('<p><span style="font-weight:bold;color:#e33;">甲乙</span><strong style="color:#e33">丙</strong></p>'),
+    new Map()
+  )
+  assert.equal(html, '<p><strong style="color: #e33">甲乙</strong><strong style="color: #e33">丙</strong></p>')
+})
+
+test('下划线与颜色可叠加在同一段样式里', () => {
+  const html = renderHtml(
+    parseBlocks('<p><span style="color:#e33;text-decoration:underline;">甲</span></p>'),
+    new Map()
+  )
+  assert.equal(html, '<p><span style="color: #e33; text-decoration: underline">甲</span></p>')
+})
+
+test('嵌套与未配对闭标签：闭标签弹栈补齐，不产生游离闭合，未闭合的收尾补齐', () => {
+  const html = renderHtml(
+    parseBlocks('<p><span style="color:red">a<strong>b</span>c</p><p>d</strong>e</p><p><em>f'),
+    new Map()
+  )
+  assert.equal(html, '<p><span style="color: red">a<strong>b</strong></span>c</p><p>de</p><p><em>f</em></p>')
+})
+
+test('实体还原的控制字符被清理，不干扰行内样式', () => {
+  const html = renderHtml(parseBlocks('<p>a&#1;b<strong>c</strong></p>'), new Map())
+  assert.equal(html, '<p>ab<strong>c</strong></p>')
+})
+
+test('文本节点转义：尖括号、实体、&nbsp；未终结的 < 按文本转义', () => {
+  const html = renderHtml(parseBlocks('<p>3<5 &amp; &lt;tag&gt; &nbsp;x</p>'), new Map())
+  assert.equal(html, '<p>3&lt;5 &amp; &lt;tag&gt; x</p>')
+})
+
+test('块级边界切块：列表项与标题各成一段不再连行；空段与纯 br 段丢弃；img 照旧拆出', () => {
+  const html = renderHtml(parseBlocks('<ul><li>甲</li><li>乙</li></ul><h2>标题</h2><p>正文</p>'), new Map())
+  assert.equal(html, '<p>甲</p><p>乙</p><p>标题</p><p>正文</p>')
+  assert.deepEqual(parseBlocks('<p><br></p><p>   </p><p>有字</p>'), [{ type: 'text', html: '有字' }])
+  const withImg = parseBlocks('<p>前<img data-src="https://mmbiz.qpic.cn/a.jpg">后</p>')
+  assert.deepEqual(withImg.map((b) => b.type), ['text', 'img', 'text'])
+  assert.equal(withImg[1].src, 'https://mmbiz.qpic.cn/a.jpg')
+})
+
+test('连续 br 收敛为一个，段首尾 br 丢弃', () => {
+  const html = renderHtml(parseBlocks('<p><br><br>甲<br><br><br>乙<br></p>'), new Map())
+  assert.equal(html, '<p>甲<br>乙</p>')
+})
+
+test('采集产物过净化器后样式仍在（端到端）', () => {
+  const html = sanitizeHtml(
+    renderHtml(parseBlocks('<p><span style="color:#e33;text-decoration:underline">甲</span><strong>乙</strong></p>'), new Map())
+  )
+  assert.ok(html.includes('style="color: #e33; text-decoration: underline"'), html)
+  assert.ok(html.includes('<strong>乙</strong>'), html)
 })
