@@ -814,7 +814,8 @@ api.get('/admin/stats', async (c) => {
     db.prepare("SELECT COUNT(*) AS n FROM posts WHERE status = 'draft' AND deleted_at IS NULL").first<{ n: number }>(),
     db.prepare("SELECT COUNT(*) AS n FROM comments WHERE status = 'pending'").first<{ n: number }>(),
     db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(size),0) AS s FROM uploads').first<{ n: number; s: number }>(),
-    db.prepare("SELECT * FROM posts WHERE status = 'published' AND deleted_at IS NULL ORDER BY published_at DESC LIMIT 5").all<PostRow>(),
+    // 概览「最近文章」只要五个小列：SELECT * 会把正文大列整行拉回（每行多读上百倍字节）
+    db.prepare("SELECT id, title, slug, views, published_at FROM posts WHERE status = 'published' AND deleted_at IS NULL ORDER BY published_at DESC LIMIT 5").all<{ id: number; title: string; slug: string; views: number; published_at: number | null }>(),
     db.prepare("SELECT COUNT(*) AS n FROM friend_links WHERE status = 'pending'").first<{ n: number }>(),
     // 系统状态卡（B12）：三张软删表按口径过滤 deleted_at（回收站行不计入体量）
     db.prepare('SELECT COUNT(*) AS n FROM weibo WHERE deleted_at IS NULL').first<{ n: number }>(),
@@ -3400,11 +3401,13 @@ api.get('/public/weibo/:id/comments', async (c) => {
   // 开启时出参已是格式化好的标签（en 按 isEn 口径），客户端只渲染字符串不做映射
   const showRegion = settings.showCommentRegion === '1'
   const en = isEn(settings)
+  // INDEXED BY 同 weiboCommentCountMap 口径（生产实测规划器会误选 idx_comments_status
+  // 全表扫全部已审评论；「weibo_id 等值 + status 过滤」一族强制走 (weibo_id) 前导索引）
   const { results } = await c.env.DB
     .prepare(
       `SELECT cm.id, cm.parent_id, cm.is_admin, cm.nickname, cm.content, cm.created_at, cm.avatar${
         showRegion ? ', cm.ip_region' : ''
-      }, m.display_name AS member_name, m.tier AS member_tier, m.tier_expires_at AS member_tier_expires_at, m.avatar AS member_avatar FROM comments cm LEFT JOIN members m ON m.id = cm.member_id WHERE cm.weibo_id = ? AND cm.status = 'approved' ORDER BY cm.created_at ASC LIMIT 200`
+      }, m.display_name AS member_name, m.tier AS member_tier, m.tier_expires_at AS member_tier_expires_at, m.avatar AS member_avatar FROM comments cm INDEXED BY idx_comments_weibo LEFT JOIN members m ON m.id = cm.member_id WHERE cm.weibo_id = ? AND cm.status = 'approved' ORDER BY cm.created_at ASC LIMIT 200`
     )
     .bind(id)
     .all()
@@ -3521,8 +3524,10 @@ api.post('/public/links/apply', async (c) => {
   return c.json({ ok: true })
 })
 
-api.get('/meta/themes', (c) =>
-  c.json({
+api.get('/meta/themes', (c) => {
+  // 纯静态数据（只依赖部署内的常量，不读库不读会话）：短缓存省一次往返
+  c.header('Cache-Control', 'public, max-age=3600')
+  return c.json({
     themes: Object.values(THEMES).map((t) => ({
       id: t.id,
       name: t.name,
@@ -3532,4 +3537,4 @@ api.get('/meta/themes', (c) =>
       appearance: appearanceMeta(t.id),
     })),
   })
-)
+})

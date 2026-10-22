@@ -958,8 +958,10 @@ export async function renderGuestbook(c: C): Promise<Response> {
     navTags(c),
     navPages(c),
     getSessionUser(c.env.DB, c.req.raw),
-    // 留言总数独立取：列表 LIMIT 500，超限后 length 会少报
-    c.env.DB.prepare("SELECT COUNT(*) AS n FROM comments WHERE post_id = 0 AND weibo_id = 0 AND status = 'approved'").first<{ n: number }>(),
+    // 留言总数独立取：列表 LIMIT 500，超限后 length 会少报。
+    // 强制 idx_comments_post 同 listGuestbookComments 口径：规划器会选 weibo_id=0
+    // （扫进全部文章评论），强制 post_id=0 前导只扫留言板行
+    c.env.DB.prepare("SELECT COUNT(*) AS n FROM comments INDEXED BY idx_comments_post WHERE post_id = 0 AND weibo_id = 0 AND status = 'approved'").first<{ n: number }>(),
     membersEnabled(settings) ? getMemberUser(c.env.DB, c.req.raw) : Promise.resolve(null),
   ])
   const html = theme.guestbook({

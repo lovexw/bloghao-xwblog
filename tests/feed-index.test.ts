@@ -169,18 +169,28 @@ test('评论计数索引：idx_comments_post 在 schema.sql 与 SCHEMA_INDEXES �
   assert.ok(SCHEMA_INDEXES.includes(ddl), `SCHEMA_INDEXES 缺：${ddl}`)
 })
 
-test('源码守卫：INDEXED BY 不被无声拆掉（db.ts 3 处 / pages.ts 1 处）', () => {
+test('源码守卫：INDEXED BY 不被无声拆掉（db.ts 4 处 / pages.ts 2 处 / api.ts 1 处）', () => {
   assert.equal(
     (DB_TS.match(/INDEXED BY idx_comments_post/g) || []).length,
-    2,
-    'db.ts 的 idx_comments_post 强制索引应是 2 处（sort=comments 子查询 + postCommentCountMap）'
+    4,
+    'db.ts 的 idx_comments_post 强制索引应是 4 处（sort=comments 子查询 + postCommentCountMap + listApprovedComments + listGuestbookComments）'
   )
   assert.equal(
     (DB_TS.match(/INDEXED BY idx_comments_weibo/g) || []).length,
     1,
     'db.ts 的 idx_comments_weibo 强制索引应是 1 处（weiboCommentCountMap）'
   )
-  assert.ok(PAGES_TS.includes('INDEXED BY idx_comments_post'), 'pages.ts commentCount 缺 INDEXED BY')
+  assert.equal(
+    (PAGES_TS.match(/INDEXED BY idx_comments_post/g) || []).length,
+    2,
+    'pages.ts 的 idx_comments_post 强制索引应是 2 处（commentCount + 留言板总数）'
+  )
+  const API_TS = readFileSync(join(ROOT, 'src/api.ts'), 'utf8')
+  assert.equal(
+    (API_TS.match(/INDEXED BY idx_comments_weibo/g) || []).length,
+    1,
+    'api.ts 公开微博评论 GET 应有 1 处 idx_comments_weibo 强制索引'
+  )
 })
 
 test('EXPLAIN：文章评论计数 map 走 idx_comments_post、不扫全表', () => {
@@ -225,6 +235,41 @@ test('EXPLAIN：sort=comments 相关子查询逐篇走 idx_comments_post', () =>
     "SELECT id FROM posts WHERE deleted_at IS NULL AND status = 'published' ORDER BY (SELECT COUNT(*) FROM comments cm INDEXED BY idx_comments_post WHERE cm.post_id = posts.id AND cm.status = 'approved') DESC, COALESCE(published_at, created_at) DESC, id DESC LIMIT 10"
   )
   assert.ok(plan.includes('USING INDEX idx_comments_post'), `子查询未走 idx_comments_post：${plan}`)
+})
+
+/* ── 留言板两条查询的强制索引（2026-10-22 审计补口）──
+ * 「post_id = 0 AND weibo_id = 0」的留言板口径，规划器会选 weibo_id=0——文章评论的
+ * weibo_id 同为 0，等于扫进全表大头；强制 post_id=0 前导（idx_comments_post）只扫留言板行。
+ * listApprovedComments（文章页评论列表）与公开微博评论 GET（api.ts）同族收口，见源码守卫用例 */
+
+test('EXPLAIN：留言板评论列表走 idx_comments_post（post_id=0 前导）、不扫全表', () => {
+  const db = seedDb(true)
+  const plan = planOf(
+    db,
+    "SELECT c.* FROM comments c INDEXED BY idx_comments_post WHERE c.post_id = 0 AND c.weibo_id = 0 AND c.status = 'approved' ORDER BY c.created_at ASC LIMIT 500"
+  )
+  assert.ok(plan.includes('USING INDEX idx_comments_post'), `未走 idx_comments_post：${plan}`)
+  assert.ok(!/SCAN comments(?! USING INDEX)/.test(plan), `全表扫描：${plan}`)
+})
+
+test('EXPLAIN：留言板总数 COUNT 走 idx_comments_post、不扫全表', () => {
+  const db = seedDb(true)
+  const plan = planOf(
+    db,
+    "SELECT COUNT(*) AS n FROM comments INDEXED BY idx_comments_post WHERE post_id = 0 AND weibo_id = 0 AND status = 'approved'"
+  )
+  assert.ok(plan.includes('USING INDEX idx_comments_post'), `未走 idx_comments_post：${plan}`)
+  assert.ok(!/SCAN comments(?! USING INDEX)/.test(plan), `全表扫描：${plan}`)
+})
+
+test('EXPLAIN：文章评论列表（listApprovedComments）走 idx_comments_post 且无临时排序', () => {
+  const db = seedDb(true)
+  const plan = planOf(
+    db,
+    "SELECT c.* FROM comments c INDEXED BY idx_comments_post WHERE c.post_id = 5 AND c.status = 'approved' ORDER BY c.created_at ASC LIMIT 500"
+  )
+  assert.ok(plan.includes('USING INDEX idx_comments_post'), `未走 idx_comments_post：${plan}`)
+  assert.ok(!plan.includes('TEMP B-TREE'), `出现临时排序：${plan}`)
 })
 
 test('INDEXED BY 硬约束语义：索引不在场时语句报错（SCHEMA_INDEXES 兜底不可省的自检）', () => {

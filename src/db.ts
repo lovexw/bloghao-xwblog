@@ -421,20 +421,25 @@ export async function uniqueSlug(db: D1Database, base: string, excludeId?: numbe
 export async function listApprovedComments(db: D1Database, postId: number): Promise<CommentRow[]> {
   // LEFT JOIN members 带会员徽标数据（member_id = 0 的游客行为 NULL），渲染层按契约 DEVPLAN 附录 A 消费；
   // member_avatar 仅供评论头像位展示（QQ 号本体永不出参）；tier_expires_at 供读侧即时判过期（src/tiers.ts）
+  // INDEXED BY 同 postCommentCountMap 口径（生产实测 2026-10-15 规划器会误选 idx_comments_status
+  // 全表扫全部已审评论；「post_id 等值 + status 过滤」一族照此强制，别信规划器）
   const { results } = await db
     .prepare(
-      'SELECT c.*, m.display_name AS member_name, m.tier AS member_tier, m.tier_expires_at AS member_tier_expires_at, m.avatar AS member_avatar FROM comments c LEFT JOIN members m ON m.id = c.member_id WHERE c.post_id = ? AND c.status = ? ORDER BY c.created_at ASC LIMIT 500'
+      'SELECT c.*, m.display_name AS member_name, m.tier AS member_tier, m.tier_expires_at AS member_tier_expires_at, m.avatar AS member_avatar FROM comments c INDEXED BY idx_comments_post LEFT JOIN members m ON m.id = c.member_id WHERE c.post_id = ? AND c.status = ? ORDER BY c.created_at ASC LIMIT 500'
     )
     .bind(postId, 'approved')
     .all<CommentRow>()
   return results ?? []
 }
 
-/** 留言板（/guestbook）：post_id 与 weibo_id 都为 0 的评论即留言板留言 */
+/** 留言板（/guestbook）：post_id 与 weibo_id 都为 0 的评论即留言板留言。
+ *  强制 idx_comments_post 前导（本地 EXPLAIN 实测 2026-10-22）：留言板的两个等值里规划器
+ *  选 weibo_id=0——那会扫进全部文章评论（文章评论 weibo_id 同为 0，占全表大头）；
+ *  强制走 post_id=0 前导后只扫留言板自身行 */
 export async function listGuestbookComments(db: D1Database): Promise<CommentRow[]> {
   const { results } = await db
     .prepare(
-      "SELECT c.*, m.display_name AS member_name, m.tier AS member_tier, m.tier_expires_at AS member_tier_expires_at, m.avatar AS member_avatar FROM comments c LEFT JOIN members m ON m.id = c.member_id WHERE c.post_id = 0 AND c.weibo_id = 0 AND c.status = 'approved' ORDER BY c.created_at ASC LIMIT 500"
+      "SELECT c.*, m.display_name AS member_name, m.tier AS member_tier, m.tier_expires_at AS member_tier_expires_at, m.avatar AS member_avatar FROM comments c INDEXED BY idx_comments_post LEFT JOIN members m ON m.id = c.member_id WHERE c.post_id = 0 AND c.weibo_id = 0 AND c.status = 'approved' ORDER BY c.created_at ASC LIMIT 500"
     )
     .all<CommentRow>()
   return results ?? []
