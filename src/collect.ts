@@ -258,7 +258,13 @@ interface Block {
   text?: string // 纯文本（贴图全文），渲染时转义 + \n→<br>
   html?: string // 已转义的行内 HTML（图文正文，inlineHtml 产物），渲染时直接输出
   src?: string
+  /** 文本块内的行内小表情（微信内置 emoji）：按出现顺序记录，占位符 \uE000<序号>\uE001 由 renderHtml 换回本地图 */
+  emoji?: { src: string; w: number }[]
 }
+
+/** 行内小表情占位符（私有区字符，不会出现在正常文本里；inlineHtml 的控制字符清理不含私有区） */
+const EMOJI_PH = /\uE000(\d+)\uE001/g
+const emojiPh = (i: number) => `\uE000${i}\uE001`
 
 /**
  * 微信图媒体 ID：mmbiz 图 URL 的身份段（…/mmbiz_jpg/<ID>/…）。
@@ -394,21 +400,55 @@ export function inlineHtml(chunk: string): string {
  * 把正文 HTML 拆成有序的段落/图片块。
  * 公众号正文是大量嵌套 <section>，按块级闭标签（section/p/div/li/标题/引用）切块，
  * 段内行内样式由 inlineHtml 保留（加粗/斜体/下划线/颜色），其余样式丢弃。
+ * 三类图形特殊处理：
+ * - <mp-common-sticker>：微信表情包动图（自定义元素，GIF 在 data-emoji_url）——
+ *   微信编辑器的「表情包」就是它，缺了它文章里的动图整块消失；拆成独立块级图
+ * - <img data-w="20"> 微信内置 emoji（res.wx.qq.com Expression 图）：行内 20px 小图，
+ *   嵌在句子里（「…的级别😣。」），以占位符留在文本块内、渲染时换回
+ *   <img width=20>（转存后指向站内图床）——按块级图处理会被前台 max-width:100%
+ *   放成大图且把句子劈成三段（站长实抓）
+ * - 常规 <img>：块级图，居中独占一行
  */
 export function parseBlocks(body: string): Block[] {
   const blocks: Block[] = []
-  for (const token of body.split(/(<img\b[^>]*>)/i)) {
-    if (!token) continue
-    if (/^<img\b/i.test(token)) {
-      blocks.push({
-        type: 'img',
-        src: decodeEntities(match1(token, /data-src="([^"]+)"/) || match1(token, /\ssrc="([^"]+)"/)),
-      })
+  // 行内小表情（data-w 1..40）：先全文替换为占位符（保持句子行内结构），再走切块流程
+  const emojis: { src: string; w: number }[] = []
+  const prepared = body.replace(/<img\b[^>]*\bdata-w="\d+"[^>]*>/gi, (tag) => {
+    const w = parseInt(match1(tag, /\bdata-w="(\d+)"/), 10)
+    if (!(w > 0 && w <= 40)) return tag // 大图不动（正常块级图也有带 data-w 的）
+    const src = decodeEntities(match1(tag, /data-src="([^"]+)"/) || match1(tag, /\ssrc="([^"]+)"/))
+    if (!src) return ''
+    emojis.push({ src, w })
+    return emojiPh(emojis.length - 1)
+  })
+  const segs = prepared
+    .split(/(<mp-common-sticker\b[^>]*>|<img\b[^>]*>)/i)
+    .filter(Boolean)
+  for (const seg of segs) {
+    if (/^<mp-common-sticker\b/i.test(seg)) {
+      const url = decodeEntities(
+        match1(seg, /data-emoji_url="([^"]+)"/) || match1(seg, /data-src="([^"]+)"/)
+      )
+      if (url) blocks.push({ type: 'img', src: url })
       continue
     }
-    for (const raw of token.split(/<\/(?:section|p|div|li|h[1-6]|blockquote)>/i)) {
-      const html = inlineHtml(raw)
-      if (html) blocks.push({ type: 'text', html })
+    for (const token of seg.split(/(<img\b[^>]*>)/i)) {
+      if (!token) continue
+      if (/^<img\b/i.test(token)) {
+        blocks.push({
+          type: 'img',
+          src: decodeEntities(match1(token, /data-src="([^"]+)"/) || match1(token, /\ssrc="([^"]+)"/)),
+        })
+        continue
+      }
+      for (const raw of token.split(/<\/(?:section|p|div|li|h[1-6]|blockquote)>/i)) {
+        const html = inlineHtml(raw)
+        if (!html) continue
+        // 引用了行内小表情的块带全量表（占位符序号是全局编号）
+        const b: Block = { type: 'text', html }
+        if (emojis.length) b.emoji = emojis
+        blocks.push(b)
+      }
     }
   }
   return blocks
@@ -423,7 +463,17 @@ export function renderHtml(blocks: Block[], srcMap: Map<string, string>): string
       if (!local) continue
       out.push(`<p style="text-align: center"><img src="${local}" alt=""></p>`)
     } else if (b.html !== undefined) {
-      out.push(`<p>${b.html}</p>`)
+      // 文本块里的行内小表情占位符换回 <img>（转存失败的表情整只丢弃，句子其余部分保留）
+      const list = b.emoji ?? []
+      const html = b.html.replace(EMOJI_PH, (_, i: string) => {
+        const e = list[Number(i)]
+        if (!e) return ''
+        const local = srcMap.get(e.src)
+        return local
+          ? `<img src="${local}" alt="" width="${e.w}" style="display: inline-block; vertical-align: middle">`
+          : ''
+      })
+      if (html) out.push(`<p>${html}</p>`)
     } else {
       const html = esc(b.text || '').replace(/\n/g, '<br>')
       if (html) out.push(`<p>${html}</p>`)
@@ -486,12 +536,14 @@ collectRoutes.post('/wechat', async (c) => {
   // 封面只留封面位：正文里与封面同媒体的图不再重收（贴图除外——其封面本就取自首图，图即内容）
   const blocks: Block[] = imagePost ? imagePostBlocks(imagePost) : dropCoverDupBlock(parseBlocks(articleBody!), meta.cover)
 
-  // 配图转存（按出现顺序，去重，限量）
+  // 配图转存（按出现顺序，去重，限量）：块级图 + 文本块里的行内小表情（b.emoji）都收
   const imgUrls = [
     ...new Set(
       blocks
-        .filter((b) => b.type === 'img' && b.src && /^https?:\/\//i.test(b.src))
-        .map((b) => b.src as string)
+        .flatMap((b) => [
+          ...(b.type === 'img' && b.src && /^https?:\/\//i.test(b.src) ? [b.src as string] : []),
+          ...(b.emoji ?? []).filter((e) => /^https?:\/\//i.test(e.src)).map((e) => e.src),
+        ])
     ),
   ].slice(0, MAX_IMAGES)
   const srcMap = new Map<string, string>()

@@ -270,3 +270,47 @@ test('采集产物过净化器后样式仍在（端到端）', () => {
   assert.ok(html.includes('style="color: #e33; text-decoration: underline"'), html)
   assert.ok(html.includes('<strong>乙</strong>'), html)
 })
+
+// ── 微信表情包动图与行内小表情（回归：mp-common-sticker 自定义元素此前整块消失、
+//    data-w="20" 的行内 emoji 按块级图转存被前台 max-width:100% 放成大图且劈裂句子）──
+
+const STICKER = '<section class="mp_common_sticker_iframe_wrp"><mp-common-sticker data-pluginname="emotion" data-emoji_url="https://mmbiz.qpic.cn/sz_mmbiz_gif/ABC/0" data-inserted="1"></mp-common-sticker></section>'
+const INLINE_EMOJI = '<img class="rich_pages wxw-img" data-src="https://res.wx.qq.com/t/wx_fed/we-emoji/res/assets/Expression/Expression_11@2x.png" data-w="20" style="display:inline-block;width:20px;vertical-align:middle;">'
+
+test('mp-common-sticker 表情包动图拆成图片块（data-emoji_url），不再整块消失', () => {
+  const blocks = parseBlocks(`<p>前文</p>${STICKER}<p>后文</p>`)
+  assert.deepEqual(blocks.map((b) => b.type), ['text', 'img', 'text'])
+  assert.equal(blocks[1].src, 'https://mmbiz.qpic.cn/sz_mmbiz_gif/ABC/0')
+})
+
+test('行内小表情（data-w=20）以占位符留在句子内，渲染换回 20px 行内 img', () => {
+  const src = 'https://res.wx.qq.com/t/wx_fed/we-emoji/res/assets/Expression/Expression_11@2x.png'
+  const blocks = parseBlocks(`<p>9 分以上就是 "能把你家底都扬了" 的级别${INLINE_EMOJI}。</p>`)
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].type, 'text')
+  assert.ok(blocks[0].html!.includes('的级别') && blocks[0].html!.endsWith('。'), blocks[0].html)
+  assert.ok(blocks[0].emoji && blocks[0].emoji[0].src === src && blocks[0].emoji[0].w === 20)
+  const html = renderHtml(blocks, new Map([[src, '/images/u/x.png']]))
+  assert.equal(
+    html,
+    '<p>9 分以上就是 &quot;能把你家底都扬了&quot; 的级别<img src="/images/u/x.png" alt="" width="20" style="display: inline-block; vertical-align: middle">。</p>'
+  )
+})
+
+test('行内小表情转存失败时整只丢弃，句子其余部分保留', () => {
+  const blocks = parseBlocks(`<p>的级别${INLINE_EMOJI}。</p>`)
+  const html = renderHtml(blocks, new Map())
+  assert.equal(html, '<p>的级别。</p>')
+})
+
+test('data-w 超出小表情口径的图不走行内路（正常块级图不带 data-w，防误伤大图）', () => {
+  const big = '<img data-src="https://mmbiz.qpic.cn/mmbiz_png/BIG/640" data-w="640">'
+  const blocks = parseBlocks(`<p>${big}</p>`)
+  assert.deepEqual(blocks.map((b) => b.type), ['img'])
+  assert.equal(blocks[0].inlineW, undefined)
+})
+
+test('表情包 GIF 过净化器后 img 结构不变（端到端，GIF 魔数转存由 store 咬合）', () => {
+  const html = sanitizeHtml(renderHtml(parseBlocks(`<p>甲</p>${STICKER}`), new Map([['https://mmbiz.qpic.cn/sz_mmbiz_gif/ABC/0', '/images/u/gif1.png']])))
+  assert.ok(html.includes('<img src="/images/u/gif1.png" alt="">'), html)
+})
