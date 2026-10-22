@@ -102,6 +102,21 @@ test('EXPLAIN：weibo pinnedFirst 排序（/weibo 时间线）走 idx_weibo_feed
   assertUsesIndex(plan, 'idx_weibo_feed_pinned')
 })
 
+test('EXPLAIN：深链定位 rank 计数（locateWeiboPage row-value 比较式）走 idx_weibo_feed_pinned 范围 seek', () => {
+  // 2026-10-23 改写：原 OR 展开式 planner 只认出 status=? 前缀，每条 /weibo?wb= 深链定位
+  // 扫完全部已发布行（~5.5k 条/次）；row-value 比较式语义逐字等价，planner 给出 pinned>? 范围
+  const db = seedDb()
+  const plan = planOf(
+    db,
+    "SELECT COUNT(*) AS n FROM weibo WHERE deleted_at IS NULL AND status = 'published' AND (pinned, COALESCE(published_at, created_at), id) > (?, ?, ?)"
+  )
+  assert.ok(
+    plan.includes('USING INDEX idx_weibo_feed_pinned') && plan.includes('pinned>?'),
+    `未走 idx_weibo_feed_pinned 范围 seek：${plan}`
+  )
+  assert.ok(!/SCAN weibo/.test(plan), `全表扫描：${plan}`)
+})
+
 test('EXPLAIN：posts 默认列表走 idx_posts_feed', () => {
   const db = seedDb()
   const plan = planOf(

@@ -1055,16 +1055,18 @@ export async function locateWeiboPage(
     .bind(id, ...binds)
     .first<{ id: number; pinned: number; ts: number }>()
   if (!x) return null
-  // 统计按同一排序排在它前面的行数：页码 = floor(前数 / limit) + 1
+  // 统计按同一排序排在它前面的行数：页码 = floor(前数 / limit) + 1。
+  // row-value 比较式（2026-10-23，D1 读放大治理）：planner 对它给 idx_weibo_feed_pinned 的
+  // 范围 seek（status=? AND pinned>?），只读到目标位为止；原 OR 展开式 planner 只认出
+  // status=? 前缀，每条深链定位都扫完全部已发布行（实测 ~5.5k 条/次）。两者语义逐字等价
+  // （全 DESC 序里「排在前」= 元组更大），tests/feed-index.test.ts 守计划
   const front = conds.length ? conds.join(' AND ') + ' AND ' : ''
   const rank = await db
     .prepare(
       `SELECT COUNT(*) AS n FROM weibo WHERE ${front}
-       (pinned > ?
-        OR (pinned = ? AND COALESCE(published_at, created_at) > ?)
-        OR (pinned = ? AND COALESCE(published_at, created_at) = ? AND id > ?))`
+       (pinned, COALESCE(published_at, created_at), id) > (?, ?, ?)`
     )
-    .bind(...binds, x.pinned, x.pinned, x.ts, x.pinned, x.ts, x.id)
+    .bind(...binds, x.pinned, x.ts, x.id)
     .first<{ n: number }>()
   return Math.floor((rank?.n ?? 0) / limit) + 1
 }

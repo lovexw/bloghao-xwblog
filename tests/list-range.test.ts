@@ -340,3 +340,39 @@ test('likeDelta：窗口外内容点赞不出（回 0 与「不存在」同响�
   assert.equal(await likeDelta(db, 'posts', 'slug', 'no-such', 1, cutoff), 0)
   assert.equal(await likeDelta(db, 'weibo', 'id', '999999', 1, cutoff), 0)
 })
+
+// ── locateWeiboPage 深链定位（/weibo?wb=<id>）：页码数学 + row-value rank 查询（2026-10-23 改写）──
+// 原 OR 展开式 planner 只认出 status=? 前缀，每条深链定位扫完全部已发布行；
+// row-value 比较式语义逐字等价（全 DESC 序里「排在前」= 元组更大），计划测试在 tests/feed-index.test.ts
+test('locateWeiboPage：置顶优先 + 时间倒序下的页码计算，草稿/已删/不存在返回 null', async () => {
+  const raw = new DatabaseSync(':memory:')
+  raw.exec(SCHEMA_SQL)
+  const now = Date.now()
+  const wb = raw.prepare(
+    'INSERT INTO weibo (content, status, pinned, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+  )
+  // 40 条已发布（id 1..40，ts 递增 → id 40 最新）+ 1 条老置顶（id 41）
+  for (let i = 1; i <= 40; i++) {
+    const t = now - (41 - i) * 86_400_000
+    wb.run(`微博 ${i}`, 'published', 0, t, t, t)
+  }
+  const pinT = now - 400 * 86_400_000
+  wb.run('置顶老微博', 'published', 1, pinT, pinT, pinT)
+  const draftT = now - 86_400_000
+  wb.run('草稿', 'draft', 0, null, draftT, draftT)
+  const db = d1FromSqlite(raw)
+
+  // 每页 15 条：40 条非置顶 + 1 条置顶，共 3 页
+  assert.equal(await locateWeiboPage(db, 40), 1) // 最新 → 第 1 页
+  assert.equal(await locateWeiboPage(db, 41), 1) // 置顶排最前 → rank 0 → 第 1 页
+  assert.equal(await locateWeiboPage(db, 27), 1) // 前面 1 置顶 + 13 条 → rank 14（第 1 页末位）
+  assert.equal(await locateWeiboPage(db, 26), 2) // 前面 1 置顶 + 14 条 → rank 15 → 第 2 页
+  assert.equal(await locateWeiboPage(db, 20), 2) // 前面 1 置顶 + 19 条 → rank 21 → 第 2 页
+  assert.equal(await locateWeiboPage(db, 1), 3) // 前面 1 置顶 + 39 条 → rank 40 → 第 3 页
+  assert.equal(await locateWeiboPage(db, 99999), null) // 不存在
+  // 草稿 / 软删：定位不到（回退常规分页的口径）
+  const draftId = Number(raw.prepare('SELECT id FROM weibo WHERE status = \'draft\'').get()!.id)
+  assert.equal(await locateWeiboPage(db, draftId), null)
+  await raw.prepare('UPDATE weibo SET deleted_at = ? WHERE id = 1').run(now)
+  assert.equal(await locateWeiboPage(db, 1), null)
+})
