@@ -151,8 +151,11 @@ test('robots 追加段：超长按整行截断，不产出半行指令', () => {
   for (const l of out.split('\n')) assert.ok(l === '' || l.startsWith('Disallow: /'), `半行残留：${l}`)
 })
 
-test('robots.txt 组装：未配置与历史版本逐字节一致，配置后追加段附在内置段后，演示站固定 Disallow', () => {
-  const builtin = 'User-agent: *\nAllow: /\nDisallow: /admin\nSitemap: https://blog.example.com/sitemap.xml\n'
+// 内置段基线（2026-10-23 起含微博分页禁令：薄聚合页 + OFFSET 深翻页读放大，?wb= 深链与 ?topic= 照旧可爬）
+const ROBOTS_BASELINE = 'User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /weibo?page=\nSitemap: https://blog.example.com/sitemap.xml\n'
+
+test('robots.txt 组装：内置段含微博分页禁令，追加段附在内置段后，演示站固定 Disallow', () => {
+  const builtin = ROBOTS_BASELINE
   assert.equal(buildRobotsTxt(S, 'https://blog.example.com'), builtin)
   assert.equal(buildRobotsTxt({ ...S, robotsExtra: '   ' }, 'https://blog.example.com'), builtin)
   assert.equal(
@@ -172,11 +175,10 @@ test('robots.txt 组装：未配置与历史版本逐字节一致，配置后追
 
 /* ---------------- 三之二、AI 抓取策略（robots 声明 + Content-Signal，2026-10-17） ---------------- */
 
-test('AI 抓取策略：默认档 / 脏值 / 缺省一律 allow，输出与历史逐字节一致且不出 Content-signal', () => {
-  const builtin = 'User-agent: *\nAllow: /\nDisallow: /admin\nSitemap: https://blog.example.com/sitemap.xml\n'
+test('AI 抓取策略：默认档 / 脏值 / 缺省一律 allow，输出与基线逐字节一致且不出 Content-signal', () => {
   for (const v of ['allow', '', undefined, 'yolo', null]) {
     assert.equal(readAiPolicy(v), 'allow')
-    assert.equal(buildRobotsTxt({ ...S, aiPolicy: v as string }, 'https://blog.example.com'), builtin)
+    assert.equal(buildRobotsTxt({ ...S, aiPolicy: v as string }, 'https://blog.example.com'), ROBOTS_BASELINE)
   }
   assert.equal(readAiPolicy('seek'), 'seek')
   assert.equal(readAiPolicy('deny'), 'deny')
@@ -188,7 +190,7 @@ test('AI 抓取策略 seek：检索型显式 Allow、训练型独立 Disallow，
   // Content-signal 写进既有的 User-agent: * 组内（不另起组），内置段其余部分照旧
   assert.ok(
     out.startsWith(
-      'User-agent: *\nContent-signal: search=yes, ai-input=yes, ai-train=no\nAllow: /\nDisallow: /admin\nSitemap: https://blog.example.com/sitemap.xml\n'
+      'User-agent: *\nContent-signal: search=yes, ai-input=yes, ai-train=no\nAllow: /\nDisallow: /admin\nDisallow: /weibo?page=\nSitemap: https://blog.example.com/sitemap.xml\n'
     )
   )
   assert.equal((out.match(/User-agent: \*/g) || []).length, 1, '不得出现第二个 User-agent: * 组')
@@ -197,10 +199,15 @@ test('AI 抓取策略 seek：检索型显式 Allow、训练型独立 Disallow，
   const seekBlock = out.slice(headIdx, allowIdx)
   const trainBlock = out.slice(out.indexOf('# 训练型', allowIdx))
   for (const ua of AI_SEEK_AGENTS) assert.ok(seekBlock.includes(`User-agent: ${ua}`), `检索档缺 ${ua}`)
-  // seek 组是这些爬虫的最具体组——组内规则整体取代 * 组（RFC 9309），/admin 禁令必须组内自带
+  // seek 组是这些爬虫的最具体组——组内规则整体取代 * 组（RFC 9309），基座组的禁令必须组内自带
   assert.ok(
     out.slice(headIdx, out.indexOf('# 训练型')).includes('Disallow: /admin'),
     '检索组缺 Disallow: /admin（只写 Allow: / 会把基座组的后台禁令对 AI 检索爬虫整个作废）'
+  )
+  // 微博分页禁令同理组内自带（检索型 AI 爬虫也不许翻薄聚合分页烧读放大）
+  assert.ok(
+    out.slice(headIdx, out.indexOf('# 训练型')).includes('Disallow: /weibo?page='),
+    '检索组缺微博分页禁令'
   )
   for (const ua of AI_TRAIN_AGENTS) assert.ok(trainBlock.includes(`User-agent: ${ua}`), `训练档缺 ${ua}`)
   assert.ok(trainBlock.trimEnd().endsWith('Disallow: /'), '训练段以 Disallow: / 收尾')

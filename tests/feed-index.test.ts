@@ -188,6 +188,21 @@ test('EXPLAIN：微博评论计数 map 走 idx_comments_weibo、不扫全表', (
   assert.ok(!/SCAN comments(?! USING INDEX)/.test(plan), `全表扫描：${plan}`)
 })
 
+test('EXPLAIN：楼中楼级联删除（id OR parent_id）走 MULTI-INDEX OR、不扫全表', () => {
+  // 2026-10-22 实测：parent_id 无索引时 OR 退化为全表扫，comments 14k 行、
+  // 每删一条扫 1.36 万行（批量清 26 条垃圾评论 = 35 万行读，当日额度 7%）。
+  // parent_id 是老库 ALTER 补的列 → 索引只进 SCHEMA_INDEXES、不得进 schema.sql（索引归位规矩）
+  const norm = (s: string) => s.replace(/\s+/g, ' ').trim()
+  const ddl = 'CREATE INDEX IF NOT EXISTS idx_comments_parent ON comments (parent_id)'
+  assert.ok(!norm(SCHEMA_SQL).includes(norm(ddl)), 'idx_comments_parent 不得进 schema.sql（老库部署时 parent_id 列尚不存在）')
+  assert.ok(SCHEMA_INDEXES.includes(ddl), 'SCHEMA_INDEXES 缺 idx_comments_parent')
+  const db = seedDb(true)
+  const plan = planOf(db, 'DELETE FROM comments WHERE id = ? OR parent_id = ?')
+  assert.ok(plan.includes('MULTI-INDEX OR'), `OR 未走多索引优化：${plan}`)
+  assert.ok(plan.includes('idx_comments_parent'), `未走 idx_comments_parent：${plan}`)
+  assert.ok(!/SCAN comments/.test(plan), `全表扫描：${plan}`)
+})
+
 test('EXPLAIN：sort=comments 相关子查询逐篇走 idx_comments_post', () => {
   const db = seedDb(true)
   const plan = planOf(

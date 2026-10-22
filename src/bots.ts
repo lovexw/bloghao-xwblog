@@ -209,66 +209,70 @@ export interface BotStats {
   latest: { ts: number; name: string; kind: string; path: string }[] // 最近 8 条
 }
 
-/** 后台「统计」页爬虫聚合：区间与 getVisitStats 同口径（含今天共 days 天，北京时间） */
+/** 后台「统计」页爬虫聚合：区间与 getVisitStats 同口径（含今天共 days 天，北京时间）。
+ *  单次扫描 + JS 聚合（D1 读放大治理，2026-10-23）：原实现 6 条并行语句各自扫一遍窗口内全部行，
+ *  而 bot_log 按 180 天轮转、写入有闸，7/30 天窗口几乎覆盖全表，idx_bot_day 的范围过滤帮不上忙
+ *  （2026-10-22 实测：每次刷统计页 6 × ~11.5k 行读，站长一天刷十几次就是 70 万+）。改为一次取回
+ *  窗口行、内存聚合全部分组维度——行读 = 窗口行数 × 1，内存只随分组数增长（行流过即弃）。 */
 export async function getBotStats(db: D1Database, days: number): Promise<BotStats> {
   const now = Date.now()
   const today = fmtDate(now)
   const startDay = fmtDate(now - (days - 1) * 86_400_000)
-  const inRange = 'day >= ? AND day <= ?'
-  const [sumRow, kindRows, botRows, pathRows, seriesRows, latestRows] = await Promise.all([
-    db
-      .prepare(`SELECT COUNT(*) AS pv FROM bot_log WHERE ${inRange}`)
-      .bind(startDay, today)
-      .first<{ pv: number }>(),
-    db
-      .prepare(`SELECT kind AS name, COUNT(*) AS pv FROM bot_log WHERE ${inRange} GROUP BY kind ORDER BY pv DESC`)
-      .bind(startDay, today)
-      .all<{ name: string; pv: number }>(),
-    db
-      .prepare(
-        `SELECT name, kind, COUNT(*) AS pv, COUNT(DISTINCT day) AS activeDays
-         FROM bot_log WHERE ${inRange} GROUP BY name ORDER BY pv DESC, name LIMIT 12`
-      )
-      .bind(startDay, today)
-      .all<{ name: string; kind: string; pv: number; activeDays: number }>(),
-    db
-      .prepare(
-        `SELECT path, COUNT(*) AS pv FROM bot_log WHERE ${inRange} GROUP BY path ORDER BY pv DESC, path LIMIT 10`
-      )
-      .bind(startDay, today)
-      .all<{ path: string; pv: number }>(),
-    db
-      .prepare(
-        `SELECT day,
-           COUNT(*) AS pv,
-           SUM(CASE WHEN kind = 'ai' THEN 1 ELSE 0 END) AS ai,
-           SUM(CASE WHEN kind = 'ai-seek' THEN 1 ELSE 0 END) AS aiSeek,
-           SUM(CASE WHEN kind = 'se' THEN 1 ELSE 0 END) AS se
-         FROM bot_log WHERE ${inRange} GROUP BY day ORDER BY day`
-      )
-      .bind(startDay, today)
-      .all<{ day: string; pv: number; ai: number; aiSeek: number; se: number }>(),
-    db
-      .prepare(`SELECT ts, name, kind, path FROM bot_log WHERE ${inRange} ORDER BY ts DESC LIMIT 8`)
-      .bind(startDay, today)
-      .all<{ ts: number; name: string; kind: string; path: string }>(),
-  ])
-  const seriesMap = new Map((seriesRows.results ?? []).map((r) => [r.day, r]))
-  const todayRow = seriesMap.get(today)
+  const { results } = await db
+    .prepare('SELECT ts, day, name, kind, path FROM bot_log WHERE day >= ? AND day <= ?')
+    .bind(startDay, today)
+    .all<{ ts: number; day: string; name: string; kind: string; path: string }>()
+  const rows = results ?? []
+  const kindPv = new Map<string, number>()
+  const botAgg = new Map<string, { kind: string; pv: number; days: Set<string> }>()
+  const pathPv = new Map<string, number>()
+  const dayAgg = new Map<string, { pv: number; ai: number; aiSeek: number; se: number }>()
+  for (const r of rows) {
+    kindPv.set(r.kind, (kindPv.get(r.kind) || 0) + 1)
+    const bot = botAgg.get(r.name)
+    if (bot) {
+      bot.pv++
+      bot.days.add(r.day)
+    } else {
+      botAgg.set(r.name, { kind: r.kind, pv: 1, days: new Set([r.day]) })
+    }
+    pathPv.set(r.path, (pathPv.get(r.path) || 0) + 1)
+    const d = dayAgg.get(r.day)
+    if (d) {
+      d.pv++
+      if (r.kind === 'ai') d.ai++
+      else if (r.kind === 'ai-seek') d.aiSeek++
+      else if (r.kind === 'se') d.se++
+    } else {
+      dayAgg.set(r.day, {
+        pv: 1,
+        ai: r.kind === 'ai' ? 1 : 0,
+        aiSeek: r.kind === 'ai-seek' ? 1 : 0,
+        se: r.kind === 'se' ? 1 : 0,
+      })
+    }
+  }
+  rows.sort((a, b) => b.ts - a.ts) // latest 取最近 8 条（原 SQL ORDER BY ts DESC LIMIT 8）
   const series: BotStats['series'] = []
   for (let i = days - 1; i >= 0; i--) {
     const day = fmtDate(now - i * 86_400_000)
-    const r = seriesMap.get(day)
+    const r = dayAgg.get(day)
     series.push({ day, pv: r?.pv ?? 0, ai: r?.ai ?? 0, aiSeek: r?.aiSeek ?? 0, se: r?.se ?? 0 })
   }
   return {
     days,
-    total: sumRow?.pv ?? 0,
-    todayTotal: todayRow?.pv ?? 0,
-    byKind: kindRows.results ?? [],
-    byBot: botRows.results ?? [],
-    topPaths: pathRows.results ?? [],
+    total: rows.length,
+    todayTotal: dayAgg.get(today)?.pv ?? 0,
+    byKind: [...kindPv].map(([name, pv]) => ({ name, pv })).sort((a, b) => b.pv - a.pv || a.name.localeCompare(b.name)),
+    byBot: [...botAgg]
+      .map(([name, b]) => ({ name, kind: b.kind, pv: b.pv, activeDays: b.days.size }))
+      .sort((a, b) => b.pv - a.pv || a.name.localeCompare(b.name))
+      .slice(0, 12),
+    topPaths: [...pathPv]
+      .map(([path, pv]) => ({ path, pv }))
+      .sort((a, b) => b.pv - a.pv || a.path.localeCompare(b.path))
+      .slice(0, 10),
     series,
-    latest: latestRows.results ?? [],
+    latest: rows.slice(0, 8).map((r) => ({ ts: r.ts, name: r.name, kind: r.kind, path: r.path })),
   }
 }

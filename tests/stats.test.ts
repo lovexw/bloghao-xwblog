@@ -83,3 +83,141 @@ test('cleanPath 拒绝协议相对 URL（// 开头不进统计）', () => {
   assert.equal(cleanPath('///evil'), '')
   assert.equal(cleanPath('/正常/path'), '/正常/path')
 })
+
+/* ---------------- getVisitStats 聚合（2026-10-23 单次扫描改写）----------------
+ * 原实现 8 条并行 GROUP BY 各扫一遍窗口（站长每刷一次统计页 = 窗口行数 × 8 行读）；
+ * 改写为按 ≤7 天分片单次扫描 + JS 聚合，以下用例锁定聚合语义与排序口径不漂移。
+ * getBotStats 的同款改写由 tests/bots.test.ts 的真库聚合用例兜着。 */
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
+import { DatabaseSync, type StatementSync } from 'node:sqlite'
+import { getVisitStats } from '../src/stats.ts'
+import { fmtDate } from '../src/utils.ts'
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+const SCHEMA_SQL = readFileSync(join(ROOT, 'schema.sql'), 'utf8')
+
+/** 极简 D1 适配（同 tests/bots.test.ts） */
+function d1FromSqlite(db: DatabaseSync): D1Database {
+  const cache = new Map<string, StatementSync>()
+  const stmtOf = (sql: string) => {
+    let st = cache.get(sql)
+    if (!st) cache.set(sql, (st = db.prepare(sql)))
+    return st
+  }
+  const handlers = (sql: string, binds: unknown[]) => ({
+    run: async () => {
+      const info = stmtOf(sql).run(...(binds as never[]))
+      return { success: true, meta: { last_row_id: Number(info.lastInsertRowid), changes: Number(info.changes) } }
+    },
+    all: async <T>() => ({ results: stmtOf(sql).all(...(binds as never[])) as T[] }),
+    first: async <T>() => ((stmtOf(sql).get(...(binds as never[])) as T | undefined) ?? null),
+  })
+  return {
+    prepare: (sql: string) => {
+      const unbound = handlers(sql, [])
+      return { ...unbound, bind: (...binds: unknown[]) => handlers(sql, binds) }
+    },
+    batch: async (stmts: { run: () => Promise<unknown> }[]) => {
+      for (const s of stmts) await s.run()
+      return []
+    },
+  } as unknown as D1Database
+}
+
+test('getVisitStats 聚合：pv/uv、逐日补零、topPages/topRefs、去空分组、今日小时分布', async () => {
+  const raw = new DatabaseSync(':memory:')
+  raw.exec(SCHEMA_SQL)
+  const now = Date.now()
+  const dayMs = 86_400_000
+  const ins = raw.prepare('INSERT INTO visit_log (ts, day, vid, path, title, ref, dev, br, country) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+  // 今天：3 个访客、2 个页面、1 个来源、设备/浏览器/国家各两组（含应被排除的空串）
+  const t1 = now - 3_600_000
+  ins.run(t1, fmtDate(t1), 'v1', '/post/a', '文章 A', 'https://ref.example/', 'desktop', 'Chrome', 'CN')
+  const t2 = now - 2_000_000
+  ins.run(t2, fmtDate(t2), 'v1', '/post/a', '文章 A2（更晚的标题）', '', 'mobile', 'Safari', 'US')
+  const t3 = now - 1_000_000
+  ins.run(t3, fmtDate(t3), 'v2', '/weibo', '微博页', 'https://ref.example/', 'desktop', 'Chrome', 'CN')
+  const t4 = now - 500_000
+  ins.run(t4, fmtDate(t4), 'v3', '/weibo', '微博页', '', '', '', '')
+  // 昨天：1 访客 1 页；40 天前：30 天窗口外
+  const y = now - dayMs
+  ins.run(y, fmtDate(y), 'v1', '/post/b', '文章 B', '', 'desktop', 'Chrome', 'JP')
+  const old = now - 40 * dayMs
+  ins.run(old, fmtDate(old), 'v9', '/post/old', '旧文', '', 'desktop', 'Chrome', 'CN')
+
+  const s = await getVisitStats(d1FromSqlite(raw), 30)
+  assert.equal(s.days, 30)
+  assert.equal(s.pv, 5) // 窗口外那条不计
+  assert.equal(s.uv, 3)
+  assert.equal(s.todayPv, 4)
+  assert.equal(s.todayUv, 3)
+  assert.equal(s.series.length, 30)
+  assert.equal(s.series[s.series.length - 1].pv, 4)
+  assert.equal(s.series[s.series.length - 1].uv, 3)
+  assert.equal(s.series[s.series.length - 2].pv, 1)
+  assert.equal(s.series[0].pv, 0) // 30 天前那天无数据，补零
+
+  // topPages：pv 倒序；同 path 的 title 取字典序最大（原 SQL MAX(title)）；uv 按 path 去重
+  assert.deepEqual(
+    s.topPages.map((p) => [p.path, p.pv, p.uv]),
+    [
+      ['/post/a', 2, 1],
+      ['/weibo', 2, 2],
+      ['/post/b', 1, 1],
+    ]
+  )
+  assert.equal(s.topPages[0].title, '文章 A2（更晚的标题）')
+  assert.equal(s.topPages[1].title, '微博页')
+  // topRefs：空串来源排除，pv 倒序
+  assert.deepEqual(
+    s.topRefs.map((r) => [r.ref, r.pv, r.uv]),
+    [['https://ref.example/', 2, 2]]
+  )
+  // 设备/浏览器/国家：空串排除，pv 倒序同计数按名字稳定排序
+  assert.deepEqual(s.devices, [
+    { name: 'desktop', pv: 3 },
+    { name: 'mobile', pv: 1 },
+  ])
+  assert.deepEqual(s.browsers, [
+    { name: 'Chrome', pv: 3 },
+    { name: 'Safari', pv: 1 },
+  ])
+  assert.deepEqual(
+    s.countries.map((c) => c.name),
+    ['CN', 'JP', 'US']
+  )
+  // 小时分布：只有今天的小时有数，桶位 = 北京时间小时（+8h 取 UTC 分量）
+  assert.equal(s.hourly.reduce((n, x) => n + x.pv, 0), 4)
+  const beijingHourOf = (ts: number) => new Date(ts + 8 * 3_600_000).getUTCHours()
+  const hourOfT1 = s.hourly.find((x) => x.h === beijingHourOf(t1))
+  assert.ok(hourOfT1 && hourOfT1.pv >= 1, `t1 的小时桶 ${beijingHourOf(t1)} 应有计数`)
+})
+
+test('getVisitStats 单天窗口与空库骨架', async () => {
+  const raw = new DatabaseSync(':memory:')
+  raw.exec(SCHEMA_SQL)
+  const d1 = d1FromSqlite(raw)
+  const empty = await getVisitStats(d1, 7)
+  assert.equal(empty.pv, 0)
+  assert.equal(empty.uv, 0)
+  assert.equal(empty.todayPv, 0)
+  assert.deepEqual(empty.topPages, [])
+  assert.deepEqual(empty.topRefs, [])
+  assert.equal(empty.series.length, 7)
+  assert.ok(empty.series.every((d) => d.pv === 0 && d.uv === 0))
+  assert.equal(empty.hourly.length, 24)
+  assert.ok(empty.hourly.every((h) => h.pv === 0))
+
+  const now = Date.now()
+  raw
+    .prepare('INSERT INTO visit_log (ts, day, vid, path, title, ref, dev, br, country) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(now, fmtDate(now), 'v1', '/', '首页', '', 'desktop', 'Chrome', 'CN')
+  const one = await getVisitStats(d1, 1)
+  assert.equal(one.pv, 1)
+  assert.equal(one.series.length, 1)
+  assert.equal(one.series[0].pv, 1)
+  assert.equal(one.todayPv, 1)
+  assert.equal(one.hourly.reduce((n, x) => n + x.pv, 0), 1)
+})

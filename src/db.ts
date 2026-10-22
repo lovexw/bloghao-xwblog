@@ -1374,6 +1374,10 @@ export const SCHEMA_INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_comments_post ON comments (post_id, created_at)',
   // comments.member_id 与 posts.min_tier 是老库运行时补齐的列，索引只能在这里建（schema.sql 不能建，见该文件内说明）
   'CREATE INDEX IF NOT EXISTS idx_comments_member ON comments (member_id, created_at)',
+  // 楼中楼级联删除（DELETE WHERE id = ? OR parent_id = ?）的 MULTI-INDEX OR 依赖：没有它 OR 全表扫
+  // （2026-10-22 实测 comments 14k 行、每删一条扫 1.36 万行，批量清 26 条垃圾评论烧当日额度 7%）。
+  // parent_id 是老库 ALTER 补的列 → 只进这里（tests/member-schema.test.ts 索引归位 + feed-index 计划守卫）
+  'CREATE INDEX IF NOT EXISTS idx_comments_parent ON comments (parent_id)',
   'CREATE INDEX IF NOT EXISTS idx_members_points ON members (points DESC)',
   'CREATE INDEX IF NOT EXISTS idx_member_sessions_expiry ON member_sessions (expires_at)',
   'CREATE INDEX IF NOT EXISTS idx_points_log_member ON member_points_log (member_id, created_at)',

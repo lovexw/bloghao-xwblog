@@ -154,6 +154,9 @@ CREATE INDEX IF NOT EXISTS idx_comments_post ON comments (post_id, created_at);
 -- 老库执行本文件时 weibo_id 列尚不存在（ALTER 由运行时补齐），在这里建索引会报错
 -- （idx_comments_member 同理：挂在运行时补齐的 member_id 列上，只进 db.ts SCHEMA_INDEXES）
 CREATE INDEX IF NOT EXISTS idx_comments_status ON comments (status, created_at DESC);
+-- idx_comments_parent（楼中楼级联删除 DELETE WHERE id = ? OR parent_id = ? 的 MULTI-INDEX OR 依赖，
+-- 没有它 OR 全表扫）只进 db.ts SCHEMA_INDEXES：parent_id 在老库是运行时 ALTER 补的列，
+-- schema.sql 在部署时对老库执行时该列尚不存在，在这里建索引会报错（同 weibo_id / member_id 的归位规矩）
 
 CREATE TABLE IF NOT EXISTS categories (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,

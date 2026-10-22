@@ -104,87 +104,100 @@ export interface VisitStats {
   hourly: { h: number; pv: number }[]
 }
 
-/** 后台「统计」页聚合：区间为含今天共 days 天（北京时间），缺数据的天补零 */
+/** 后台「统计」页聚合：区间为含今天共 days 天（北京时间），缺数据的天补零。
+ *  单次扫描 + JS 聚合（D1 读放大治理，2026-10-23）：原实现 8 条并行语句各自扫一遍窗口内全部行，
+ *  visit_log 是量最大的日志表，站长每刷一次统计页 = 窗口行数 × 8 次行读。改为按 ≤7 天分片取回
+ *  （响应体与内存有界，总行读 = 窗口行数 × 1）、一次遍历聚合全部分组维度；分组计数流过即弃，
+ *  内存只随分组数与 vid 集合增长。 */
 export async function getVisitStats(db: D1Database, days: number): Promise<VisitStats> {
   const now = Date.now()
   const today = fmtDate(now)
-  const startDay = fmtDate(now - (days - 1) * 86_400_000)
-  const inRange = 'day >= ? AND day <= ?'
-  const [sum, seriesRows, pageRows, refRows, devRows, brRows, countryRows, hourRows] = await Promise.all([
-    db
-      .prepare(`SELECT COUNT(*) AS pv, COUNT(DISTINCT vid) AS uv FROM visit_log WHERE ${inRange}`)
-      .bind(startDay, today)
-      .first<{ pv: number; uv: number }>(),
-    db
-      .prepare(
-        `SELECT day, COUNT(*) AS pv, COUNT(DISTINCT vid) AS uv FROM visit_log WHERE ${inRange} GROUP BY day ORDER BY day`
-      )
-      .bind(startDay, today)
-      .all<{ day: string; pv: number; uv: number }>(),
-    db
-      .prepare(
-        `SELECT path, MAX(title) AS title, COUNT(*) AS pv, COUNT(DISTINCT vid) AS uv
-         FROM visit_log WHERE ${inRange} GROUP BY path ORDER BY pv DESC, path LIMIT 10`
-      )
-      .bind(startDay, today)
-      .all<{ path: string; title: string; pv: number; uv: number }>(),
-    db
-      .prepare(
-        `SELECT ref, COUNT(*) AS pv, COUNT(DISTINCT vid) AS uv
-         FROM visit_log WHERE ${inRange} AND ref != '' GROUP BY ref ORDER BY pv DESC, ref LIMIT 10`
-      )
-      .bind(startDay, today)
-      .all<{ ref: string; pv: number; uv: number }>(),
-    db
-      .prepare(`SELECT dev AS name, COUNT(*) AS pv FROM visit_log WHERE ${inRange} AND dev != '' GROUP BY dev ORDER BY pv DESC`)
-      .bind(startDay, today)
-      .all<{ name: string; pv: number }>(),
-    db
-      .prepare(
-        `SELECT br AS name, COUNT(*) AS pv FROM visit_log WHERE ${inRange} AND br != '' GROUP BY br ORDER BY pv DESC, name LIMIT 8`
-      )
-      .bind(startDay, today)
-      .all<{ name: string; pv: number }>(),
-    db
-      .prepare(
-        `SELECT country AS name, COUNT(*) AS pv FROM visit_log WHERE ${inRange} AND country != '' GROUP BY country ORDER BY pv DESC, name LIMIT 10`
-      )
-      .bind(startDay, today)
-      .all<{ name: string; pv: number }>(),
-    db
-      .prepare(
-        `SELECT CAST(strftime('%H', ts / 1000 + 28800, 'unixepoch') AS INTEGER) AS h, COUNT(*) AS pv
-         FROM visit_log WHERE day = ? GROUP BY h`
-      )
-      .bind(today)
-      .all<{ h: number; pv: number }>(),
-  ])
+  const totalVids = new Set<string>()
+  const dayAgg = new Map<string, { pv: number; vids: Set<string> }>()
+  const pageAgg = new Map<string, { title: string; pv: number; vids: Set<string> }>()
+  const refAgg = new Map<string, { pv: number; vids: Set<string> }>()
+  const devAgg = new Map<string, number>()
+  const brAgg = new Map<string, number>()
+  const countryAgg = new Map<string, number>()
+  const hourAgg = new Map<number, number>()
+  let pv = 0
+  const DAY_MS = 86_400_000
+  // ≤7 天一片取回（与 startDay 同式的北京日毫秒步进，无 DST 不跨日界）；
+  // 小时聚合沿用 strftime 口径：+8h 后取 UTC 分量
+  for (let s = now - (days - 1) * DAY_MS; s <= now; s += 7 * DAY_MS) {
+    const { results } = await db
+      .prepare('SELECT ts, day, vid, path, title, ref, dev, br, country FROM visit_log WHERE day >= ? AND day <= ?')
+      .bind(fmtDate(s), fmtDate(Math.min(s + 6 * DAY_MS, now)))
+      .all<{ ts: number; day: string; vid: string; path: string; title: string; ref: string; dev: string; br: string; country: string }>()
+    for (const r of results ?? []) {
+      pv++
+      totalVids.add(r.vid)
+      const d = dayAgg.get(r.day)
+      if (d) {
+        d.pv++
+        d.vids.add(r.vid)
+      } else {
+        dayAgg.set(r.day, { pv: 1, vids: new Set([r.vid]) })
+      }
+      const p = pageAgg.get(r.path)
+      if (p) {
+        p.pv++
+        p.vids.add(r.vid)
+        if (r.title > p.title) p.title = r.title // 原 SQL MAX(title) 同义（取代表标题）
+      } else {
+        pageAgg.set(r.path, { title: r.title, pv: 1, vids: new Set([r.vid]) })
+      }
+      if (r.ref !== '') {
+        const f = refAgg.get(r.ref)
+        if (f) {
+          f.pv++
+          f.vids.add(r.vid)
+        } else {
+          refAgg.set(r.ref, { pv: 1, vids: new Set([r.vid]) })
+        }
+      }
+      if (r.dev !== '') devAgg.set(r.dev, (devAgg.get(r.dev) || 0) + 1)
+      if (r.br !== '') brAgg.set(r.br, (brAgg.get(r.br) || 0) + 1)
+      if (r.country !== '') countryAgg.set(r.country, (countryAgg.get(r.country) || 0) + 1)
+      if (r.day === today) {
+        const h = new Date(r.ts + 8 * 3_600_000).getUTCHours()
+        hourAgg.set(h, (hourAgg.get(h) || 0) + 1)
+      }
+    }
+  }
 
-  const seriesMap = new Map((seriesRows.results ?? []).map((r) => [r.day, r]))
-  // 今天的数据直接取自 series（同表同区间 GROUP BY day 的结果里就有），不再单发一条查询
-  const todayRow = seriesMap.get(today)
   const series: VisitStats['series'] = []
   for (let i = days - 1; i >= 0; i--) {
     const day = fmtDate(now - i * 86_400_000)
-    const r = seriesMap.get(day)
-    series.push({ day, pv: r?.pv ?? 0, uv: r?.uv ?? 0 })
+    const r = dayAgg.get(day)
+    series.push({ day, pv: r?.pv ?? 0, uv: r?.vids.size ?? 0 })
   }
-  const hourMap = new Map((hourRows.results ?? []).map((r) => [r.h, r.pv]))
+  // 今天的数据直接取自 series 同源的 dayAgg，不再单发一条查询
+  const todayRow = dayAgg.get(today)
   const hourly: VisitStats['hourly'] = []
-  for (let h = 0; h < 24; h++) hourly.push({ h, pv: hourMap.get(h) ?? 0 })
+  for (let h = 0; h < 24; h++) hourly.push({ h, pv: hourAgg.get(h) ?? 0 })
 
   return {
     days,
-    pv: sum?.pv ?? 0,
-    uv: sum?.uv ?? 0,
+    pv,
+    uv: totalVids.size,
     todayPv: todayRow?.pv ?? 0,
-    todayUv: todayRow?.uv ?? 0,
+    todayUv: todayRow?.vids.size ?? 0,
     series,
-    topPages: pageRows.results ?? [],
-    topRefs: refRows.results ?? [],
-    devices: devRows.results ?? [],
-    browsers: brRows.results ?? [],
-    countries: countryRows.results ?? [],
+    topPages: [...pageAgg]
+      .map(([path, p]) => ({ path, title: p.title, pv: p.pv, uv: p.vids.size }))
+      .sort((a, b) => b.pv - a.pv || a.path.localeCompare(b.path))
+      .slice(0, 10),
+    topRefs: [...refAgg]
+      .map(([ref, f]) => ({ ref, pv: f.pv, uv: f.vids.size }))
+      .sort((a, b) => b.pv - a.pv || a.ref.localeCompare(b.ref))
+      .slice(0, 10),
+    devices: [...devAgg].map(([name, n]) => ({ name, pv: n })).sort((a, b) => b.pv - a.pv || a.name.localeCompare(b.name)),
+    browsers: [...brAgg].map(([name, n]) => ({ name, pv: n })).sort((a, b) => b.pv - a.pv || a.name.localeCompare(b.name)).slice(0, 8),
+    countries: [...countryAgg]
+      .map(([name, n]) => ({ name, pv: n }))
+      .sort((a, b) => b.pv - a.pv || a.name.localeCompare(b.name))
+      .slice(0, 10),
     hourly,
   }
 }

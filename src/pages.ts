@@ -165,9 +165,21 @@ function shouldCountView(ip: string, postId: number): boolean {
   return true
 }
 
-/** 顶部导航「分类话题」菜单用：已发布文章的标签（按使用次数排序，计数展示） */
+/** 顶部导航「分类话题」菜单用：已发布文章的标签（按使用次数排序，计数展示）。
+ *  单 isolate 记忆（D1 读放大治理，2026-10-23）：listPublishedTags 每次渲染全量读已发布文章的
+ *  tags 列（随文章数线性增长；边缘缓存被发布风暴打穿时实测一天 1618 次渲染 × 209 行 = 33 万行）。
+ *  以 pageCacheEpoch 为记忆键：任何内容变更（文章写路径必经 purgePageCache）都会换代，
+ *  标签一变必失效；epoch 不变则同 isolate 内零读。按 db 实例 WeakMap 隔离——docker-poc
+ *  单进程多站点与 Node 测试多实例不串租户（与 db.ts settings 快照同款规矩）。 */
+const navTagsMemo = new WeakMap<object, { epoch: string; tags: { name: string; count: number }[] }>()
 async function navTags(c: C): Promise<{ name: string; count: number }[]> {
-  return listPublishedTags(c.env.DB)
+  const settings = await getSettings(c.env.DB)
+  const epoch = settings.pageCacheEpoch || ''
+  const memo = navTagsMemo.get(c.env.DB)
+  if (memo && memo.epoch === epoch) return memo.tags
+  const tags = await listPublishedTags(c.env.DB)
+  navTagsMemo.set(c.env.DB, { epoch, tags })
+  return tags
 }
 
 async function commentCount(c: C, postId: number): Promise<number> {

@@ -1335,6 +1335,8 @@ try {
   // 服务端只认结构化输入（验证 meta 白名单 / 统计脚本白名单属性），断言公开面输出与 CSP 同步放宽
   console.log('\n▸ 站长 SEO 链路（B20 / B23 / B24）')
   await check('GET', '/robots.txt', 200, `Sitemap: ${BASE}/sitemap.xml`)
+  // 微博分页禁令（2026-10-23 D1 读放大治理）：薄聚合页 + OFFSET 深翻页，禁止爬虫顺翻页烧读额度
+  await check('GET', '/robots.txt', 200, 'Disallow: /weibo?page=')
   const seoOn = await putSettings({
     verifyMetas: '<meta name="google-site-verification" content="smoke-verify-123">',
     analyticsScript: '<script defer src="https://analytics.smoke.example/s.js" data-website-id="smoke"></script>',
