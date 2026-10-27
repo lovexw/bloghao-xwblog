@@ -244,6 +244,9 @@ async function main() {
 
   let stopped = false
   const seen = new Set()
+  // 失败原因按 id 记账：重排队列里只放原始条目（曾经混进过 {item, reason} 包装对象，
+  // 第二轮重试时 it.video 就成了 undefined，整个任务在收尾阶段崩掉）
+  const failReason = new Map()
   try {
     // 慢网 / 长途链路经常「抖一下就整条失败」，一条几百 KB 的重传远比事后人工补跑便宜：
     // 失败的条目收尾再排两轮重试，三轮都过不去才记进失败清单。
@@ -269,7 +272,8 @@ async function main() {
           got = await downloadAndSniff(abs)
         } catch (e) {
           log(`  ✗ #${it.id} 下载失败：${e.message}`)
-          retry.push({ item: it, reason: '下载失败：' + e.message })
+          failReason.set(it.id, '下载失败：' + e.message)
+          retry.push(it)
           continue
         }
         const codec = got.codec
@@ -324,11 +328,12 @@ async function main() {
           }
         } catch (e) {
           log(`  ✗ #${it.id} 失败：${e.message}`)
-          retry.push({ item: it, reason: e.message })
+          failReason.set(it.id, e.message)
+          retry.push(it)
         }
       }
       queue = retry
-      if (pass === 2) for (const r of retry) failed.push({ id: r.item.id, reason: r.reason })
+      if (pass === 2) for (const it of retry) failed.push({ id: it.id, reason: failReason.get(it.id) || '失败' })
     }
   } finally {
     await rm(tmp, { recursive: true, force: true }).catch(() => {})
